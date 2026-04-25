@@ -13,17 +13,17 @@ import lombok.Setter;
 public class User {
 
     @TableId(type = IdType.AUTO)
-    private Long id; // 主键ID
+    private Long id;
 
-    private String username; // 用户名，唯一
+    private String username;
 
-    private String email; // 邮箱，唯一
+    private String email;
 
-    private String passwordHash;// 密码哈希值
+    private String passwordHash;
 
-    private String nickname;// 昵称
+    private String nickname;
 
-    private LocalDateTime createdAt;// 创建时间
+    private LocalDateTime createdAt;
 
-    private LocalDateTime updatedAt;// 更新时间
+    private LocalDateTime updatedAt;
 }

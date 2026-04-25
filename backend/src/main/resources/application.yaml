@@ -19,3 +19,7 @@ mybatis-plus:
 logging:
   level:
     root: info
+
+jwt:
+  secret: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+  expiration-minutes: 120
