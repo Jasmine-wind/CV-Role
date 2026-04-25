@@ -1,33 +1,112 @@
+# =========================
+# Project docs / generated help
+# =========================
 HELP.md
+AGENTS.md
+docs/codex-context.md
+# =========================
+# Java / Maven
+# =========================
 target/
+*.log
+
+# Maven Wrapper
 .mvn/wrapper/maven-wrapper.jar
+
+# Keep target/build directories under src if needed
 !**/src/main/**/target/
 !**/src/test/**/target/
+!**/src/main/**/build/
+!**/src/test/**/build/
 
-### STS ###
-.apt_generated
-.classpath
-.factorypath
-.project
-.settings
-.springBeans
-.sts4-cache
+# =========================
+# Spring Boot / local config
+# =========================
+application-local.yml
+application-local.yaml
+application-secret.yml
+application-secret.yaml
 
-### IntelliJ IDEA ###
-.idea
+# =========================
+# IntelliJ IDEA
+# =========================
+.idea/
 *.iws
 *.iml
 *.ipr
 
-### NetBeans ###
+# =========================
+# Eclipse / STS
+# =========================
+.apt_generated/
+.classpath
+.factorypath
+.project
+.settings/
+.springBeans
+.sts4-cache/
+
+# =========================
+# NetBeans
+# =========================
 /nbproject/private/
 /nbbuild/
-/dist/
 /nbdist/
 /.nb-gradle/
 build/
-!**/src/main/**/build/
-!**/src/test/**/build/
 
-### VS Code ###
+# =========================
+# VS Code
+# =========================
 .vscode/
+
+# =========================
+# Node / Vue / Vite
+# =========================
+node_modules/
+dist/
+dist-ssr/
+coverage/
+*.local
+
+# =========================
+# Environment variables
+# =========================
+.env
+.env.local
+.env.*.local
+
+# Keep examples
+!.env.example
+
+# =========================
+# OS / desktop files
+# =========================
+.DS_Store
+Thumbs.db
+.directory
+
+# =========================
+# Logs
+# =========================
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# =========================
+# Runtime / temp
+# =========================
+tmp/
+temp/
+*.tmp
+
+# =========================
+# Upload / local storage
+# =========================
+uploads/
+storage/
+minio-data/
+postgres-data/

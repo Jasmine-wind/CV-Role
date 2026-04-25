@@ -1,3 +1,21 @@
+server:
+  port: 8080
+
 spring:
   application:
-    name: backend
+    name: ai-resume-optimizer-backend
+  datasource:
+    url: jdbc:postgresql://localhost:5432/ai_resume_optimizer
+    username: dawn
+    password: 041103
+    driver-class-name: org.postgresql.Driver
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+  global-config:
+    banner: false
+
+logging:
+  level:
+    root: info
