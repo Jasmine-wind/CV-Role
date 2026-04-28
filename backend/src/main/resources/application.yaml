@@ -4,6 +4,10 @@ server:
 spring:
   application:
     name: ai-resume-optimizer-backend
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 12MB
   datasource:
     url: jdbc:postgresql://localhost:5432/ai_resume_optimizer
     username: dawn
@@ -23,3 +27,11 @@ logging:
 jwt:
   secret: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
   expiration-minutes: 120
+
+app:
+  storage:
+    local:
+      base-dir: uploads
+  resume:
+    upload:
+      max-file-size-bytes: 10485760

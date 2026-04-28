@@ -5,6 +5,7 @@ HELP.md
 AGENTS.md
 docs/codex-context.md
 docs/tasks
+.codex
 # =========================
 # Java / Maven
 # =========================
@@ -107,7 +108,7 @@ temp/
 # =========================
 # Upload / local storage
 # =========================
-uploads/
-storage/
-minio-data/
-postgres-data/
+/uploads/
+/storage/
+/minio-data/
+/postgres-data/

@@ -20,6 +20,14 @@ const router = createRouter({
       },
     },
     {
+      path: '/resumes',
+      name: 'resumes',
+      component: () => import('@/views/resume/ResumeView.vue'),
+      meta: {
+        requiresAuth: true,
+      },
+    },
+    {
       path: '/login',
       name: 'login',
       component: () => import('@/views/auth/LoginView.vue'),

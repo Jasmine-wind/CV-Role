@@ -6,7 +6,11 @@ import java.util.stream.Collectors;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.BindException;
 import org.springframework.validation.FieldError;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.multipart.MultipartException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
+import org.springframework.web.multipart.support.MissingServletRequestPartException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
@@ -46,6 +50,20 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(HttpMessageNotReadableException.class)
     public Result<Void> handleHttpMessageNotReadableException(HttpMessageNotReadableException exception) {
         return Result.failure(400, "请求体格式不正确");
+    }
+
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    public Result<Void> handleMaxUploadSizeExceededException(MaxUploadSizeExceededException exception) {
+        return Result.failure(400, "简历文件大小不能超过 10 MB");
+    }
+
+    @ExceptionHandler({
+            MissingServletRequestPartException.class,
+            MissingServletRequestParameterException.class,
+            MultipartException.class
+    })
+    public Result<Void> handleMultipartException(Exception exception) {
+        return Result.failure(400, "请选择要上传的简历文件");
     }
 
     @ExceptionHandler(Exception.class)
