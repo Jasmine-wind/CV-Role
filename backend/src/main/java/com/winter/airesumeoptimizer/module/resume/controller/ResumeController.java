@@ -4,11 +4,13 @@ import com.winter.airesumeoptimizer.common.result.Result;
 import com.winter.airesumeoptimizer.module.resume.service.ResumeService;
 import com.winter.airesumeoptimizer.module.resume.vo.ResumeDetailVO;
 import com.winter.airesumeoptimizer.module.resume.vo.ResumeListVO;
+import com.winter.airesumeoptimizer.module.resume.vo.ResumeParseResultVO;
 import com.winter.airesumeoptimizer.module.resume.vo.ResumeUploadVO;
 import com.winter.airesumeoptimizer.security.AuthenticatedUser;
 import java.util.List;
 import org.springframework.http.MediaType;
 import org.springframework.security.core.Authentication;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -47,5 +49,32 @@ public class ResumeController {
             Authentication authentication) {
         AuthenticatedUser authenticatedUser = (AuthenticatedUser) authentication.getPrincipal();
         return Result.success(resumeService.getDetail(authenticatedUser.getUserId(), id));
+    }
+
+    @PostMapping("/{id}/parse")
+    public Result<ResumeParseResultVO> parse(
+            @PathVariable Long id,
+            Authentication authentication) {
+        AuthenticatedUser authenticatedUser = (AuthenticatedUser) authentication.getPrincipal();
+        ResumeParseResultVO result = resumeService.parse(authenticatedUser.getUserId(), id);
+        String message = "FAILED".equals(result.getParseStatus()) ? "解析失败" : "解析完成";
+        return Result.success(message, result);
+    }
+
+    @GetMapping("/{id}/parse-result")
+    public Result<ResumeParseResultVO> parseResult(
+            @PathVariable Long id,
+            Authentication authentication) {
+        AuthenticatedUser authenticatedUser = (AuthenticatedUser) authentication.getPrincipal();
+        return Result.success(resumeService.getParseResult(authenticatedUser.getUserId(), id));
+    }
+
+    @DeleteMapping("/{id}")
+    public Result<Void> delete(
+            @PathVariable Long id,
+            Authentication authentication) {
+        AuthenticatedUser authenticatedUser = (AuthenticatedUser) authentication.getPrincipal();
+        resumeService.delete(authenticatedUser.getUserId(), id);
+        return Result.success("删除成功", null);
     }
 }

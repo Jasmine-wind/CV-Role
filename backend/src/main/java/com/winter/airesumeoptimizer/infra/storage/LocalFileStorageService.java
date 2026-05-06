@@ -52,21 +52,41 @@ public class LocalFileStorageService implements FileStorageService {
     }
 
     @Override
+    public InputStream open(String objectKey) {
+        Path targetPath = resolveObjectKey(objectKey);
+
+        try {
+            return Files.newInputStream(targetPath);
+        } catch (IOException exception) {
+            throw new FileStorageException("文件读取失败", exception);
+        }
+    }
+
+    @Override
     public void delete(String objectKey) {
         if (objectKey == null || objectKey.isBlank()) {
             return;
         }
 
-        Path targetPath = baseDirectory.resolve(objectKey).normalize();
-        if (!targetPath.startsWith(baseDirectory)) {
-            throw new FileStorageException("文件存储路径不合法");
-        }
+        Path targetPath = resolveObjectKey(objectKey);
 
         try {
             Files.deleteIfExists(targetPath);
         } catch (IOException exception) {
             throw new FileStorageException("文件清理失败", exception);
         }
+    }
+
+    private Path resolveObjectKey(String objectKey) {
+        if (objectKey == null || objectKey.isBlank()) {
+            throw new FileStorageException("文件对象 key 不能为空");
+        }
+
+        Path targetPath = baseDirectory.resolve(objectKey).normalize();
+        if (!targetPath.startsWith(baseDirectory)) {
+            throw new FileStorageException("文件存储路径不合法");
+        }
+        return targetPath;
     }
 
     private String buildObjectKey(String directory, String originalFilename) {

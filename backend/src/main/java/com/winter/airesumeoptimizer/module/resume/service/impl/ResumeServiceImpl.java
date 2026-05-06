@@ -1,14 +1,21 @@
 package com.winter.airesumeoptimizer.module.resume.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.winter.airesumeoptimizer.common.exception.BusinessException;
 import com.winter.airesumeoptimizer.infra.storage.FileStorageService;
 import com.winter.airesumeoptimizer.infra.storage.StoredFile;
 import com.winter.airesumeoptimizer.module.resume.entity.Resume;
+import com.winter.airesumeoptimizer.module.resume.entity.ResumeParseResult;
 import com.winter.airesumeoptimizer.module.resume.mapper.ResumeMapper;
+import com.winter.airesumeoptimizer.module.resume.mapper.ResumeParseResultMapper;
+import com.winter.airesumeoptimizer.module.resume.service.ResumeStructureParseService;
 import com.winter.airesumeoptimizer.module.resume.service.ResumeService;
+import com.winter.airesumeoptimizer.module.resume.service.ResumeTextExtractionService;
 import com.winter.airesumeoptimizer.module.resume.vo.ResumeDetailVO;
 import com.winter.airesumeoptimizer.module.resume.vo.ResumeListVO;
+import com.winter.airesumeoptimizer.module.resume.vo.ResumeParseResultVO;
 import com.winter.airesumeoptimizer.module.resume.vo.ResumeUploadVO;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -25,19 +32,33 @@ import org.springframework.web.multipart.MultipartFile;
 public class ResumeServiceImpl implements ResumeService {
 
     private static final String UPLOAD_STATUS_UPLOADED = "UPLOADED";
+    private static final String PARSE_STATUS_SUCCESS = "SUCCESS";
+    private static final String PARSE_STATUS_FAILED = "FAILED";
     private static final Set<String> ALLOWED_EXTENSIONS = Set.of("pdf", "doc", "docx");
     private static final Set<String> PDF_CONTENT_TYPES = Set.of("application/pdf");
 
     private final ResumeMapper resumeMapper;
+    private final ResumeParseResultMapper resumeParseResultMapper;
     private final FileStorageService fileStorageService;
+    private final ResumeTextExtractionService resumeTextExtractionService;
+    private final ResumeStructureParseService resumeStructureParseService;
+    private final ObjectMapper objectMapper;
     private final long maxFileSize;
 
     public ResumeServiceImpl(
             ResumeMapper resumeMapper,
+            ResumeParseResultMapper resumeParseResultMapper,
             FileStorageService fileStorageService,
+            ResumeTextExtractionService resumeTextExtractionService,
+            ResumeStructureParseService resumeStructureParseService,
+            ObjectMapper objectMapper,
             @Value("${app.resume.upload.max-file-size-bytes:10485760}") long maxFileSize) {
         this.resumeMapper = resumeMapper;
+        this.resumeParseResultMapper = resumeParseResultMapper;
         this.fileStorageService = fileStorageService;
+        this.resumeTextExtractionService = resumeTextExtractionService;
+        this.resumeStructureParseService = resumeStructureParseService;
+        this.objectMapper = objectMapper;
         this.maxFileSize = maxFileSize;
     }
 
@@ -104,6 +125,62 @@ public class ResumeServiceImpl implements ResumeService {
         return toDetailVO(resume);
     }
 
+    @Override
+    @Transactional
+    public ResumeParseResultVO parse(Long userId, Long resumeId) {
+        Resume resume = getOwnedResume(userId, resumeId);
+
+        String extractedText = null;
+        try {
+            extractedText = resumeTextExtractionService.extractText(resume.getObjectKey(), resume.getFileType());
+            String structuredJson = objectMapper.writeValueAsString(resumeStructureParseService.parse(extractedText));
+            ResumeParseResult parseResult = saveParseResult(
+                    resume.getId(),
+                    PARSE_STATUS_SUCCESS,
+                    extractedText,
+                    structuredJson,
+                    null);
+            return toParseResultVO(parseResult);
+        } catch (JsonProcessingException exception) {
+            ResumeParseResult parseResult = saveParseResult(
+                    resume.getId(),
+                    PARSE_STATUS_FAILED,
+                    extractedText,
+                    null,
+                    "结构化解析结果序列化失败");
+            return toParseResultVO(parseResult);
+        } catch (RuntimeException exception) {
+            ResumeParseResult parseResult = saveParseResult(
+                    resume.getId(),
+                    PARSE_STATUS_FAILED,
+                    extractedText,
+                    null,
+                    normalizeErrorMessage(exception));
+            return toParseResultVO(parseResult);
+        }
+    }
+
+    @Override
+    public ResumeParseResultVO getParseResult(Long userId, Long resumeId) {
+        Resume resume = getOwnedResume(userId, resumeId);
+        ResumeParseResult parseResult = resumeParseResultMapper.selectOne(new LambdaQueryWrapper<ResumeParseResult>()
+                .eq(ResumeParseResult::getResumeId, resume.getId()));
+        if (parseResult == null) {
+            throw new BusinessException(404, "简历尚未解析");
+        }
+        return toParseResultVO(parseResult);
+    }
+
+    @Override
+    @Transactional
+    public void delete(Long userId, Long resumeId) {
+        Resume resume = getOwnedResume(userId, resumeId);
+        resumeParseResultMapper.delete(new LambdaQueryWrapper<ResumeParseResult>()
+                .eq(ResumeParseResult::getResumeId, resume.getId()));
+        resumeMapper.deleteById(resume.getId());
+        fileStorageService.delete(resume.getObjectKey());
+    }
+
     private void validateFile(MultipartFile file) {
         if (file == null || file.isEmpty()) {
             throw new BusinessException(400, "请选择要上传的简历文件");
@@ -121,6 +198,51 @@ public class ResumeServiceImpl implements ResumeService {
         if ("pdf".equals(fileType) && !isAllowedPdfContentType(file.getContentType())) {
             throw new BusinessException(400, "文件类型与扩展名不匹配");
         }
+    }
+
+    private Resume getOwnedResume(Long userId, Long resumeId) {
+        validateUserId(userId);
+        if (resumeId == null) {
+            throw new BusinessException(400, "简历 ID 不能为空");
+        }
+
+        Resume resume = resumeMapper.selectOne(new LambdaQueryWrapper<Resume>()
+                .eq(Resume::getId, resumeId)
+                .eq(Resume::getUserId, userId));
+        if (resume == null) {
+            throw new BusinessException(404, "简历不存在");
+        }
+        return resume;
+    }
+
+    private ResumeParseResult saveParseResult(
+            Long resumeId,
+            String parseStatus,
+            String extractedText,
+            String structuredJson,
+            String errorMessage) {
+        LocalDateTime now = LocalDateTime.now();
+        ResumeParseResult parseResult = resumeParseResultMapper.selectOne(new LambdaQueryWrapper<ResumeParseResult>()
+                .eq(ResumeParseResult::getResumeId, resumeId));
+
+        if (parseResult == null) {
+            parseResult = new ResumeParseResult();
+            parseResult.setResumeId(resumeId);
+            parseResult.setCreatedAt(now);
+        }
+
+        parseResult.setParseStatus(parseStatus);
+        parseResult.setExtractedText(extractedText);
+        parseResult.setStructuredJson(structuredJson);
+        parseResult.setErrorMessage(truncateErrorMessage(errorMessage));
+        parseResult.setUpdatedAt(now);
+
+        if (parseResult.getId() == null) {
+            resumeParseResultMapper.insert(parseResult);
+        } else {
+            resumeParseResultMapper.updateById(parseResult);
+        }
+        return parseResult;
     }
 
     private boolean isAllowedPdfContentType(String contentType) {
@@ -168,6 +290,31 @@ public class ResumeServiceImpl implements ResumeService {
                 .createdAt(resume.getCreatedAt())
                 .updatedAt(resume.getUpdatedAt())
                 .build();
+    }
+
+    private ResumeParseResultVO toParseResultVO(ResumeParseResult parseResult) {
+        return ResumeParseResultVO.builder()
+                .resumeId(parseResult.getResumeId())
+                .parseStatus(parseResult.getParseStatus())
+                .extractedText(parseResult.getExtractedText())
+                .structuredJson(parseResult.getStructuredJson())
+                .errorMessage(parseResult.getErrorMessage())
+                .updatedAt(parseResult.getUpdatedAt())
+                .build();
+    }
+
+    private String normalizeErrorMessage(RuntimeException exception) {
+        if (exception.getMessage() == null || exception.getMessage().isBlank()) {
+            return "简历解析失败";
+        }
+        return exception.getMessage();
+    }
+
+    private String truncateErrorMessage(String errorMessage) {
+        if (errorMessage == null || errorMessage.length() <= 1000) {
+            return errorMessage;
+        }
+        return errorMessage.substring(0, 1000);
     }
 
     private String extractFileType(String filename) {

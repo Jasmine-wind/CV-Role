@@ -26,3 +26,23 @@ export interface ResumeUploadResult {
   uploadStatus: string
   createdAt: string
 }
+
+export interface ResumeParseResult {
+  resumeId: number
+  parseStatus: 'PENDING' | 'PROCESSING' | 'SUCCESS' | 'FAILED' | string
+  extractedText: string | null
+  structuredJson: string | null
+  errorMessage: string | null
+  updatedAt: string | null
+}
+
+export interface ResumeStructuredContent {
+  name?: string | null
+  phone?: string | null
+  email?: string | null
+  education?: string[] | null
+  skills?: string[] | null
+  projects?: string[] | null
+  internships?: string[] | null
+  rawText?: string | null
+}

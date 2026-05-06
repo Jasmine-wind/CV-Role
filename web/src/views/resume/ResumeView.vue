@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import type { UploadFile, UploadProps, UploadUserFile } from 'element-plus'
-import { ElMessage } from 'element-plus'
-import { onMounted, ref } from 'vue'
-import { getResumeList, uploadResume } from '@/api/resume'
-import type { ResumeListItem } from '@/types/resume'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { computed, onMounted, ref } from 'vue'
+import { deleteResume, getResumeList, getResumeParseResult, parseResume, uploadResume } from '@/api/resume'
+import type { ResumeListItem, ResumeParseResult, ResumeStructuredContent } from '@/types/resume'
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024
 const ACCEPTED_EXTENSIONS = ['pdf', 'doc', 'docx']
@@ -13,6 +13,23 @@ const selectedFile = ref<File | null>(null)
 const uploadFiles = ref<UploadUserFile[]>([])
 const loading = ref(false)
 const uploading = ref(false)
+const parsingResumeId = ref<number | null>(null)
+const loadingParseResult = ref(false)
+const deletingResumeId = ref<number | null>(null)
+const activeResume = ref<ResumeListItem | null>(null)
+const parseResult = ref<ResumeParseResult | null>(null)
+
+const structuredContent = computed<ResumeStructuredContent | null>(() => {
+  if (!parseResult.value?.structuredJson) {
+    return null
+  }
+
+  try {
+    return JSON.parse(parseResult.value.structuredJson) as ResumeStructuredContent
+  } catch (error) {
+    return null
+  }
+})
 
 const formatFileSize = (size: number) => {
   if (size >= 1024 * 1024) {
@@ -108,6 +125,100 @@ const handleUpload = async () => {
   }
 }
 
+const resolveParseStatusText = (status: string | null | undefined) => {
+  const statusMap: Record<string, string> = {
+    PENDING: '待解析',
+    PROCESSING: '解析中',
+    SUCCESS: '解析成功',
+    FAILED: '解析失败',
+  }
+
+  return status ? (statusMap[status] ?? status) : '-'
+}
+
+const resolveParseStatusType = (status: string | null | undefined) => {
+  if (status === 'SUCCESS') {
+    return 'success'
+  }
+
+  if (status === 'FAILED') {
+    return 'danger'
+  }
+
+  return 'info'
+}
+
+const selectResume = (resume: ResumeListItem) => {
+  activeResume.value = resume
+  parseResult.value = null
+}
+
+const loadParseResult = async (resume: ResumeListItem) => {
+  selectResume(resume)
+  loadingParseResult.value = true
+
+  try {
+    parseResult.value = await getResumeParseResult(resume.id)
+  } catch (error) {
+    parseResult.value = null
+    ElMessage.warning(error instanceof Error ? error.message : '获取解析结果失败')
+  } finally {
+    loadingParseResult.value = false
+  }
+}
+
+const handleParse = async (resume: ResumeListItem) => {
+  selectResume(resume)
+  parsingResumeId.value = resume.id
+
+  try {
+    parseResult.value = await parseResume(resume.id)
+    if (parseResult.value.parseStatus === 'FAILED') {
+      ElMessage.error(parseResult.value.errorMessage || '解析失败')
+    } else {
+      ElMessage.success('解析完成')
+    }
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '解析失败')
+  } finally {
+    parsingResumeId.value = null
+  }
+}
+
+const handleDelete = async (resume: ResumeListItem) => {
+  try {
+    await ElMessageBox.confirm(`确认删除「${resume.originalFilename}」吗？`, '删除简历', {
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+  } catch (error) {
+    return
+  }
+
+  deletingResumeId.value = resume.id
+
+  try {
+    await deleteResume(resume.id)
+    ElMessage.success('删除成功')
+
+    if (activeResume.value?.id === resume.id) {
+      activeResume.value = null
+      parseResult.value = null
+    }
+
+    await loadResumes()
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '删除失败')
+  } finally {
+    deletingResumeId.value = null
+  }
+}
+
+const hasStructuredList = (items: string[] | null | undefined) => {
+  return Array.isArray(items) && items.length > 0
+}
+
 onMounted(() => {
   loadResumes()
 })
@@ -156,7 +267,111 @@ onMounted(() => {
             {{ formatDateTime(row.createdAt) }}
           </template>
         </el-table-column>
+        <el-table-column label="操作" width="300" fixed="right">
+          <template #default="{ row }: { row: ResumeListItem }">
+            <div class="resume-actions">
+              <el-button
+                size="small"
+                type="primary"
+                :loading="parsingResumeId === row.id"
+                @click="handleParse(row)"
+              >
+                开始解析
+              </el-button>
+              <el-button size="small" :loading="loadingParseResult && activeResume?.id === row.id" @click="loadParseResult(row)">
+                查看结果
+              </el-button>
+              <el-button
+                size="small"
+                type="danger"
+                :loading="deletingResumeId === row.id"
+                @click="handleDelete(row)"
+              >
+                删除
+              </el-button>
+            </div>
+          </template>
+        </el-table-column>
       </el-table>
+
+      <section v-if="activeResume" v-loading="loadingParseResult" class="resume-parse-panel">
+        <header class="resume-parse-header">
+          <div>
+            <h2 class="resume-section-title">解析结果</h2>
+            <p class="resume-section-subtitle">{{ activeResume.originalFilename }}</p>
+          </div>
+          <el-tag :type="resolveParseStatusType(parseResult?.parseStatus)">
+            {{ resolveParseStatusText(parseResult?.parseStatus) }}
+          </el-tag>
+        </header>
+
+        <el-alert
+          v-if="!parseResult"
+          title="当前简历暂无解析结果"
+          type="info"
+          :closable="false"
+          show-icon
+        />
+
+        <template v-else>
+          <el-alert
+            v-if="parseResult.parseStatus === 'FAILED'"
+            :title="parseResult.errorMessage || '解析失败'"
+            type="error"
+            :closable="false"
+            show-icon
+          />
+
+          <section class="resume-structured-section">
+            <h3 class="resume-block-title">基础字段</h3>
+            <el-descriptions :column="2" border>
+              <el-descriptions-item label="姓名">{{ structuredContent?.name || '-' }}</el-descriptions-item>
+              <el-descriptions-item label="手机号">{{ structuredContent?.phone || '-' }}</el-descriptions-item>
+              <el-descriptions-item label="邮箱">{{ structuredContent?.email || '-' }}</el-descriptions-item>
+              <el-descriptions-item label="更新时间">{{ formatDateTime(parseResult.updatedAt || '') }}</el-descriptions-item>
+            </el-descriptions>
+          </section>
+
+          <section class="resume-structured-section">
+            <h3 class="resume-block-title">技能关键词</h3>
+            <div v-if="hasStructuredList(structuredContent?.skills)" class="resume-tag-list">
+              <el-tag v-for="skill in structuredContent?.skills" :key="skill" type="success">{{ skill }}</el-tag>
+            </div>
+            <el-empty v-else description="暂无技能关键词" :image-size="72" />
+          </section>
+
+          <section class="resume-structured-grid">
+            <div>
+              <h3 class="resume-block-title">教育经历</h3>
+              <ul v-if="hasStructuredList(structuredContent?.education)" class="resume-text-list">
+                <li v-for="item in structuredContent?.education" :key="item">{{ item }}</li>
+              </ul>
+              <el-empty v-else description="暂无教育经历" :image-size="72" />
+            </div>
+
+            <div>
+              <h3 class="resume-block-title">项目经历</h3>
+              <ul v-if="hasStructuredList(structuredContent?.projects)" class="resume-text-list">
+                <li v-for="item in structuredContent?.projects" :key="item">{{ item }}</li>
+              </ul>
+              <el-empty v-else description="暂无项目经历" :image-size="72" />
+            </div>
+
+            <div>
+              <h3 class="resume-block-title">实习/工作经历</h3>
+              <ul v-if="hasStructuredList(structuredContent?.internships)" class="resume-text-list">
+                <li v-for="item in structuredContent?.internships" :key="item">{{ item }}</li>
+              </ul>
+              <el-empty v-else description="暂无实习或工作经历" :image-size="72" />
+            </div>
+          </section>
+
+          <section class="resume-structured-section">
+            <h3 class="resume-block-title">原始文本</h3>
+            <pre class="resume-raw-text">{{ parseResult.extractedText || '-' }}</pre>
+          </section>
+        </template>
+      </section>
     </section>
   </main>
 </template>
@@ -218,11 +433,110 @@ onMounted(() => {
   border-radius: 8px;
 }
 
+.resume-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.resume-parse-panel {
+  margin-top: 20px;
+  padding: 24px;
+  border: 1px solid #dde5f0;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.resume-parse-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.resume-section-title {
+  margin: 0;
+  color: #111827;
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.resume-section-subtitle {
+  margin: 6px 0 0;
+  color: #667085;
+  font-size: 14px;
+}
+
+.resume-structured-section {
+  margin-top: 20px;
+}
+
+.resume-structured-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+  margin-top: 20px;
+}
+
+.resume-block-title {
+  margin: 0 0 12px;
+  color: #111827;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.resume-tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.resume-text-list {
+  min-height: 88px;
+  margin: 0;
+  padding: 14px 16px 14px 28px;
+  border: 1px solid #dde5f0;
+  border-radius: 8px;
+  color: #344054;
+  line-height: 1.7;
+}
+
+.resume-raw-text {
+  max-height: 360px;
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding: 16px;
+  border: 1px solid #dde5f0;
+  border-radius: 8px;
+  color: #344054;
+  font-family:
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Monaco,
+    Consolas,
+    monospace;
+  font-size: 13px;
+  line-height: 1.7;
+  background: #f8fafc;
+}
+
 @media (max-width: 640px) {
   .resume-header,
-  .resume-upload-panel {
+  .resume-upload-panel,
+  .resume-parse-header {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .resume-actions {
+    flex-direction: column;
+  }
+
+  .resume-structured-grid {
+    grid-template-columns: 1fr;
   }
 }
 </style>
