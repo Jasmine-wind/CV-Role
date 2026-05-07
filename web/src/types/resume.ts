@@ -46,3 +46,26 @@ export interface ResumeStructuredContent {
   internships?: string[] | null
   rawText?: string | null
 }
+
+export interface ResumeAiAnalysis {
+  resumeId: number
+  analysisStatus: 'PENDING' | 'SUCCESS' | 'FAILED' | string
+  score: number | null
+  strengths?: string[] | null
+  problems?: string[] | null
+  suggestionsSummary?: string[] | null
+  modelName: string | null
+  promptVersion: string | null
+  errorMessage: string | null
+  updatedAt: string | null
+}
+
+export interface ResumeAiAnalysisTrigger {
+  resumeId: number
+  analysisStatus: 'PENDING' | 'SUCCESS' | 'FAILED' | string
+  score: number | null
+  modelName: string | null
+  promptVersion: string | null
+  errorMessage: string | null
+  updatedAt: string | null
+}

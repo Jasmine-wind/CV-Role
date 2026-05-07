@@ -2,8 +2,16 @@
 import type { UploadFile, UploadProps, UploadUserFile } from 'element-plus'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, onMounted, ref } from 'vue'
-import { deleteResume, getResumeList, getResumeParseResult, parseResume, uploadResume } from '@/api/resume'
-import type { ResumeListItem, ResumeParseResult, ResumeStructuredContent } from '@/types/resume'
+import {
+  analyzeResume,
+  deleteResume,
+  getResumeAiAnalysis,
+  getResumeList,
+  getResumeParseResult,
+  parseResume,
+  uploadResume,
+} from '@/api/resume'
+import type { ResumeAiAnalysis, ResumeListItem, ResumeParseResult, ResumeStructuredContent } from '@/types/resume'
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024
 const ACCEPTED_EXTENSIONS = ['pdf', 'doc', 'docx']
@@ -15,9 +23,13 @@ const loading = ref(false)
 const uploading = ref(false)
 const parsingResumeId = ref<number | null>(null)
 const loadingParseResult = ref(false)
+const analyzingResumeId = ref<number | null>(null)
+const loadingAiAnalysis = ref(false)
 const deletingResumeId = ref<number | null>(null)
 const activeResume = ref<ResumeListItem | null>(null)
 const parseResult = ref<ResumeParseResult | null>(null)
+const aiAnalysis = ref<ResumeAiAnalysis | null>(null)
+const activePanel = ref<'parse' | 'analysis' | null>(null)
 
 const structuredContent = computed<ResumeStructuredContent | null>(() => {
   if (!parseResult.value?.structuredJson) {
@@ -148,19 +160,46 @@ const resolveParseStatusType = (status: string | null | undefined) => {
   return 'info'
 }
 
+const resolveAnalysisStatusText = (status: string | null | undefined) => {
+  const statusMap: Record<string, string> = {
+    PENDING: '待分析',
+    SUCCESS: '分析成功',
+    FAILED: '分析失败',
+  }
+
+  return status ? (statusMap[status] ?? status) : '未分析'
+}
+
+const resolveAnalysisStatusType = (status: string | null | undefined) => {
+  if (status === 'SUCCESS') {
+    return 'success'
+  }
+
+  if (status === 'FAILED') {
+    return 'danger'
+  }
+
+  return 'info'
+}
+
 const selectResume = (resume: ResumeListItem) => {
   activeResume.value = resume
   parseResult.value = null
+  aiAnalysis.value = null
+  activePanel.value = null
 }
 
 const loadParseResult = async (resume: ResumeListItem) => {
   selectResume(resume)
+  activePanel.value = 'parse'
   loadingParseResult.value = true
 
   try {
     parseResult.value = await getResumeParseResult(resume.id)
+    await loadExistingAiAnalysis(resume.id)
   } catch (error) {
     parseResult.value = null
+    aiAnalysis.value = null
     ElMessage.warning(error instanceof Error ? error.message : '获取解析结果失败')
   } finally {
     loadingParseResult.value = false
@@ -169,6 +208,7 @@ const loadParseResult = async (resume: ResumeListItem) => {
 
 const handleParse = async (resume: ResumeListItem) => {
   selectResume(resume)
+  activePanel.value = 'parse'
   parsingResumeId.value = resume.id
 
   try {
@@ -177,11 +217,72 @@ const handleParse = async (resume: ResumeListItem) => {
       ElMessage.error(parseResult.value.errorMessage || '解析失败')
     } else {
       ElMessage.success('解析完成')
+      aiAnalysis.value = null
     }
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '解析失败')
   } finally {
     parsingResumeId.value = null
+  }
+}
+
+const loadAiAnalysis = async (resume: ResumeListItem) => {
+  if (activeResume.value?.id !== resume.id) {
+    selectResume(resume)
+  }
+
+  activePanel.value = 'analysis'
+  loadingAiAnalysis.value = true
+
+  try {
+    aiAnalysis.value = await getResumeAiAnalysis(resume.id)
+  } catch (error) {
+    aiAnalysis.value = null
+    ElMessage.warning(error instanceof Error ? error.message : '获取 AI 分析结果失败')
+  } finally {
+    loadingAiAnalysis.value = false
+  }
+}
+
+const loadExistingAiAnalysis = async (resumeId: number) => {
+  loadingAiAnalysis.value = true
+
+  try {
+    aiAnalysis.value = await getResumeAiAnalysis(resumeId)
+  } catch (error) {
+    aiAnalysis.value = null
+  } finally {
+    loadingAiAnalysis.value = false
+  }
+}
+
+const handleAiAnalysis = async (resume: ResumeListItem) => {
+  if (activeResume.value?.id !== resume.id) {
+    selectResume(resume)
+  }
+
+  activePanel.value = 'analysis'
+
+  if (parseResult.value && parseResult.value.parseStatus !== 'SUCCESS') {
+    ElMessage.warning('请先完成简历解析')
+    return
+  }
+
+  analyzingResumeId.value = resume.id
+
+  try {
+    const triggerResult = await analyzeResume(resume.id)
+    aiAnalysis.value = await getResumeAiAnalysis(resume.id)
+
+    if (triggerResult.analysisStatus === 'FAILED') {
+      ElMessage.error(triggerResult.errorMessage || 'AI 分析失败')
+    } else {
+      ElMessage.success('AI 分析完成')
+    }
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : 'AI 分析失败')
+  } finally {
+    analyzingResumeId.value = null
   }
 }
 
@@ -205,6 +306,8 @@ const handleDelete = async (resume: ResumeListItem) => {
     if (activeResume.value?.id === resume.id) {
       activeResume.value = null
       parseResult.value = null
+      aiAnalysis.value = null
+      activePanel.value = null
     }
 
     await loadResumes()
@@ -232,7 +335,6 @@ onMounted(() => {
           <h1 class="resume-title">我的简历</h1>
           <p class="resume-subtitle">上传 PDF、DOC 或 DOCX 简历，并查看已上传记录。</p>
         </div>
-        <el-button :loading="loading" @click="loadResumes">刷新列表</el-button>
       </header>
 
       <section class="resume-upload-panel">
@@ -267,7 +369,7 @@ onMounted(() => {
             {{ formatDateTime(row.createdAt) }}
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="300" fixed="right">
+        <el-table-column label="操作" width="430" fixed="right">
           <template #default="{ row }: { row: ResumeListItem }">
             <div class="resume-actions">
               <el-button
@@ -283,6 +385,17 @@ onMounted(() => {
               </el-button>
               <el-button
                 size="small"
+                type="success"
+                :loading="analyzingResumeId === row.id"
+                @click="handleAiAnalysis(row)"
+              >
+                AI 分析
+              </el-button>
+              <el-button size="small" :loading="loadingAiAnalysis && activeResume?.id === row.id" @click="loadAiAnalysis(row)">
+                查看分析
+              </el-button>
+              <el-button
+                size="small"
                 type="danger"
                 :loading="deletingResumeId === row.id"
                 @click="handleDelete(row)"
@@ -294,7 +407,11 @@ onMounted(() => {
         </el-table-column>
       </el-table>
 
-      <section v-if="activeResume" v-loading="loadingParseResult" class="resume-parse-panel">
+      <section
+        v-if="activeResume && parseResult && activePanel === 'parse'"
+        v-loading="loadingParseResult"
+        class="resume-parse-panel"
+      >
         <header class="resume-parse-header">
           <div>
             <h2 class="resume-section-title">解析结果</h2>
@@ -305,15 +422,7 @@ onMounted(() => {
           </el-tag>
         </header>
 
-        <el-alert
-          v-if="!parseResult"
-          title="当前简历暂无解析结果"
-          type="info"
-          :closable="false"
-          show-icon
-        />
-
-        <template v-else>
+        <div class="resume-result-content">
           <el-alert
             v-if="parseResult.parseStatus === 'FAILED'"
             :title="parseResult.errorMessage || '解析失败'"
@@ -370,6 +479,75 @@ onMounted(() => {
             <h3 class="resume-block-title">原始文本</h3>
             <pre class="resume-raw-text">{{ parseResult.extractedText || '-' }}</pre>
           </section>
+        </div>
+
+      </section>
+
+      <section
+        v-if="activeResume && aiAnalysis && (activePanel === 'parse' || activePanel === 'analysis')"
+        v-loading="loadingAiAnalysis"
+        class="resume-ai-section"
+      >
+        <header class="resume-ai-header">
+          <div>
+            <h3 class="resume-block-title">AI 分析</h3>
+            <p class="resume-ai-meta">
+              {{ aiAnalysis.modelName || '-' }} · {{ formatDateTime(aiAnalysis.updatedAt || '') }}
+            </p>
+          </div>
+          <el-tag :type="resolveAnalysisStatusType(aiAnalysis.analysisStatus)">
+            {{ resolveAnalysisStatusText(aiAnalysis.analysisStatus) }}
+          </el-tag>
+        </header>
+
+        <el-alert
+          v-if="aiAnalysis.analysisStatus === 'FAILED'"
+          :title="aiAnalysis.errorMessage || 'AI 分析失败'"
+          type="error"
+          :closable="false"
+          show-icon
+        />
+
+        <template v-else>
+          <div class="resume-score-row">
+            <el-progress
+              type="dashboard"
+              :percentage="aiAnalysis.score ?? 0"
+              :stroke-width="8"
+              color="#2563eb"
+            />
+            <el-descriptions :column="1" border class="resume-score-detail">
+              <el-descriptions-item label="综合评分">{{ aiAnalysis.score ?? '-' }}</el-descriptions-item>
+              <el-descriptions-item label="Prompt 版本">{{ aiAnalysis.promptVersion || '-' }}</el-descriptions-item>
+              <el-descriptions-item label="更新时间">{{ formatDateTime(aiAnalysis.updatedAt || '') }}</el-descriptions-item>
+            </el-descriptions>
+          </div>
+
+          <section class="resume-structured-grid">
+            <div>
+              <h3 class="resume-block-title">简历优势</h3>
+              <ul v-if="hasStructuredList(aiAnalysis.strengths)" class="resume-text-list">
+                <li v-for="item in aiAnalysis.strengths" :key="item">{{ item }}</li>
+              </ul>
+              <el-empty v-else description="暂无优势信息" :image-size="72" />
+            </div>
+
+            <div>
+              <h3 class="resume-block-title">主要问题</h3>
+              <ul v-if="hasStructuredList(aiAnalysis.problems)" class="resume-text-list">
+                <li v-for="item in aiAnalysis.problems" :key="item">{{ item }}</li>
+              </ul>
+              <el-empty v-else description="暂无问题信息" :image-size="72" />
+            </div>
+
+            <div>
+              <h3 class="resume-block-title">建议摘要</h3>
+              <ul v-if="hasStructuredList(aiAnalysis.suggestionsSummary)" class="resume-text-list">
+                <li v-for="item in aiAnalysis.suggestionsSummary" :key="item">{{ item }}</li>
+              </ul>
+              <el-empty v-else description="暂无建议摘要" :image-size="72" />
+            </div>
+          </section>
         </template>
       </section>
     </section>
@@ -379,12 +557,12 @@ onMounted(() => {
 <style scoped>
 .resume-page {
   min-height: 100vh;
-  padding: 48px 20px;
+  padding: 40px 28px 56px;
   background: #f4f7fb;
 }
 
 .resume-shell {
-  width: min(100%, 1040px);
+  width: min(100%, 1280px);
   margin: 0 auto;
 }
 
@@ -439,8 +617,8 @@ onMounted(() => {
 }
 
 .resume-parse-panel {
-  margin-top: 20px;
-  padding: 24px;
+  margin-top: 24px;
+  padding: 28px;
   border: 1px solid #dde5f0;
   border-radius: 8px;
   background: #ffffff;
@@ -469,6 +647,44 @@ onMounted(() => {
 
 .resume-structured-section {
   margin-top: 20px;
+}
+
+.resume-result-content {
+  display: block;
+}
+
+.resume-ai-section {
+  margin-top: 24px;
+  padding: 28px;
+  border: 1px solid #dde5f0;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.resume-ai-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.resume-ai-meta {
+  margin: 0;
+  color: #667085;
+  font-size: 13px;
+}
+
+.resume-score-row {
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr);
+  gap: 20px;
+  align-items: center;
+  margin-top: 20px;
+}
+
+.resume-score-detail {
+  min-width: 0;
 }
 
 .resume-structured-grid {
@@ -532,6 +748,13 @@ onMounted(() => {
   }
 
   .resume-actions {
+    flex-direction: column;
+  }
+
+  .resume-ai-header,
+  .resume-score-row {
+    grid-template-columns: 1fr;
+    align-items: stretch;
     flex-direction: column;
   }
 

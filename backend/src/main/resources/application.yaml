@@ -4,6 +4,14 @@ server:
 spring:
   application:
     name: ai-resume-optimizer-backend
+  ai:
+    openai:
+      api-key: sk-fec820b77cd049f3bfd1a8b15a06eb20
+      base-url: https://api.deepseek.com
+      chat:
+        options:
+          model: deepseek-v4-pro
+          temperature: ${OPENAI_TEMPERATURE:0.2}
   servlet:
     multipart:
       max-file-size: 10MB
@@ -35,3 +43,11 @@ app:
   resume:
     upload:
       max-file-size-bytes: 10485760
+  ai:
+    openai-compatible:
+      api-key: ${spring.ai.openai.api-key}
+      base-url: https://api.deepseek.com
+      model: ${spring.ai.openai.chat.options.model}
+      timeout-seconds: ${OPENAI_TIMEOUT_SECONDS:90}
+      temperature: ${OPENAI_TEMPERATURE:0.2}
+      max-tokens: ${OPENAI_MAX_TOKENS:800}

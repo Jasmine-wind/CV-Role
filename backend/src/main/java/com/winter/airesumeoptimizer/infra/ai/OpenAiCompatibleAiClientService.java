@@ -1,0 +1,149 @@
+package com.winter.airesumeoptimizer.infra.ai;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.io.IOException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.net.http.HttpTimeoutException;
+import java.time.Duration;
+import java.util.List;
+import java.util.Map;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+
+@Service
+public class OpenAiCompatibleAiClientService implements AiClientService {
+
+    private static final int MAX_ERROR_BODY_LENGTH = 500;
+
+    private final AiClientProperties properties;
+    private final ObjectMapper objectMapper;
+    private final HttpClient httpClient;
+
+    @Autowired
+    public OpenAiCompatibleAiClientService(
+            AiClientProperties properties,
+            ObjectMapper objectMapper) {
+        this(properties, objectMapper, HttpClient.newHttpClient());
+    }
+
+    OpenAiCompatibleAiClientService(
+            AiClientProperties properties,
+            ObjectMapper objectMapper,
+            HttpClient httpClient) {
+        this.properties = properties;
+        this.objectMapper = objectMapper;
+        this.httpClient = httpClient;
+    }
+
+    @Override
+    public String complete(String prompt) {
+        validateConfig();
+        if (prompt == null || prompt.isBlank()) {
+            throw new AiClientException("AI 输入不能为空");
+        }
+
+        HttpRequest request = buildRequest(prompt);
+        try {
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                throw new AiClientException("AI 调用失败，HTTP 状态码：" + response.statusCode()
+                        + "，响应：" + truncate(response.body()));
+            }
+            return extractContent(response.body());
+        } catch (HttpTimeoutException exception) {
+            throw new AiClientException("AI 调用超时，请稍后重试或缩短简历内容", exception);
+        } catch (IOException exception) {
+            throw new AiClientException("AI 调用失败，请检查网络或 base-url 配置", exception);
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new AiClientException("AI 调用被中断", exception);
+        }
+    }
+
+    @Override
+    public String modelName() {
+        return properties.getModel();
+    }
+
+    private HttpRequest buildRequest(String prompt) {
+        try {
+            String requestBody = objectMapper.writeValueAsString(Map.of(
+                    "model", properties.getModel(),
+                    "temperature", properties.getTemperature(),
+                    "max_tokens", resolveMaxTokens(),
+                    "messages", List.of(Map.of(
+                            "role", "user",
+                            "content", prompt))));
+
+            return HttpRequest.newBuilder()
+                    .uri(URI.create(normalizeBaseUrl(properties.getBaseUrl()) + "/chat/completions"))
+                    .timeout(Duration.ofSeconds(resolveTimeoutSeconds()))
+                    .header("Authorization", "Bearer " + properties.getApiKey())
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(requestBody))
+                    .build();
+        } catch (IllegalArgumentException exception) {
+            throw new AiClientException("AI base-url 配置不正确", exception);
+        } catch (IOException exception) {
+            throw new AiClientException("AI 请求体序列化失败", exception);
+        }
+    }
+
+    String extractContent(String responseBody) {
+        try {
+            JsonNode root = objectMapper.readTree(responseBody);
+            JsonNode contentNode = root.path("choices").path(0).path("message").path("content");
+            if (contentNode.isMissingNode() || contentNode.asText().isBlank()) {
+                throw new AiClientException("AI 响应中缺少文本内容");
+            }
+            return contentNode.asText();
+        } catch (IOException exception) {
+            throw new AiClientException("AI 响应 JSON 解析失败", exception);
+        }
+    }
+
+    private void validateConfig() {
+        if (properties.getApiKey() == null || properties.getApiKey().isBlank()) {
+            throw new AiClientException("AI API Key 未配置");
+        }
+        if (properties.getBaseUrl() == null || properties.getBaseUrl().isBlank()) {
+            throw new AiClientException("AI base-url 未配置");
+        }
+        if (properties.getModel() == null || properties.getModel().isBlank()) {
+            throw new AiClientException("AI 模型名称未配置");
+        }
+    }
+
+    private int resolveTimeoutSeconds() {
+        if (properties.getTimeoutSeconds() == null || properties.getTimeoutSeconds() <= 0) {
+            return 30;
+        }
+        return properties.getTimeoutSeconds();
+    }
+
+    private int resolveMaxTokens() {
+        if (properties.getMaxTokens() == null || properties.getMaxTokens() <= 0) {
+            return 800;
+        }
+        return properties.getMaxTokens();
+    }
+
+    private String normalizeBaseUrl(String baseUrl) {
+        String normalized = baseUrl.trim();
+        while (normalized.endsWith("/")) {
+            normalized = normalized.substring(0, normalized.length() - 1);
+        }
+        return normalized;
+    }
+
+    private String truncate(String value) {
+        if (value == null || value.length() <= MAX_ERROR_BODY_LENGTH) {
+            return value;
+        }
+        return value.substring(0, MAX_ERROR_BODY_LENGTH);
+    }
+}

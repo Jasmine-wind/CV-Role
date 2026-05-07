@@ -1,5 +1,14 @@
 import request from '@/api/request'
-import type { ResumeDetail, ResumeListItem, ResumeParseResult, ResumeUploadResult } from '@/types/resume'
+import type {
+  ResumeAiAnalysis,
+  ResumeAiAnalysisTrigger,
+  ResumeDetail,
+  ResumeListItem,
+  ResumeParseResult,
+  ResumeUploadResult,
+} from '@/types/resume'
+
+const AI_ANALYSIS_TIMEOUT_MS = 120000
 
 export const uploadResume = (file: File) => {
   const formData = new FormData()
@@ -22,6 +31,16 @@ export const parseResume = (id: number) => {
 
 export const getResumeParseResult = (id: number) => {
   return request.get<ResumeParseResult>(`/api/resumes/${id}/parse-result`)
+}
+
+export const analyzeResume = (id: number) => {
+  return request.post<ResumeAiAnalysisTrigger>(`/api/resumes/${id}/ai-analysis`, undefined, {
+    timeout: AI_ANALYSIS_TIMEOUT_MS,
+  })
+}
+
+export const getResumeAiAnalysis = (id: number) => {
+  return request.get<ResumeAiAnalysis>(`/api/resumes/${id}/ai-analysis`)
 }
 
 export const deleteResume = (id: number) => {

@@ -6,6 +6,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.winter.airesumeoptimizer.common.exception.BusinessException;
 import com.winter.airesumeoptimizer.infra.storage.FileStorageService;
 import com.winter.airesumeoptimizer.infra.storage.StoredFile;
+import com.winter.airesumeoptimizer.module.analysis.entity.ResumeAiAnalysis;
+import com.winter.airesumeoptimizer.module.analysis.mapper.ResumeAiAnalysisMapper;
 import com.winter.airesumeoptimizer.module.resume.entity.Resume;
 import com.winter.airesumeoptimizer.module.resume.entity.ResumeParseResult;
 import com.winter.airesumeoptimizer.module.resume.mapper.ResumeMapper;
@@ -39,6 +41,7 @@ public class ResumeServiceImpl implements ResumeService {
 
     private final ResumeMapper resumeMapper;
     private final ResumeParseResultMapper resumeParseResultMapper;
+    private final ResumeAiAnalysisMapper resumeAiAnalysisMapper;
     private final FileStorageService fileStorageService;
     private final ResumeTextExtractionService resumeTextExtractionService;
     private final ResumeStructureParseService resumeStructureParseService;
@@ -48,6 +51,7 @@ public class ResumeServiceImpl implements ResumeService {
     public ResumeServiceImpl(
             ResumeMapper resumeMapper,
             ResumeParseResultMapper resumeParseResultMapper,
+            ResumeAiAnalysisMapper resumeAiAnalysisMapper,
             FileStorageService fileStorageService,
             ResumeTextExtractionService resumeTextExtractionService,
             ResumeStructureParseService resumeStructureParseService,
@@ -55,6 +59,7 @@ public class ResumeServiceImpl implements ResumeService {
             @Value("${app.resume.upload.max-file-size-bytes:10485760}") long maxFileSize) {
         this.resumeMapper = resumeMapper;
         this.resumeParseResultMapper = resumeParseResultMapper;
+        this.resumeAiAnalysisMapper = resumeAiAnalysisMapper;
         this.fileStorageService = fileStorageService;
         this.resumeTextExtractionService = resumeTextExtractionService;
         this.resumeStructureParseService = resumeStructureParseService;
@@ -175,10 +180,16 @@ public class ResumeServiceImpl implements ResumeService {
     @Transactional
     public void delete(Long userId, Long resumeId) {
         Resume resume = getOwnedResume(userId, resumeId);
-        resumeParseResultMapper.delete(new LambdaQueryWrapper<ResumeParseResult>()
-                .eq(ResumeParseResult::getResumeId, resume.getId()));
+        deleteResumeChildren(resume.getId());
         resumeMapper.deleteById(resume.getId());
         fileStorageService.delete(resume.getObjectKey());
+    }
+
+    private void deleteResumeChildren(Long resumeId) {
+        resumeAiAnalysisMapper.delete(new LambdaQueryWrapper<ResumeAiAnalysis>()
+                .eq(ResumeAiAnalysis::getResumeId, resumeId));
+        resumeParseResultMapper.delete(new LambdaQueryWrapper<ResumeParseResult>()
+                .eq(ResumeParseResult::getResumeId, resumeId));
     }
 
     private void validateFile(MultipartFile file) {
