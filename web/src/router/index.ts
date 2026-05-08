@@ -28,6 +28,22 @@ const router = createRouter({
       },
     },
     {
+      path: '/jobs',
+      name: 'jobs',
+      component: () => import('@/views/job/JobListView.vue'),
+      meta: {
+        requiresAuth: true,
+      },
+    },
+    {
+      path: '/jobs/:id',
+      name: 'job-detail',
+      component: () => import('@/views/job/JobDetailView.vue'),
+      meta: {
+        requiresAuth: true,
+      },
+    },
+    {
       path: '/login',
       name: 'login',
       component: () => import('@/views/auth/LoginView.vue'),

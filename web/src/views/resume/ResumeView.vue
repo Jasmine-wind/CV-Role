@@ -2,6 +2,7 @@
 import type { UploadFile, UploadProps, UploadUserFile } from 'element-plus'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import {
   analyzeResume,
   deleteResume,
@@ -13,6 +14,7 @@ import {
 } from '@/api/resume'
 import type { ResumeAiAnalysis, ResumeListItem, ResumeParseResult, ResumeStructuredContent } from '@/types/resume'
 
+const router = useRouter()
 const MAX_FILE_SIZE = 10 * 1024 * 1024
 const ACCEPTED_EXTENSIONS = ['pdf', 'doc', 'docx']
 
@@ -30,6 +32,12 @@ const activeResume = ref<ResumeListItem | null>(null)
 const parseResult = ref<ResumeParseResult | null>(null)
 const aiAnalysis = ref<ResumeAiAnalysis | null>(null)
 const activePanel = ref<'parse' | 'analysis' | null>(null)
+
+const isRowBusy = (resumeId: number) => {
+  return parsingResumeId.value === resumeId
+    || analyzingResumeId.value === resumeId
+    || deletingResumeId.value === resumeId
+}
 
 const structuredContent = computed<ResumeStructuredContent | null>(() => {
   if (!parseResult.value?.structuredJson) {
@@ -287,6 +295,10 @@ const handleAiAnalysis = async (resume: ResumeListItem) => {
 }
 
 const handleDelete = async (resume: ResumeListItem) => {
+  if (isRowBusy(resume.id)) {
+    return
+  }
+
   try {
     await ElMessageBox.confirm(`确认删除「${resume.originalFilename}」吗？`, '删除简历', {
       confirmButtonText: '删除',
@@ -301,7 +313,7 @@ const handleDelete = async (resume: ResumeListItem) => {
 
   try {
     await deleteResume(resume.id)
-    ElMessage.success('删除成功')
+    resumes.value = resumes.value.filter((item) => item.id !== resume.id)
 
     if (activeResume.value?.id === resume.id) {
       activeResume.value = null
@@ -311,6 +323,7 @@ const handleDelete = async (resume: ResumeListItem) => {
     }
 
     await loadResumes()
+    ElMessage.success('删除成功')
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '删除失败')
   } finally {
@@ -335,6 +348,7 @@ onMounted(() => {
           <h1 class="resume-title">我的简历</h1>
           <p class="resume-subtitle">上传 PDF、DOC 或 DOCX 简历，并查看已上传记录。</p>
         </div>
+        <el-button @click="router.push('/')">返回首页</el-button>
       </header>
 
       <section class="resume-upload-panel">
@@ -375,28 +389,41 @@ onMounted(() => {
               <el-button
                 size="small"
                 type="primary"
+                :disabled="isRowBusy(row.id)"
                 :loading="parsingResumeId === row.id"
                 @click="handleParse(row)"
               >
                 开始解析
               </el-button>
-              <el-button size="small" :loading="loadingParseResult && activeResume?.id === row.id" @click="loadParseResult(row)">
+              <el-button
+                size="small"
+                :disabled="isRowBusy(row.id)"
+                :loading="loadingParseResult && activeResume?.id === row.id"
+                @click="loadParseResult(row)"
+              >
                 查看结果
               </el-button>
               <el-button
                 size="small"
                 type="success"
+                :disabled="isRowBusy(row.id)"
                 :loading="analyzingResumeId === row.id"
                 @click="handleAiAnalysis(row)"
               >
                 AI 分析
               </el-button>
-              <el-button size="small" :loading="loadingAiAnalysis && activeResume?.id === row.id" @click="loadAiAnalysis(row)">
+              <el-button
+                size="small"
+                :disabled="isRowBusy(row.id)"
+                :loading="loadingAiAnalysis && activeResume?.id === row.id"
+                @click="loadAiAnalysis(row)"
+              >
                 查看分析
               </el-button>
               <el-button
                 size="small"
                 type="danger"
+                :disabled="isRowBusy(row.id) && deletingResumeId !== row.id"
                 :loading="deletingResumeId === row.id"
                 @click="handleDelete(row)"
               >
@@ -511,9 +538,11 @@ onMounted(() => {
         <template v-else>
           <div class="resume-score-row">
             <el-progress
+              class="resume-score-progress"
               type="dashboard"
               :percentage="aiAnalysis.score ?? 0"
               :stroke-width="8"
+              :width="132"
               color="#2563eb"
             />
             <el-descriptions :column="1" border class="resume-score-detail">
@@ -677,7 +706,7 @@ onMounted(() => {
 
 .resume-score-row {
   display: grid;
-  grid-template-columns: 180px minmax(0, 1fr);
+  grid-template-columns: 160px minmax(0, 1fr);
   gap: 20px;
   align-items: center;
   margin-top: 20px;
@@ -685,6 +714,31 @@ onMounted(() => {
 
 .resume-score-detail {
   min-width: 0;
+}
+
+.resume-score-progress {
+  display: block;
+  width: 132px;
+  height: 132px;
+  justify-self: center;
+}
+
+.resume-score-progress :deep(.el-progress-circle) {
+  width: 132px !important;
+  height: 132px !important;
+}
+
+.resume-score-progress :deep(.el-progress__text) {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 132px;
+  height: 132px;
+  margin: 0;
+  top: 0;
+  left: 0;
+  line-height: 1;
+  transform: none;
 }
 
 .resume-structured-grid {

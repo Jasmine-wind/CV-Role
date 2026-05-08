@@ -2,15 +2,19 @@ server:
   port: 8080
 
 spring:
+  config:
+    import:
+      - optional:file:.env[.properties]
+      - optional:file:../.env[.properties]
   application:
     name: ai-resume-optimizer-backend
   ai:
     openai:
-      api-key: sk-fec820b77cd049f3bfd1a8b15a06eb20
+      api-key: ${DASHSCOPE_API_KEY}
       base-url: https://api.deepseek.com
       chat:
         options:
-          model: deepseek-v4-pro
+          model: ${OPENAI_MODEL:deepseek-v4-flash}
           temperature: ${OPENAI_TEMPERATURE:0.2}
   servlet:
     multipart:
@@ -19,7 +23,7 @@ spring:
   datasource:
     url: jdbc:postgresql://localhost:5432/ai_resume_optimizer
     username: dawn
-    password: '041103'
+    password: ${DB_PASSWORD}
     driver-class-name: org.postgresql.Driver
 
 mybatis-plus:
@@ -33,7 +37,7 @@ logging:
     root: info
 
 jwt:
-  secret: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+  secret: ${JWT_SECRET}
   expiration-minutes: 120
 
 app:
