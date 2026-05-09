@@ -38,18 +38,40 @@ service.interceptors.request.use((config) => {
 service.interceptors.response.use(undefined, (error: AxiosError<ApiResult<unknown>>) => {
   const status = error.response?.status
   const code = error.response?.data?.code
-  const message = error.response?.data?.message || error.message || '请求失败'
+  const message = resolveErrorMessage(error)
 
   if (status === 401 || code === 401) {
     clearAuthToken()
 
     if (window.location.pathname !== '/login') {
-      window.location.href = '/login'
+      const redirect = `${window.location.pathname}${window.location.search}`
+      window.location.href = `/login?redirect=${encodeURIComponent(redirect)}`
     }
   }
 
   return Promise.reject(new Error(message))
 })
+
+const resolveErrorMessage = (error: AxiosError<ApiResult<unknown>>) => {
+  const serverMessage = error.response?.data?.message
+  if (serverMessage) {
+    return serverMessage
+  }
+
+  if (error.code === 'ECONNABORTED') {
+    return '请求超时，请稍后重试'
+  }
+
+  if (!error.response) {
+    return '无法连接后端服务，请确认后端已启动'
+  }
+
+  if (error.response.status >= 500) {
+    return '服务器处理失败，请稍后重试'
+  }
+
+  return error.message || '请求失败'
+}
 
 const request: ApiClient = {
   get: <T>(url: string, config?: AxiosRequestConfig) => {

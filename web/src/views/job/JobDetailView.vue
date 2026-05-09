@@ -83,7 +83,11 @@ const loadResumes = async () => {
   try {
     resumes.value = await getResumeList()
     const firstResume = resumes.value[0]
-    if (!selectedResumeId.value && firstResume) {
+    const queryResumeId = Number(route.query.resumeId)
+
+    if (Number.isFinite(queryResumeId) && resumes.value.some((resume) => resume.id === queryResumeId)) {
+      selectedResumeId.value = queryResumeId
+    } else if (!selectedResumeId.value && firstResume) {
       selectedResumeId.value = firstResume.id
     }
   } catch (error) {
@@ -158,6 +162,7 @@ onMounted(async () => {
         <el-space>
           <el-button @click="router.push('/jobs')">返回列表</el-button>
           <el-button @click="router.push('/resumes')">我的简历</el-button>
+          <el-button type="primary" @click="router.push('/history')">历史记录</el-button>
         </el-space>
       </header>
 

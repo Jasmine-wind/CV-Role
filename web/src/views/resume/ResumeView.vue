@@ -2,7 +2,7 @@
 import type { UploadFile, UploadProps, UploadUserFile } from 'element-plus'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import {
   analyzeResume,
   deleteResume,
@@ -14,6 +14,7 @@ import {
 } from '@/api/resume'
 import type { ResumeAiAnalysis, ResumeListItem, ResumeParseResult, ResumeStructuredContent } from '@/types/resume'
 
+const route = useRoute()
 const router = useRouter()
 const MAX_FILE_SIZE = 10 * 1024 * 1024
 const ACCEPTED_EXTENSIONS = ['pdf', 'doc', 'docx']
@@ -98,6 +99,7 @@ const loadResumes = async () => {
 
   try {
     resumes.value = await getResumeList()
+    selectResumeFromRoute()
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '获取简历列表失败')
   } finally {
@@ -195,6 +197,18 @@ const selectResume = (resume: ResumeListItem) => {
   parseResult.value = null
   aiAnalysis.value = null
   activePanel.value = null
+}
+
+const selectResumeFromRoute = () => {
+  const resumeId = Number(route.query.resumeId)
+  if (!Number.isFinite(resumeId)) {
+    return
+  }
+
+  const resume = resumes.value.find((item) => item.id === resumeId)
+  if (resume) {
+    selectResume(resume)
+  }
 }
 
 const loadParseResult = async (resume: ResumeListItem) => {
@@ -348,7 +362,10 @@ onMounted(() => {
           <h1 class="resume-title">我的简历</h1>
           <p class="resume-subtitle">上传 PDF、DOC 或 DOCX 简历，并查看已上传记录。</p>
         </div>
-        <el-button @click="router.push('/')">返回首页</el-button>
+        <el-space>
+          <el-button @click="router.push('/')">返回首页</el-button>
+          <el-button type="primary" @click="router.push('/history')">历史记录</el-button>
+        </el-space>
       </header>
 
       <section class="resume-upload-panel">
@@ -433,6 +450,27 @@ onMounted(() => {
           </template>
         </el-table-column>
       </el-table>
+
+      <section v-if="activeResume && activePanel === null" class="resume-detail-panel">
+        <header class="resume-parse-header">
+          <div>
+            <h2 class="resume-section-title">简历详情</h2>
+            <p class="resume-section-subtitle">{{ activeResume.originalFilename }}</p>
+          </div>
+          <el-tag>{{ activeResume.uploadStatus }}</el-tag>
+        </header>
+        <el-descriptions :column="2" border>
+          <el-descriptions-item label="文件名">{{ activeResume.originalFilename }}</el-descriptions-item>
+          <el-descriptions-item label="类型">{{ activeResume.fileType }}</el-descriptions-item>
+          <el-descriptions-item label="大小">{{ formatFileSize(activeResume.fileSize) }}</el-descriptions-item>
+          <el-descriptions-item label="上传时间">{{ formatDateTime(activeResume.createdAt) }}</el-descriptions-item>
+        </el-descriptions>
+        <div class="resume-detail-actions">
+          <el-button type="primary" @click="loadParseResult(activeResume)">查看解析</el-button>
+          <el-button type="success" @click="loadAiAnalysis(activeResume)">查看分析</el-button>
+          <el-button @click="router.push('/jobs')">查看岗位</el-button>
+        </div>
+      </section>
 
       <section
         v-if="activeResume && parseResult && activePanel === 'parse'"
@@ -643,6 +681,21 @@ onMounted(() => {
 .resume-actions {
   display: flex;
   gap: 8px;
+}
+
+.resume-detail-panel {
+  margin-top: 24px;
+  padding: 28px;
+  border: 1px solid #dde5f0;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.resume-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 18px;
 }
 
 .resume-parse-panel {
