@@ -27,8 +27,10 @@
 - JWT
 - MyBatis-Plus
 - PostgreSQL
+- Flyway
 - PDFBox
 - Apache POI
+- OpenAPI / Swagger UI
 - OpenAI-compatible API 调用适配
 - Maven Wrapper
 
@@ -85,67 +87,155 @@ backend/src/main/java/com/winter/airesumeoptimizer/module/
 
 ## 环境变量
 
-后端会读取仓库根目录 `.env` 或 `backend/.env`。本地可在仓库根目录创建 `.env`：
+后端默认使用 `dev` profile。公共配置位于：
+
+```text
+backend/src/main/resources/application.yaml
+```
+
+开发环境配置位于：
+
+```text
+backend/src/main/resources/application-dev.yaml
+```
+
+测试环境预留配置位于：
+
+```text
+backend/src/main/resources/application-test.yaml
+```
+
+后端会读取仓库根目录 `.env` 或 `backend/.env`。本地可参考 `.env.example` 在仓库根目录创建 `.env`：
 
 ```properties
-DB_PASSWORD=your_postgres_password
+SERVER_PORT=8080
+POSTGRES_DB=ai_resume_optimizer
+POSTGRES_USER=dawn
+POSTGRES_PASSWORD=postgres
+POSTGRES_PORT=5433
+DB_URL=jdbc:postgresql://localhost:5432/ai_resume_optimizer
+DB_USERNAME=dawn
+DB_PASSWORD=postgres
 JWT_SECRET=change-this-to-a-long-random-secret-at-least-32-chars
 DASHSCOPE_API_KEY=your_api_key
+OPENAI_BASE_URL=https://api.deepseek.com
 OPENAI_MODEL=deepseek-v4-flash
 OPENAI_TEMPERATURE=0.2
 OPENAI_TIMEOUT_SECONDS=90
 OPENAI_MAX_TOKENS=800
+LOCAL_STORAGE_BASE_DIR=uploads
+MINIO_ROOT_USER=minioadmin
+MINIO_ROOT_PASSWORD=minioadmin
+MINIO_API_PORT=9000
+MINIO_CONSOLE_PORT=9001
 ```
 
 说明：
 
 - 不要提交 `.env`。
+- `.env.example` 只保留占位符，可以提交。
 - `DASHSCOPE_API_KEY` 当前被用作 AI 客户端 API Key 环境变量名。
-- 当前配置的 AI base URL 在 `backend/src/main/resources/application.yaml` 中。
+- AI base URL 可通过 `OPENAI_BASE_URL` 覆盖，默认是 `https://api.deepseek.com`。
 - `JWT_SECRET` 请使用足够长的随机字符串。
+- 当前 Phase 1 / Phase 2 仍使用本地文件存储，`LOCAL_STORAGE_BASE_DIR` 默认是 `uploads`。
+- `MINIO_*` 当前用于本地依赖服务编排预留，现有上传链路仍走本地文件存储。
 
-前端默认请求：
+前端开发环境配置位于：
+
+```text
+web/.env.development
+```
+
+生产构建默认配置位于：
+
+```text
+web/.env.production
+```
+
+开发环境默认请求：
 
 ```text
 http://localhost:8080
 ```
 
-如需修改后端地址，可在 `web/.env.local` 中配置：
+如需在本机覆盖后端地址，可在 `web/.env.local` 中配置：
 
 ```properties
 VITE_API_BASE_URL=http://localhost:8080
 ```
 
-## PostgreSQL 初始化
+## PostgreSQL 初始化与迁移
 
-1. 创建数据库：
+推荐先使用 Compose 启动本地依赖服务：
+
+```bash
+docker compose up -d postgres minio
+```
+
+如果使用 Podman：
+
+```bash
+podman compose up -d postgres minio
+```
+
+服务端口：
+
+```text
+PostgreSQL: localhost:5433
+MinIO API:  http://localhost:9000
+MinIO 控制台: http://localhost:9001
+```
+
+默认 PostgreSQL 配置与 `.env.example` 一致：
+
+```properties
+POSTGRES_DB=ai_resume_optimizer
+POSTGRES_USER=dawn
+POSTGRES_PASSWORD=postgres
+```
+
+如果不使用 Compose，也可以手动创建数据库：
 
 ```bash
 createdb ai_resume_optimizer
 ```
 
-2. 确认 `backend/src/main/resources/application.yaml` 中的数据库用户名和本机一致：
+确认 `.env` 中的数据库连接信息和本机一致：
 
-```yaml
-spring:
-  datasource:
-    url: jdbc:postgresql://localhost:5432/ai_resume_optimizer
-    username: dawn
-    password: ${DB_PASSWORD}
+```properties
+DB_URL=jdbc:postgresql://localhost:5432/ai_resume_optimizer
+DB_USERNAME=dawn
+DB_PASSWORD=postgres
 ```
 
-3. 按顺序执行初始化脚本：
+启动后端后，Flyway 会自动执行迁移脚本：
 
 ```bash
-psql -d ai_resume_optimizer -f backend/src/main/resources/db/init/v0.1.2-users.sql
-psql -d ai_resume_optimizer -f backend/src/main/resources/db/init/v0.2.1-resumes.sql
-psql -d ai_resume_optimizer -f backend/src/main/resources/db/init/v0.3.1-resume-parse-results.sql
-psql -d ai_resume_optimizer -f backend/src/main/resources/db/init/v0.4.1-resume-ai-analyses.sql
-psql -d ai_resume_optimizer -f backend/src/main/resources/db/init/v0.5.1-jobs.sql
-psql -d ai_resume_optimizer -f backend/src/main/resources/db/init/v0.5.3-job-match-results.sql
+cd backend
+./mvnw spring-boot:run
 ```
 
-`v0.5.1-jobs.sql` 会预置 Phase 1 可用岗位数据。
+Flyway 脚本位于：
+
+```text
+backend/src/main/resources/db/migration/
+```
+
+当前迁移会创建 Phase 1 所需表，并预置 Phase 1 岗位数据。`backend/src/main/resources/db/init/` 下的 SQL 保留为历史初始化脚本，不再作为推荐初始化方式。
+
+已有本地数据库如果已经手动建过表，当前配置会通过 `baseline-on-migrate` 接管，并继续执行后续迁移。
+
+停止本地依赖服务：
+
+```bash
+docker compose down
+```
+
+如需同时删除本地数据卷：
+
+```bash
+docker compose down -v
+```
 
 ## 对象存储
 
@@ -184,6 +274,17 @@ cd backend
 ```text
 http://localhost:8080
 ```
+
+## 接口文档
+
+后端启动后可访问接口文档：
+
+```text
+Swagger UI: http://localhost:8080/swagger-ui/index.html
+OpenAPI JSON: http://localhost:8080/v3/api-docs
+```
+
+需要登录的接口使用 `bearerAuth` 认证方案。调试时先调用 `/api/auth/login` 获取返回的 `token`，再在 Swagger UI 右上角 `Authorize` 中填写该 token。
 
 ## 前端启动
 
@@ -237,6 +338,22 @@ npm run build
 
 当前项目不预置测试账号。首次本地运行时请通过注册页面创建演示用户。
 
+## CI
+
+项目提供基础 GitHub Actions workflow：
+
+```text
+.github/workflows/ci.yml
+```
+
+CI 会执行：
+
+- 后端 `./mvnw test`
+- 前端 `npm ci`
+- 前端 `npm run build`
+
+后端 CI 会启动 PostgreSQL 服务容器，真实 AI smoke test 仍按环境变量条件跳过。
+
 ## 常见问题
 
 ### 前端提示“无法连接后端服务”
@@ -257,25 +374,25 @@ npm run build
 
 ### 看不到岗位数据
 
-确认已经执行 `backend/src/main/resources/db/init/v0.5.1-jobs.sql`。
+确认后端已正常启动，Flyway 会自动执行 `backend/src/main/resources/db/migration/` 下的迁移脚本并写入预置岗位数据。
 
 ## 文档
 
 - [开发流程](docs/00-development-workflow.md)
 - [项目总览](docs/01-project-overview.md)
 - [Phase 1 MVP](docs/phase-1-mvp.md)
+- [Phase 2 工程化](docs/phase-2-engineering.md)
 - [项目结构规范](docs/project-structure.md)
-- [Phase 1 任务清单](docs/tasks/generated-phase-1-task-list.md)
+- [Phase 1 任务清单](docs/tasks/phase-1-task-list.md)
+- [Phase 2 任务清单](docs/tasks/phase-2-task-list.md)
 - [迭代日志](docs/iteration-log/)
 
 ## 后续规划
 
-Phase 1 完成后，后续阶段可继续补充：
+Phase 1 MVP 和 Phase 2 工程化增强已完成。后续可进入 Phase 3，重点放在 AI 能力深化：
 
-- 数据库迁移工具
-- OpenAPI 文档
-- 更完整的异常码体系
-- 管理后台
-- 岗位管理
-- 更强的 AI 分析和匹配能力
-- Docker Compose 完整开发环境
+- AI Prompt 结构化增强
+- AI 分析结果质量提升
+- 岗位匹配能力增强
+- AI 调用失败降级策略
+- 更完整的演示数据和案例

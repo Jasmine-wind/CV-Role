@@ -11,12 +11,15 @@ import java.net.http.HttpTimeoutException;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 @Service
 public class OpenAiCompatibleAiClientService implements AiClientService {
 
+    private static final Logger log = LoggerFactory.getLogger(OpenAiCompatibleAiClientService.class);
     private static final int MAX_ERROR_BODY_LENGTH = 500;
 
     private final AiClientProperties properties;
@@ -48,18 +51,34 @@ public class OpenAiCompatibleAiClientService implements AiClientService {
 
         HttpRequest request = buildRequest(prompt);
         try {
+            log.info("AI completion request started: model={}, timeoutSeconds={}",
+                    properties.getModel(),
+                    resolveTimeoutSeconds());
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                log.warn("AI completion request failed: model={}, httpStatus={}",
+                        properties.getModel(),
+                        response.statusCode());
                 throw new AiClientException("AI 调用失败，HTTP 状态码：" + response.statusCode()
                         + "，响应：" + truncate(response.body()));
             }
+            log.info("AI completion request succeeded: model={}, httpStatus={}",
+                    properties.getModel(),
+                    response.statusCode());
             return extractContent(response.body());
         } catch (HttpTimeoutException exception) {
+            log.warn("AI completion request timed out: model={}, timeoutSeconds={}",
+                    properties.getModel(),
+                    resolveTimeoutSeconds());
             throw new AiClientException("AI 调用超时，请稍后重试或缩短简历内容", exception);
         } catch (IOException exception) {
+            log.warn("AI completion request IO failed: model={}, message={}",
+                    properties.getModel(),
+                    exception.getMessage());
             throw new AiClientException("AI 调用失败，请检查网络或 base-url 配置", exception);
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
+            log.warn("AI completion request interrupted: model={}", properties.getModel());
             throw new AiClientException("AI 调用被中断", exception);
         }
     }

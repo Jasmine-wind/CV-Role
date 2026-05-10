@@ -1,0 +1,436 @@
+package com.winter.airesumeoptimizer.api;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.hasSize;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.winter.airesumeoptimizer.common.exception.BusinessException;
+import com.winter.airesumeoptimizer.common.exception.GlobalExceptionHandler;
+import com.winter.airesumeoptimizer.common.logging.RequestIdFilter;
+import com.winter.airesumeoptimizer.config.OpenApiConfig;
+import com.winter.airesumeoptimizer.config.SecurityConfig;
+import com.winter.airesumeoptimizer.module.analysis.controller.ResumeAnalysisController;
+import com.winter.airesumeoptimizer.module.analysis.entity.ResumeAiAnalysis;
+import com.winter.airesumeoptimizer.module.analysis.service.ResumeAnalysisService;
+import com.winter.airesumeoptimizer.module.auth.controller.AuthController;
+import com.winter.airesumeoptimizer.module.auth.dto.LoginRequestDTO;
+import com.winter.airesumeoptimizer.module.auth.dto.RegisterRequestDTO;
+import com.winter.airesumeoptimizer.module.auth.service.AuthService;
+import com.winter.airesumeoptimizer.module.auth.vo.LoginVO;
+import com.winter.airesumeoptimizer.module.history.controller.HistoryController;
+import com.winter.airesumeoptimizer.module.history.service.HistoryService;
+import com.winter.airesumeoptimizer.module.history.vo.HistoryDetailVO;
+import com.winter.airesumeoptimizer.module.history.vo.HistoryListVO;
+import com.winter.airesumeoptimizer.module.history.vo.HistoryPageVO;
+import com.winter.airesumeoptimizer.module.job.controller.JobController;
+import com.winter.airesumeoptimizer.module.job.controller.JobMatchController;
+import com.winter.airesumeoptimizer.module.job.dto.JobMatchRequestDTO;
+import com.winter.airesumeoptimizer.module.job.service.JobMatchResultService;
+import com.winter.airesumeoptimizer.module.job.service.JobService;
+import com.winter.airesumeoptimizer.module.job.vo.JobDetailVO;
+import com.winter.airesumeoptimizer.module.job.vo.JobListVO;
+import com.winter.airesumeoptimizer.module.job.vo.JobMatchResultVO;
+import com.winter.airesumeoptimizer.module.resume.controller.ResumeController;
+import com.winter.airesumeoptimizer.module.resume.service.ResumeService;
+import com.winter.airesumeoptimizer.module.resume.vo.ResumeDetailVO;
+import com.winter.airesumeoptimizer.module.resume.vo.ResumeListVO;
+import com.winter.airesumeoptimizer.module.resume.vo.ResumeParseResultVO;
+import com.winter.airesumeoptimizer.module.resume.vo.ResumeUploadVO;
+import com.winter.airesumeoptimizer.module.user.controller.UserController;
+import com.winter.airesumeoptimizer.module.user.service.UserService;
+import com.winter.airesumeoptimizer.module.user.vo.UserProfileVO;
+import com.winter.airesumeoptimizer.security.JwtAccessDeniedHandler;
+import com.winter.airesumeoptimizer.security.JwtAuthenticationEntryPoint;
+import com.winter.airesumeoptimizer.security.JwtAuthenticationFilter;
+import com.winter.airesumeoptimizer.security.JwtTokenProvider;
+import io.swagger.v3.oas.models.OpenAPI;
+import java.time.LocalDateTime;
+import java.util.List;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+import org.springframework.context.annotation.Import;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.web.multipart.MultipartFile;
+
+@WebMvcTest(controllers = {
+        AuthController.class,
+        UserController.class,
+        ResumeController.class,
+        ResumeAnalysisController.class,
+        JobController.class,
+        JobMatchController.class,
+        HistoryController.class
+})
+@Import({
+        SecurityConfig.class,
+        JwtAuthenticationFilter.class,
+        JwtAuthenticationEntryPoint.class,
+        JwtAccessDeniedHandler.class,
+        GlobalExceptionHandler.class,
+        RequestIdFilter.class,
+        OpenApiConfig.class
+})
+@ActiveProfiles("test")
+class Phase1ApiIntegrationTest {
+
+    private static final String TOKEN = "valid-token";
+    private static final String AUTHORIZATION = "Bearer " + TOKEN;
+
+    @Autowired
+    private MockMvc mockMvc;
+
+    @Autowired
+    private ObjectMapper objectMapper;
+
+    @Autowired
+    private OpenAPI openAPI;
+
+    @MockitoBean
+    private AuthService authService;
+
+    @MockitoBean
+    private UserService userService;
+
+    @MockitoBean
+    private ResumeService resumeService;
+
+    @MockitoBean
+    private ResumeAnalysisService resumeAnalysisService;
+
+    @MockitoBean
+    private JobService jobService;
+
+    @MockitoBean
+    private JobMatchResultService jobMatchResultService;
+
+    @MockitoBean
+    private HistoryService historyService;
+
+    @MockitoBean
+    private JwtTokenProvider jwtTokenProvider;
+
+    @BeforeEach
+    void setUpToken() {
+        when(jwtTokenProvider.validateToken(TOKEN)).thenReturn(true);
+        when(jwtTokenProvider.getUserId(TOKEN)).thenReturn(1L);
+        when(jwtTokenProvider.getUsername(TOKEN)).thenReturn("winter");
+    }
+
+    @Test
+    void authEndpointsShouldRegisterAndLogin() throws Exception {
+        RegisterRequestDTO registerRequest = new RegisterRequestDTO();
+        registerRequest.setUsername("winter");
+        registerRequest.setEmail("winter@example.com");
+        registerRequest.setPassword("123456");
+        registerRequest.setNickname("Winter");
+
+        LoginRequestDTO loginRequest = new LoginRequestDTO();
+        loginRequest.setAccount("winter");
+        loginRequest.setPassword("123456");
+
+        when(authService.register(any(RegisterRequestDTO.class))).thenReturn(1L);
+        when(authService.login(any(LoginRequestDTO.class))).thenReturn(LoginVO.builder()
+                .userId(1L)
+                .username("winter")
+                .email("winter@example.com")
+                .nickname("Winter")
+                .token("jwt-token")
+                .tokenType("Bearer")
+                .expiresIn(1800L)
+                .build());
+
+        mockMvc.perform(post("/api/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(registerRequest)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.message").value("注册成功"))
+                .andExpect(jsonPath("$.data.userId").value(1));
+
+        mockMvc.perform(post("/api/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(loginRequest)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.message").value("登录成功"))
+                .andExpect(jsonPath("$.data.token").value("jwt-token"))
+                .andExpect(jsonPath("$.data.tokenType").value("Bearer"));
+    }
+
+    @Test
+    void protectedEndpointShouldRejectAnonymousUser() throws Exception {
+        mockMvc.perform(get("/api/users/me"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value(401))
+                .andExpect(jsonPath("$.path").value("/api/users/me"))
+                .andExpect(header().exists(RequestIdFilter.REQUEST_ID_HEADER));
+    }
+
+    @Test
+    void currentUserEndpointShouldReturnAuthenticatedProfile() throws Exception {
+        when(userService.getCurrentUserProfile(1L)).thenReturn(UserProfileVO.builder()
+                .id(1L)
+                .username("winter")
+                .email("winter@example.com")
+                .nickname("Winter")
+                .createdAt(LocalDateTime.now())
+                .build());
+
+        mockMvc.perform(get("/api/users/me")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data.id").value(1))
+                .andExpect(jsonPath("$.data.username").value("winter"));
+    }
+
+    @Test
+    void resumeEndpointsShouldUploadListDetailParseAndRejectCrossUserAccess() throws Exception {
+        MockMultipartFile file = new MockMultipartFile(
+                "file",
+                "resume.pdf",
+                "application/pdf",
+                "resume-content".getBytes());
+        when(resumeService.upload(eq(1L), any(MultipartFile.class))).thenReturn(ResumeUploadVO.builder()
+                .id(100L)
+                .originalFilename("resume.pdf")
+                .fileType("PDF")
+                .fileSize(14L)
+                .objectKey("resumes/1/resume.pdf")
+                .uploadStatus("UPLOADED")
+                .createdAt(LocalDateTime.now())
+                .build());
+        when(resumeService.listByUser(1L)).thenReturn(List.of(ResumeListVO.builder()
+                .id(100L)
+                .originalFilename("resume.pdf")
+                .fileType("PDF")
+                .fileSize(14L)
+                .uploadStatus("UPLOADED")
+                .createdAt(LocalDateTime.now())
+                .build()));
+        when(resumeService.getDetail(1L, 100L)).thenReturn(ResumeDetailVO.builder()
+                .id(100L)
+                .originalFilename("resume.pdf")
+                .fileType("PDF")
+                .fileSize(14L)
+                .uploadStatus("UPLOADED")
+                .createdAt(LocalDateTime.now())
+                .updatedAt(LocalDateTime.now())
+                .build());
+        when(resumeService.getDetail(1L, 999L)).thenThrow(new BusinessException(404, "简历不存在"));
+        when(resumeService.parse(1L, 100L)).thenReturn(ResumeParseResultVO.builder()
+                .resumeId(100L)
+                .parseStatus("SUCCESS")
+                .extractedText("Java Spring Boot")
+                .structuredJson("{\"skills\":[\"Java\"]}")
+                .updatedAt(LocalDateTime.now())
+                .build());
+        when(resumeService.getParseResult(1L, 100L)).thenReturn(ResumeParseResultVO.builder()
+                .resumeId(100L)
+                .parseStatus("SUCCESS")
+                .extractedText("Java Spring Boot")
+                .structuredJson("{\"skills\":[\"Java\"]}")
+                .updatedAt(LocalDateTime.now())
+                .build());
+
+        mockMvc.perform(multipart("/api/resumes")
+                        .file(file)
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("上传成功"))
+                .andExpect(jsonPath("$.data.id").value(100));
+
+        mockMvc.perform(get("/api/resumes")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data", hasSize(1)))
+                .andExpect(jsonPath("$.data[0].id").value(100));
+
+        mockMvc.perform(get("/api/resumes/100")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.id").value(100));
+
+        mockMvc.perform(get("/api/resumes/999")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(404))
+                .andExpect(jsonPath("$.message").value("简历不存在"));
+
+        mockMvc.perform(post("/api/resumes/100/parse")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("解析完成"))
+                .andExpect(jsonPath("$.data.parseStatus").value("SUCCESS"));
+
+        mockMvc.perform(get("/api/resumes/100/parse-result")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.resumeId").value(100));
+    }
+
+    @Test
+    void analysisJobMatchAndHistoryEndpointsShouldReturnCoreData() throws Exception {
+        ResumeAiAnalysis analysis = new ResumeAiAnalysis();
+        analysis.setResumeId(100L);
+        analysis.setAnalysisStatus("SUCCESS");
+        analysis.setScore(88);
+        analysis.setStrengths("[\"Java 基础扎实\"]");
+        analysis.setProblems("[\"项目结果需要量化\"]");
+        analysis.setSuggestionsSummary("[\"补充项目指标\"]");
+        analysis.setModelName("test-model");
+        analysis.setPromptVersion("v1");
+        analysis.setUpdatedAt(LocalDateTime.now());
+
+        when(resumeAnalysisService.analyze(1L, 100L)).thenReturn(analysis);
+        when(resumeAnalysisService.getAnalysis(1L, 100L)).thenReturn(analysis);
+        when(jobMatchResultService.match(1L, 100L, 200L)).thenReturn(JobMatchResultVO.builder()
+                .matchId(300L)
+                .resumeId(100L)
+                .jobId(200L)
+                .jobTitle("Java 后端开发")
+                .companyName("Demo Inc.")
+                .matchScore(80)
+                .matchedItems(List.of("Java"))
+                .missingItems(List.of("PostgreSQL"))
+                .matchReason("已命中 1 项技能")
+                .suggestions(List.of())
+                .updatedAt(LocalDateTime.now())
+                .build());
+        when(jobMatchResultService.listByResume(1L, 100L)).thenReturn(List.of(JobMatchResultVO.builder()
+                .matchId(300L)
+                .resumeId(100L)
+                .jobId(200L)
+                .jobTitle("Java 后端开发")
+                .companyName("Demo Inc.")
+                .matchScore(80)
+                .matchedItems(List.of("Java"))
+                .missingItems(List.of("PostgreSQL"))
+                .matchReason("已命中 1 项技能")
+                .suggestions(List.of())
+                .updatedAt(LocalDateTime.now())
+                .build()));
+        when(historyService.list(1L, 1, 10)).thenReturn(HistoryPageVO.builder()
+                .records(List.of(HistoryListVO.builder()
+                        .recordId(100L)
+                        .resumeId(100L)
+                        .resumeName("resume.pdf")
+                        .parseStatus("SUCCESS")
+                        .analysisStatus("SUCCESS")
+                        .latestMatchScore(80)
+                        .updatedAt(LocalDateTime.now())
+                        .build()))
+                .page(1)
+                .size(10)
+                .total(1L)
+                .totalPages(1)
+                .build());
+        when(historyService.detail(1L, 100L)).thenReturn(HistoryDetailVO.builder()
+                .recordId(100L)
+                .resumeId(100L)
+                .updatedAt(LocalDateTime.now())
+                .build());
+
+        mockMvc.perform(post("/api/resumes/100/ai-analysis")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("AI 分析完成"))
+                .andExpect(jsonPath("$.data.score").value(88));
+
+        mockMvc.perform(get("/api/resumes/100/ai-analysis")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.strengths[0]").value("Java 基础扎实"));
+
+        JobMatchRequestDTO requestDTO = new JobMatchRequestDTO();
+        requestDTO.setJobId(200L);
+        mockMvc.perform(post("/api/resumes/100/job-matches")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(requestDTO)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("岗位匹配完成"))
+                .andExpect(jsonPath("$.data.matchScore").value(80));
+
+        mockMvc.perform(get("/api/resumes/100/job-matches")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data", hasSize(1)))
+                .andExpect(jsonPath("$.data[0].jobId").value(200));
+
+        mockMvc.perform(get("/api/history")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.total").value(1))
+                .andExpect(jsonPath("$.data.records[0].resumeId").value(100));
+
+        mockMvc.perform(get("/api/history/100")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.resumeId").value(100));
+    }
+
+    @Test
+    void publicJobEndpointsShouldReturnEnabledJobs() throws Exception {
+        when(jobService.listEnabledJobs()).thenReturn(List.of(JobListVO.builder()
+                .id(200L)
+                .title("Java 后端开发")
+                .companyName("Demo Inc.")
+                .jobCategory("后端开发")
+                .location("成都")
+                .requiredSkills(List.of("Java", "Spring Boot"))
+                .status("ENABLED")
+                .build()));
+        when(jobService.getEnabledJobDetail(200L)).thenReturn(JobDetailVO.builder()
+                .id(200L)
+                .title("Java 后端开发")
+                .companyName("Demo Inc.")
+                .jobCategory("后端开发")
+                .location("成都")
+                .description("负责后端开发")
+                .requirements("熟悉 Java")
+                .requiredSkills(List.of("Java", "Spring Boot"))
+                .updatedAt(LocalDateTime.now())
+                .build());
+
+        mockMvc.perform(get("/api/jobs"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data", hasSize(1)))
+                .andExpect(jsonPath("$.data[0].id").value(200));
+
+        mockMvc.perform(get("/api/jobs/200"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.id").value(200))
+                .andExpect(jsonPath("$.data.requiredSkills[0]").value("Java"));
+    }
+
+    @Test
+    void openApiDocsShouldBePublicAndDescribeJwtSecurity() throws Exception {
+        mockMvc.perform(get("/v3/api-docs"))
+                .andExpect(status().isOk());
+
+        assertThat(openAPI.getInfo().getTitle()).isEqualTo("AI Resume Optimizer API");
+        assertThat(openAPI.getComponents().getSecuritySchemes())
+                .containsKey(OpenApiConfig.JWT_SECURITY_SCHEME);
+        assertThat(openAPI.getComponents()
+                .getSecuritySchemes()
+                .get(OpenApiConfig.JWT_SECURITY_SCHEME)
+                .getScheme()).isEqualTo("bearer");
+    }
+}

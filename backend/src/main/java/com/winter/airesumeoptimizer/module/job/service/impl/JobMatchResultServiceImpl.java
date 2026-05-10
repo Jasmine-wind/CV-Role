@@ -5,6 +5,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.winter.airesumeoptimizer.common.exception.BusinessException;
+import com.winter.airesumeoptimizer.common.logging.LogSanitizer;
 import com.winter.airesumeoptimizer.module.job.dto.JobMatchCalculationResultDTO;
 import com.winter.airesumeoptimizer.module.job.dto.JobMatchSuggestionDTO;
 import com.winter.airesumeoptimizer.module.job.entity.Job;
@@ -22,11 +23,15 @@ import com.winter.airesumeoptimizer.module.resume.mapper.ResumeMapper;
 import com.winter.airesumeoptimizer.module.resume.mapper.ResumeParseResultMapper;
 import java.time.LocalDateTime;
 import java.util.List;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class JobMatchResultServiceImpl implements JobMatchResultService {
+
+    private static final Logger log = LoggerFactory.getLogger(JobMatchResultServiceImpl.class);
 
     private static final String JOB_STATUS_ENABLED = "ENABLED";
     private static final String PARSE_STATUS_SUCCESS = "SUCCESS";
@@ -63,15 +68,30 @@ public class JobMatchResultServiceImpl implements JobMatchResultService {
     @Override
     @Transactional
     public JobMatchResultVO match(Long userId, Long resumeId, Long jobId) {
-        Resume resume = getOwnedResume(userId, resumeId);
-        ResumeParseResult parseResult = getSuccessfulParseResult(resume.getId());
-        ResumeStructuredContentDTO resumeContent = readResumeStructuredContent(parseResult.getStructuredJson());
-        Job job = getEnabledJob(jobId);
+        try {
+            Resume resume = getOwnedResume(userId, resumeId);
+            ResumeParseResult parseResult = getSuccessfulParseResult(resume.getId());
+            ResumeStructuredContentDTO resumeContent = readResumeStructuredContent(parseResult.getStructuredJson());
+            Job job = getEnabledJob(jobId);
+            log.info("Job match started: userId={}, resumeId={}, jobId={}", userId, resume.getId(), job.getId());
 
-        JobMatchCalculationResultDTO calculationResult = jobMatchService.calculateMatch(resumeContent, job);
-        List<JobMatchSuggestionDTO> suggestions = jobMatchSuggestionService.generateSuggestions(calculationResult, job);
-        JobMatchResult matchResult = saveMatchResult(resume.getId(), job.getId(), calculationResult, suggestions);
-        return toVO(matchResult, job);
+            JobMatchCalculationResultDTO calculationResult = jobMatchService.calculateMatch(resumeContent, job);
+            List<JobMatchSuggestionDTO> suggestions = jobMatchSuggestionService.generateSuggestions(calculationResult, job);
+            JobMatchResult matchResult = saveMatchResult(resume.getId(), job.getId(), calculationResult, suggestions);
+            log.info("Job match finished: userId={}, resumeId={}, jobId={}, matchScore={}",
+                    userId,
+                    resume.getId(),
+                    job.getId(),
+                    matchResult.getMatchScore());
+            return toVO(matchResult, job);
+        } catch (RuntimeException exception) {
+            log.warn("Job match failed: userId={}, resumeId={}, jobId={}, reason={}",
+                    userId,
+                    resumeId,
+                    jobId,
+                    LogSanitizer.sanitize(exception.getMessage()));
+            throw exception;
+        }
     }
 
     @Override

@@ -5,11 +5,13 @@ CREATE TABLE IF NOT EXISTS resumes (
     file_type VARCHAR(20) NOT NULL,
     file_size BIGINT NOT NULL,
     object_key VARCHAR(500) NOT NULL,
+    storage_type VARCHAR(20) NOT NULL DEFAULT 'LOCAL',
     upload_status VARCHAR(20) NOT NULL DEFAULT 'UPLOADED',
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT fk_resumes_user_id FOREIGN KEY (user_id) REFERENCES users (id),
     CONSTRAINT ck_resumes_file_size_positive CHECK (file_size > 0),
+    CONSTRAINT ck_resumes_storage_type CHECK (storage_type IN ('LOCAL', 'MINIO')),
     CONSTRAINT ck_resumes_upload_status CHECK (upload_status IN ('UPLOADED', 'FAILED'))
 );
 

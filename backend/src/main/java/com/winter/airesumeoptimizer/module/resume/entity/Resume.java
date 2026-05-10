@@ -25,6 +25,8 @@ public class Resume {
 
     private String objectKey;
 
+    private String storageType;
+
     private String uploadStatus;
 
     private LocalDateTime createdAt;

@@ -10,8 +10,13 @@ import com.winter.airesumeoptimizer.module.analysis.service.ResumeAnalysisServic
 import com.winter.airesumeoptimizer.module.analysis.vo.ResumeAiAnalysisVO;
 import com.winter.airesumeoptimizer.module.analysis.vo.ResumeAiAnalysisTriggerVO;
 import com.winter.airesumeoptimizer.security.AuthenticatedUser;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
+import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.constraints.Positive;
 import java.util.List;
 import org.springframework.security.core.Authentication;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -20,6 +25,9 @@ import org.springframework.web.bind.annotation.RestController;
 
 @RestController
 @RequestMapping("/api/resumes")
+@Validated
+@Tag(name = "Analysis", description = "AI 简历分析接口")
+@SecurityRequirement(name = "bearerAuth")
 public class ResumeAnalysisController {
 
     private final ResumeAnalysisService resumeAnalysisService;
@@ -33,8 +41,9 @@ public class ResumeAnalysisController {
     }
 
     @PostMapping("/{id}/ai-analysis")
+    @Operation(summary = "触发 AI 分析", description = "基于简历解析结果调用 AI 生成分析报告")
     public Result<ResumeAiAnalysisTriggerVO> analyze(
-            @PathVariable Long id,
+            @PathVariable @Positive(message = "简历 ID 必须大于 0") Long id,
             Authentication authentication) {
         AuthenticatedUser authenticatedUser = (AuthenticatedUser) authentication.getPrincipal();
         ResumeAiAnalysis analysis = resumeAnalysisService.analyze(authenticatedUser.getUserId(), id);
@@ -43,8 +52,9 @@ public class ResumeAnalysisController {
     }
 
     @GetMapping("/{id}/ai-analysis")
+    @Operation(summary = "查询 AI 分析", description = "查询指定简历的 AI 分析结果")
     public Result<ResumeAiAnalysisVO> analysis(
-            @PathVariable Long id,
+            @PathVariable @Positive(message = "简历 ID 必须大于 0") Long id,
             Authentication authentication) {
         AuthenticatedUser authenticatedUser = (AuthenticatedUser) authentication.getPrincipal();
         ResumeAiAnalysis analysis = resumeAnalysisService.getAnalysis(authenticatedUser.getUserId(), id);

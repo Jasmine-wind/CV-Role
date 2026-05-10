@@ -10,12 +10,16 @@ import com.winter.airesumeoptimizer.module.user.entity.User;
 import com.winter.airesumeoptimizer.module.user.mapper.UserMapper;
 import com.winter.airesumeoptimizer.security.JwtTokenProvider;
 import java.time.LocalDateTime;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class AuthServiceImpl implements AuthService {
+
+    private static final Logger log = LoggerFactory.getLogger(AuthServiceImpl.class);
 
     private final UserMapper userMapper;
     private final JwtTokenProvider jwtTokenProvider;
@@ -51,8 +55,10 @@ public class AuthServiceImpl implements AuthService {
 
         int rows = userMapper.insert(user);
         if (rows != 1 || user.getId() == null) {
+            log.warn("User register failed: username={}", requestDTO.getUsername());
             throw new BusinessException(500, "注册失败，请稍后重试");
         }
+        log.info("User registered: userId={}, username={}", user.getId(), user.getUsername());
         return user.getId();
     }
 
@@ -65,10 +71,12 @@ public class AuthServiceImpl implements AuthService {
                 .last("LIMIT 1"));
 
         if (user == null || !passwordEncoder.matches(requestDTO.getPassword(), user.getPasswordHash())) {
+            log.warn("User login failed: accountType={}", resolveAccountType(requestDTO.getAccount()));
             throw new BusinessException(400, "用户名、邮箱或密码错误");
         }
 
         String token = jwtTokenProvider.generateToken(user.getId(), user.getUsername());
+        log.info("User logged in: userId={}, username={}", user.getId(), user.getUsername());
         return LoginVO.builder()
                 .userId(user.getId())
                 .username(user.getUsername())
@@ -88,5 +96,12 @@ public class AuthServiceImpl implements AuthService {
     private boolean existsByEmail(String email) {
         return userMapper.exists(new LambdaQueryWrapper<User>()
                 .eq(User::getEmail, email));
+    }
+
+    private String resolveAccountType(String account) {
+        if (account == null) {
+            return "unknown";
+        }
+        return account.contains("@") ? "email" : "username";
     }
 }

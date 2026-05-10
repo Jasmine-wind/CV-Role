@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.winter.airesumeoptimizer.common.exception.BusinessException;
+import com.winter.airesumeoptimizer.common.logging.LogSanitizer;
 import com.winter.airesumeoptimizer.infra.storage.FileStorageService;
 import com.winter.airesumeoptimizer.infra.storage.StoredFile;
 import com.winter.airesumeoptimizer.module.analysis.entity.ResumeAiAnalysis;
@@ -26,6 +27,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -35,7 +38,10 @@ import org.springframework.web.multipart.MultipartFile;
 @Service
 public class ResumeServiceImpl implements ResumeService {
 
+    private static final Logger log = LoggerFactory.getLogger(ResumeServiceImpl.class);
+
     private static final String UPLOAD_STATUS_UPLOADED = "UPLOADED";
+    private static final String STORAGE_TYPE_LOCAL = "LOCAL";
     private static final String PARSE_STATUS_SUCCESS = "SUCCESS";
     private static final String PARSE_STATUS_FAILED = "FAILED";
     private static final Set<String> ALLOWED_EXTENSIONS = Set.of("pdf", "doc", "docx");
@@ -82,12 +88,14 @@ public class ResumeServiceImpl implements ResumeService {
 
         String originalFilename = StringUtils.cleanPath(file.getOriginalFilename());
         String fileType = extractFileType(originalFilename);
+        log.info("Resume upload started: userId={}, fileType={}, fileSize={}", userId, fileType, file.getSize());
         StoredFile storedFile = fileStorageService.store(file, "resumes/" + userId);
 
         Resume resume = buildResume(userId, storedFile, fileType);
         try {
             int rows = resumeMapper.insert(resume);
             if (rows != 1 || resume.getId() == null) {
+                log.warn("Resume metadata save failed: userId={}, objectKey={}", userId, storedFile.objectKey());
                 throw new BusinessException(500, "简历元数据保存失败");
             }
         } catch (RuntimeException exception) {
@@ -95,6 +103,12 @@ public class ResumeServiceImpl implements ResumeService {
             throw exception;
         }
 
+        log.info("Resume uploaded: userId={}, resumeId={}, fileType={}, fileSize={}, storageType={}",
+                userId,
+                resume.getId(),
+                resume.getFileType(),
+                resume.getFileSize(),
+                resume.getStorageType());
         return ResumeUploadVO.builder()
                 .id(resume.getId())
                 .originalFilename(resume.getOriginalFilename())
@@ -139,6 +153,10 @@ public class ResumeServiceImpl implements ResumeService {
     @Transactional
     public ResumeParseResultVO parse(Long userId, Long resumeId) {
         Resume resume = getOwnedResume(userId, resumeId);
+        log.info("Resume parse started: userId={}, resumeId={}, fileType={}",
+                userId,
+                resume.getId(),
+                resume.getFileType());
 
         String extractedText = null;
         try {
@@ -150,6 +168,10 @@ public class ResumeServiceImpl implements ResumeService {
                     extractedText,
                     structuredJson,
                     null);
+            log.info("Resume parse succeeded: userId={}, resumeId={}, extractedTextLength={}",
+                    userId,
+                    resume.getId(),
+                    extractedText == null ? 0 : extractedText.length());
             return toParseResultVO(parseResult);
         } catch (JsonProcessingException exception) {
             ResumeParseResult parseResult = saveParseResult(
@@ -158,14 +180,23 @@ public class ResumeServiceImpl implements ResumeService {
                     extractedText,
                     null,
                     "结构化解析结果序列化失败");
+            log.warn("Resume parse failed: userId={}, resumeId={}, reason={}",
+                    userId,
+                    resume.getId(),
+                    LogSanitizer.sanitize("结构化解析结果序列化失败"));
             return toParseResultVO(parseResult);
         } catch (RuntimeException exception) {
+            String errorMessage = normalizeErrorMessage(exception);
             ResumeParseResult parseResult = saveParseResult(
                     resume.getId(),
                     PARSE_STATUS_FAILED,
                     extractedText,
                     null,
-                    normalizeErrorMessage(exception));
+                    errorMessage);
+            log.warn("Resume parse failed: userId={}, resumeId={}, reason={}",
+                    userId,
+                    resume.getId(),
+                    LogSanitizer.sanitize(errorMessage));
             return toParseResultVO(parseResult);
         }
     }
@@ -188,6 +219,7 @@ public class ResumeServiceImpl implements ResumeService {
         deleteResumeChildren(resume.getId());
         resumeMapper.deleteById(resume.getId());
         fileStorageService.delete(resume.getObjectKey());
+        log.info("Resume deleted: userId={}, resumeId={}", userId, resume.getId());
     }
 
     private void deleteResumeChildren(Long resumeId) {
@@ -275,6 +307,7 @@ public class ResumeServiceImpl implements ResumeService {
         resume.setFileType(fileType.toUpperCase(Locale.ROOT));
         resume.setFileSize(storedFile.size());
         resume.setObjectKey(storedFile.objectKey());
+        resume.setStorageType(STORAGE_TYPE_LOCAL);
         resume.setUploadStatus(UPLOAD_STATUS_UPLOADED);
         resume.setCreatedAt(now);
         resume.setUpdatedAt(now);

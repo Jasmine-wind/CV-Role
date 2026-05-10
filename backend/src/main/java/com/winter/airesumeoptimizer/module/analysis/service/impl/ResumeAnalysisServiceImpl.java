@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.winter.airesumeoptimizer.common.exception.BusinessException;
+import com.winter.airesumeoptimizer.common.logging.LogSanitizer;
 import com.winter.airesumeoptimizer.infra.ai.AiClientService;
 import com.winter.airesumeoptimizer.module.analysis.dto.ResumeAnalysisPromptDTO;
 import com.winter.airesumeoptimizer.module.analysis.dto.ResumeAnalysisResultDTO;
@@ -17,11 +18,15 @@ import com.winter.airesumeoptimizer.module.resume.entity.ResumeParseResult;
 import com.winter.airesumeoptimizer.module.resume.mapper.ResumeMapper;
 import com.winter.airesumeoptimizer.module.resume.mapper.ResumeParseResultMapper;
 import java.time.LocalDateTime;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class ResumeAnalysisServiceImpl implements ResumeAnalysisService {
+
+    private static final Logger log = LoggerFactory.getLogger(ResumeAnalysisServiceImpl.class);
 
     private static final String PARSE_STATUS_SUCCESS = "SUCCESS";
     private static final String ANALYSIS_STATUS_SUCCESS = "SUCCESS";
@@ -61,16 +66,33 @@ public class ResumeAnalysisServiceImpl implements ResumeAnalysisService {
         ResumeAnalysisPromptDTO prompt = resumeAnalysisPromptService.buildPrompt(
                 parseResult.getExtractedText(),
                 parseResult.getStructuredJson());
+        log.info("Resume AI analysis started: userId={}, resumeId={}, model={}",
+                userId,
+                resume.getId(),
+                aiClientService.modelName());
 
         try {
             String aiOutput = aiClientService.complete(prompt.getPrompt());
             ResumeAnalysisResultDTO result = resumeAnalysisOutputParser.parse(aiOutput);
-            return saveSuccessAnalysis(resume.getId(), prompt.getPromptVersion(), result);
+            ResumeAiAnalysis analysis = saveSuccessAnalysis(resume.getId(), prompt.getPromptVersion(), result);
+            log.info("Resume AI analysis succeeded: userId={}, resumeId={}, score={}, model={}",
+                    userId,
+                    resume.getId(),
+                    analysis.getScore(),
+                    analysis.getModelName());
+            return analysis;
         } catch (RuntimeException exception) {
-            return saveFailedAnalysis(
+            String errorMessage = normalizeErrorMessage(exception);
+            ResumeAiAnalysis analysis = saveFailedAnalysis(
                     resume.getId(),
                     prompt.getPromptVersion(),
-                    normalizeErrorMessage(exception));
+                    errorMessage);
+            log.warn("Resume AI analysis failed: userId={}, resumeId={}, model={}, reason={}",
+                    userId,
+                    resume.getId(),
+                    aiClientService.modelName(),
+                    LogSanitizer.sanitize(errorMessage));
+            return analysis;
         }
     }
 

@@ -2,6 +2,8 @@ export interface ApiResult<T> {
   code: number
   message: string
   data: T
+  path?: string | null
+  timestamp?: string | null
 }
 
 export interface LoginRequest {
