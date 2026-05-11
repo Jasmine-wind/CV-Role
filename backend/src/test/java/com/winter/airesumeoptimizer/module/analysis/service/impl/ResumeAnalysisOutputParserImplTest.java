@@ -62,4 +62,19 @@ class ResumeAnalysisOutputParserImplTest {
                 .isInstanceOf(BusinessException.class)
                 .hasMessage("AI 分析结果不是合法 JSON");
     }
+
+    @Test
+    void parseShouldTruncateLongTextItems() {
+        String longText = "这是一个很长的优势描述".repeat(20);
+        ResumeAnalysisResultDTO result = parser.parse("""
+                {
+                  "score": 80,
+                  "strengths": ["%s"],
+                  "problems": [],
+                  "suggestionsSummary": []
+                }
+                """.formatted(longText));
+
+        assertThat(result.getStrengths().getFirst()).hasSize(80);
+    }
 }

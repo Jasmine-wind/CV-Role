@@ -293,6 +293,13 @@ onMounted(() => {
               </el-tag>
               <strong>评分：{{ activeDetail.aiAnalysis.analysisScore ?? '-' }}</strong>
             </div>
+            <el-alert
+              title="AI 分析仅供参考，涉及经历、技能、证书、奖项和量化结果的内容需要你确认后再使用。"
+              type="warning"
+              :closable="false"
+              show-icon
+              class="history-ai-warning"
+            />
             <p class="history-detail-text">{{ activeDetail.aiAnalysis.suggestionsSummary || '-' }}</p>
             <el-alert
               v-if="activeDetail.aiAnalysis.analysisErrorMessage"
@@ -428,6 +435,10 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+.history-ai-warning {
+  margin-top: 12px;
 }
 
 .history-match-list {

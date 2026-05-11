@@ -574,6 +574,14 @@ onMounted(() => {
         />
 
         <template v-else>
+          <el-alert
+            title="AI 分析仅供参考，涉及经历、技能、证书、奖项和量化结果的内容需要你确认后再使用。"
+            type="warning"
+            :closable="false"
+            show-icon
+            class="resume-ai-warning"
+          />
+
           <div class="resume-score-row">
             <el-progress
               class="resume-score-progress"
@@ -755,6 +763,10 @@ onMounted(() => {
   margin: 0;
   color: #667085;
   font-size: 13px;
+}
+
+.resume-ai-warning {
+  margin-bottom: 16px;
 }
 
 .resume-score-row {

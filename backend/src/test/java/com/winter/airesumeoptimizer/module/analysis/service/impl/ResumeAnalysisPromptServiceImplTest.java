@@ -20,6 +20,7 @@ class ResumeAnalysisPromptServiceImplTest {
 
         assertThat(result.getPromptVersion()).isEqualTo(ResumeAnalysisPromptService.PROMPT_VERSION);
         assertThat(result.getPrompt()).contains("不得编造用户不存在");
+        assertThat(result.getPrompt()).contains("不得代填用户没有提供的量化指标、证书、奖项或项目结果");
         assertThat(result.getPrompt()).contains("只根据下面提供的简历解析内容");
         assertThat(result.getPrompt()).contains("只能输出一个 JSON 对象");
         assertThat(result.getPrompt()).contains("score、strengths、problems、suggestionsSummary");

@@ -16,6 +16,7 @@ public class ResumeAnalysisOutputParserImpl implements ResumeAnalysisOutputParse
     private static final int MIN_SCORE = 0;
     private static final int MAX_SCORE = 100;
     private static final int MAX_LIST_SIZE = 5;
+    private static final int MAX_TEXT_ITEM_LENGTH = 80;
 
     private final ObjectMapper objectMapper;
 
@@ -86,7 +87,7 @@ public class ResumeAnalysisOutputParserImpl implements ResumeAnalysisOutputParse
             }
             String text = item.asText().strip();
             if (!text.isBlank()) {
-                values.add(text);
+                values.add(truncateTextItem(text));
             }
             if (values.size() == MAX_LIST_SIZE) {
                 break;
@@ -101,5 +102,12 @@ public class ResumeAnalysisOutputParserImpl implements ResumeAnalysisOutputParse
 
     private BusinessException invalidOutput(String message) {
         return new BusinessException(502, message);
+    }
+
+    private String truncateTextItem(String text) {
+        if (text.length() <= MAX_TEXT_ITEM_LENGTH) {
+            return text;
+        }
+        return text.substring(0, MAX_TEXT_ITEM_LENGTH);
     }
 }

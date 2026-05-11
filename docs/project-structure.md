@@ -233,6 +233,26 @@ infra/storage/MinioFileStorageService.java
 infra/ai/AiClientService.java
 ```
 
+#### 5.4.1 AI 相关分层
+
+Phase 3 开始后，AI 能力按以下边界放置：
+
+| 层级 | 推荐位置 | 职责 |
+|---|---|---|
+| AI 调用适配 | `infra/ai/` | 调用外部模型服务、读取模型配置、处理 HTTP 和供应商兼容问题 |
+| Prompt 构建 | 当前业务模块 `service/` 或后续统一模板服务 | 根据业务输入生成 Prompt，并返回 Prompt 版本 |
+| AI 输出解析 | 当前业务模块 `service/` 或后续统一解析服务 | 将 AI 输出转换为受控 DTO，处理 JSON 格式和字段兜底 |
+| 业务编排 | `module/{module-name}/service/impl/` | 校验用户和资源、组织 Prompt 构建、AI 调用、解析和持久化 |
+| 结果持久化 | `module/{module-name}/entity/`、`mapper/` | 保存业务 AI 结果、模型名称、Prompt 版本、状态和错误信息 |
+| 展示对象 | `module/{module-name}/vo/` | 面向前端返回可展示字段，不直接暴露数据库 JSON 字符串 |
+
+约束：
+
+- `infra/ai/` 只放通用 AI 基础设施，不放简历、岗位、历史记录等业务流程。
+- 业务 Service 不直接拼 HTTP 请求，不直接读取 API Key。
+- 每个 AI 业务结果应记录模型名称和 Prompt 版本。
+- 后续新增岗位描述解析、AI 匹配、优化建议、局部改写时，优先沿用该分层边界。
+
 ### 5.5 `module/`
 
 存放所有业务模块代码。

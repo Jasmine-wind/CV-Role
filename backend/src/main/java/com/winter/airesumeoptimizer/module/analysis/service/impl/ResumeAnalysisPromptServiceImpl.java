@@ -28,8 +28,10 @@ public class ResumeAnalysisPromptServiceImpl implements ResumeAnalysisPromptServ
                         3. score 必须是 0 到 100 的整数，表示简历完整度和综合表达质量。
                         4. strengths、problems、suggestionsSummary 必须是字符串数组，每个数组保留 1 到 5 条。
                         5. 如果简历内容不足，只能指出信息不足，不能补充不存在的经历。
-                        6. 建议要具体、朴素，面向 Phase 1 的基础简历优化，不做岗位匹配。
-                        7. 输出内容要简洁，每条不超过 40 个中文字。
+                        6. 不得代填用户没有提供的量化指标、证书、奖项或项目结果。
+                        7. 可以建议用户补充真实经历和真实数据，但不能替用户生成虚假事实。
+                        8. 建议要具体、朴素，面向 Phase 1 的基础简历优化，不做岗位匹配。
+                        9. 输出内容要简洁，每条不超过 40 个中文字。
 
                         输出 JSON 示例：
                         {
