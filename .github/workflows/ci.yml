@@ -29,6 +29,7 @@ jobs:
       run:
         working-directory: backend
     env:
+      SPRING_PROFILES_ACTIVE: test
       TEST_JWT_SECRET: ci-jwt-secret-change-me-at-least-32-chars
       TEST_DB_URL: jdbc:postgresql://localhost:5432/ai_resume_optimizer_test
       TEST_DB_USERNAME: dawn
