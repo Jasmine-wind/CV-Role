@@ -50,6 +50,7 @@ onMounted(() => {
         <el-space v-else>
           <el-button @click="router.push('/resumes')">我的简历</el-button>
           <el-button @click="router.push('/jobs')">岗位列表</el-button>
+          <el-button @click="router.push('/job-descriptions')">岗位解析</el-button>
           <el-button type="primary" @click="router.push('/history')">历史记录</el-button>
           <el-button :loading="authStore.loading" @click="handleFetchMe">刷新用户</el-button>
           <el-button type="danger" plain @click="handleLogout">退出</el-button>

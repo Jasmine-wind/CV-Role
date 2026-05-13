@@ -38,7 +38,10 @@ onMounted(() => {
           <h1 class="job-title">岗位列表</h1>
           <p class="job-subtitle">选择目标岗位，查看岗位要求与技能关键词。</p>
         </div>
-        <el-button @click="router.push('/')">返回首页</el-button>
+        <el-space>
+          <el-button @click="router.push('/job-descriptions')">岗位解析</el-button>
+          <el-button @click="router.push('/')">返回首页</el-button>
+        </el-space>
       </header>
 
       <el-table v-loading="loading" :data="jobs" class="job-table" empty-text="暂无可用岗位">

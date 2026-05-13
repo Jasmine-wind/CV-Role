@@ -44,6 +44,30 @@ const router = createRouter({
       },
     },
     {
+      path: '/job-descriptions',
+      name: 'job-description-list',
+      component: () => import('@/views/job/JobDescriptionListView.vue'),
+      meta: {
+        requiresAuth: true,
+      },
+    },
+    {
+      path: '/job-descriptions/new',
+      name: 'job-description-create',
+      component: () => import('@/views/job/JobDescriptionCreateView.vue'),
+      meta: {
+        requiresAuth: true,
+      },
+    },
+    {
+      path: '/job-descriptions/:id',
+      name: 'job-description-detail',
+      component: () => import('@/views/job/JobDescriptionDetailView.vue'),
+      meta: {
+        requiresAuth: true,
+      },
+    },
+    {
       path: '/history',
       name: 'history',
       component: () => import('@/views/history/HistoryView.vue'),

@@ -32,10 +32,15 @@ import com.winter.airesumeoptimizer.module.history.vo.HistoryDetailVO;
 import com.winter.airesumeoptimizer.module.history.vo.HistoryListVO;
 import com.winter.airesumeoptimizer.module.history.vo.HistoryPageVO;
 import com.winter.airesumeoptimizer.module.job.controller.JobController;
+import com.winter.airesumeoptimizer.module.job.controller.JobDescriptionController;
 import com.winter.airesumeoptimizer.module.job.controller.JobMatchController;
+import com.winter.airesumeoptimizer.module.job.dto.JobDescriptionSubmitDTO;
 import com.winter.airesumeoptimizer.module.job.dto.JobMatchRequestDTO;
+import com.winter.airesumeoptimizer.module.job.service.JobDescriptionParseService;
+import com.winter.airesumeoptimizer.module.job.service.JobDescriptionService;
 import com.winter.airesumeoptimizer.module.job.service.JobMatchResultService;
 import com.winter.airesumeoptimizer.module.job.service.JobService;
+import com.winter.airesumeoptimizer.module.job.vo.JobDescriptionVO;
 import com.winter.airesumeoptimizer.module.job.vo.JobDetailVO;
 import com.winter.airesumeoptimizer.module.job.vo.JobListVO;
 import com.winter.airesumeoptimizer.module.job.vo.JobMatchResultVO;
@@ -74,6 +79,7 @@ import org.springframework.web.multipart.MultipartFile;
         ResumeController.class,
         ResumeAnalysisController.class,
         JobController.class,
+        JobDescriptionController.class,
         JobMatchController.class,
         HistoryController.class
 })
@@ -115,6 +121,12 @@ class Phase1ApiIntegrationTest {
 
     @MockitoBean
     private JobService jobService;
+
+    @MockitoBean
+    private JobDescriptionService jobDescriptionService;
+
+    @MockitoBean
+    private JobDescriptionParseService jobDescriptionParseService;
 
     @MockitoBean
     private JobMatchResultService jobMatchResultService;
@@ -418,6 +430,83 @@ class Phase1ApiIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.id").value(200))
                 .andExpect(jsonPath("$.data.requiredSkills[0]").value("Java"));
+    }
+
+    @Test
+    void jobDescriptionEndpointsShouldSubmitDetailAndParse() throws Exception {
+        JobDescriptionSubmitDTO request = new JobDescriptionSubmitDTO();
+        request.setTitle("Java 后端开发工程师");
+        request.setRawText("负责 Java 后端开发，要求熟悉 Spring Boot");
+
+        JobDescriptionVO pending = JobDescriptionVO.builder()
+                .id(10L)
+                .title("Java 后端开发工程师")
+                .rawText("负责 Java 后端开发，要求熟悉 Spring Boot")
+                .parseStatus("PENDING")
+                .createdAt(LocalDateTime.now())
+                .updatedAt(LocalDateTime.now())
+                .build();
+        JobDescriptionVO success = JobDescriptionVO.builder()
+                .id(10L)
+                .title("Java 后端开发工程师")
+                .rawText("负责 Java 后端开发，要求熟悉 Spring Boot")
+                .parseStatus("SUCCESS")
+                .structuredContent("{\"jobTitle\":\"Java 后端开发工程师\"}")
+                .modelName("test-model")
+                .promptVersion("job_description_parse_v1")
+                .createdAt(LocalDateTime.now())
+                .updatedAt(LocalDateTime.now())
+                .build();
+        JobDescriptionVO failed = JobDescriptionVO.builder()
+                .id(11L)
+                .title("Java 后端开发工程师")
+                .rawText("负责 Java 后端开发")
+                .parseStatus("FAILED")
+                .errorMessage("岗位描述解析结果不是合法 JSON")
+                .createdAt(LocalDateTime.now())
+                .updatedAt(LocalDateTime.now())
+                .build();
+
+        when(jobDescriptionService.submit(eq(1L), any(JobDescriptionSubmitDTO.class))).thenReturn(pending);
+        when(jobDescriptionService.listByUser(1L)).thenReturn(List.of(success));
+        when(jobDescriptionService.getDetail(1L, 10L)).thenReturn(success);
+        when(jobDescriptionParseService.parse(1L, 10L)).thenReturn(success);
+        when(jobDescriptionParseService.parse(1L, 11L)).thenReturn(failed);
+
+        mockMvc.perform(post("/api/job-descriptions")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("岗位描述提交成功"))
+                .andExpect(jsonPath("$.data.id").value(10))
+                .andExpect(jsonPath("$.data.parseStatus").value("PENDING"));
+
+        mockMvc.perform(get("/api/job-descriptions")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data", hasSize(1)))
+                .andExpect(jsonPath("$.data[0].id").value(10))
+                .andExpect(jsonPath("$.data[0].parseStatus").value("SUCCESS"));
+
+        mockMvc.perform(get("/api/job-descriptions/10")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.parseStatus").value("SUCCESS"))
+                .andExpect(jsonPath("$.data.structuredContent").value("{\"jobTitle\":\"Java 后端开发工程师\"}"));
+
+        mockMvc.perform(post("/api/job-descriptions/10/parse")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("岗位描述解析完成"))
+                .andExpect(jsonPath("$.data.parseStatus").value("SUCCESS"));
+
+        mockMvc.perform(post("/api/job-descriptions/11/parse")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("岗位描述解析失败"))
+                .andExpect(jsonPath("$.data.parseStatus").value("FAILED"))
+                .andExpect(jsonPath("$.data.errorMessage").value("岗位描述解析结果不是合法 JSON"));
     }
 
     @Test
