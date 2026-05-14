@@ -59,6 +59,7 @@ public class SecurityConfig {
                         .requestMatchers(
                                 "/api/users/me",
                                 "/api/resumes/**",
+                                "/api/rewrite-suggestions/**",
                                 "/api/history/**",
                                 "/api/job-descriptions/**").authenticated()
                         .anyRequest().permitAll())
@@ -88,7 +89,7 @@ public class SecurityConfig {
                 "http://localhost:5173",
                 "http://localhost:5174",
                 "http://localhost:5175"));
-        configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
+        configuration.setAllowedMethods(List.of("GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"));
         configuration.setAllowedHeaders(List.of("*"));
         configuration.setExposedHeaders(List.of("Authorization", RequestIdFilter.REQUEST_ID_HEADER));
 

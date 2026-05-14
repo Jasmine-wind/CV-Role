@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import { ElMessage } from 'element-plus'
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { getAiJobMatch, getAiJobMatches, triggerAiJobMatch } from '@/api/ai-job-match'
 import { getAiResumeSuggestionByMatchResult, triggerAiResumeSuggestion } from '@/api/ai-resume-suggestion'
+import { getAiRewriteSuggestions, triggerAiRewriteSuggestion, updateAiRewriteAcceptStatus } from '@/api/ai-rewrite-suggestion'
 import { getJobDescriptionList } from '@/api/job-description'
 import { getResumeList, getResumeParseResult } from '@/api/resume'
 import type { AiJobMatchResult } from '@/types/ai-job-match'
 import type { AiResumeSuggestionItem, AiResumeSuggestionResult } from '@/types/ai-resume-suggestion'
+import type { AiRewriteSuggestionResult } from '@/types/ai-rewrite-suggestion'
 import type { JobDescriptionDetail } from '@/types/job-description'
 import type { ResumeListItem, ResumeParseResult } from '@/types/resume'
 
@@ -21,13 +23,34 @@ const selectedJobDescriptionId = ref<number | null>(null)
 const selectedResumeParseResult = ref<ResumeParseResult | null>(null)
 const selectedMatch = ref<AiJobMatchResult | null>(null)
 const selectedSuggestion = ref<AiResumeSuggestionResult | null>(null)
+const selectedRewriteSuggestion = ref<AiRewriteSuggestionResult | null>(null)
 const matchResults = ref<AiJobMatchResult[]>([])
+const rewriteSuggestions = ref<AiRewriteSuggestionResult[]>([])
 const loading = ref(false)
 const loadingResumeParse = ref(false)
 const matching = ref(false)
 const loadingResult = ref(false)
 const generatingSuggestion = ref(false)
 const loadingSuggestion = ref(false)
+const rewriteDialogVisible = ref(false)
+const generatingRewrite = ref(false)
+const loadingRewriteSuggestions = ref(false)
+const updatingRewriteAcceptStatus = ref(false)
+
+const rewriteForm = reactive({
+  rewriteType: 'PROJECT',
+  targetSection: '项目经历',
+  originalText: '',
+})
+
+const rewriteTypeOptions = [
+  { label: '项目经历', value: 'PROJECT' },
+  { label: '技能描述', value: 'SKILL' },
+  { label: '实习或工作经历', value: 'INTERNSHIP' },
+  { label: '个人总结', value: 'SUMMARY' },
+  { label: '教育经历', value: 'EDUCATION' },
+  { label: '其他', value: 'OTHER' },
+]
 
 const parsedJobDescriptions = computed(() => {
   return jobDescriptions.value.filter((item) => item.parseStatus === 'SUCCESS')
@@ -52,6 +75,10 @@ const canGenerateSuggestion = computed(() => {
     && selectedMatch.value?.matchId
     && selectedMatch.value.matchStatus === 'SUCCESS',
   )
+})
+
+const canGenerateRewrite = computed(() => {
+  return Boolean(selectedResumeId.value && rewriteForm.rewriteType && rewriteForm.targetSection.trim() && rewriteForm.originalText.trim())
 })
 
 const highPrioritySuggestions = computed(() => {
@@ -174,6 +201,58 @@ const resolvePriorityText = (priority: string | null | undefined) => {
   return priority || '-'
 }
 
+const resolveRewriteTypeText = (type: string | null | undefined) => {
+  const typeMap: Record<string, string> = {
+    PROJECT: '项目经历',
+    SKILL: '技能描述',
+    INTERNSHIP: '实习或工作经历',
+    SUMMARY: '个人总结',
+    EDUCATION: '教育经历',
+    OTHER: '其他',
+  }
+  return type ? typeMap[type] || type : '-'
+}
+
+const resolveRewriteStatusText = (status: string | null | undefined) => {
+  if (status === 'SUCCESS') {
+    return '改写成功'
+  }
+  if (status === 'FAILED') {
+    return '改写失败'
+  }
+  if (status === 'PENDING') {
+    return '待改写'
+  }
+  return status || '-'
+}
+
+const resolveRewriteStatusType = (status: string | null | undefined) => {
+  if (status === 'SUCCESS') {
+    return 'success'
+  }
+  if (status === 'FAILED') {
+    return 'danger'
+  }
+  return 'info'
+}
+
+const resolveAcceptStatusText = (status: string | null | undefined) => {
+  if (status === 'PENDING') {
+    return '待确认'
+  }
+  if (status === 'ACCEPTED') {
+    return '已采纳'
+  }
+  if (status === 'REJECTED') {
+    return '已拒绝'
+  }
+  return status || '-'
+}
+
+const rewriteNeedsSupplement = (suggestion: AiRewriteSuggestionResult | null) => {
+  return Boolean(suggestion?.caution?.includes('需要用户补充：'))
+}
+
 const resolveParseStatusText = (status: string | null | undefined) => {
   if (status === 'SUCCESS') {
     return '已解析'
@@ -186,6 +265,10 @@ const resolveParseStatusText = (status: string | null | undefined) => {
 
 const suggestionKey = (suggestion: AiResumeSuggestionItem, index: number) => {
   return `${suggestion.type}-${suggestion.priority}-${suggestion.issue}-${index}`
+}
+
+const rewriteSuggestionKey = (suggestion: AiRewriteSuggestionResult, index: number) => {
+  return `${suggestion.rewriteId}-${suggestion.rewriteType}-${index}`
 }
 
 const suggestionsByType = (type: string) => {
@@ -253,6 +336,8 @@ const loadSelectedResumeParseResult = async () => {
 const loadCurrentMatch = async () => {
   selectedMatch.value = null
   selectedSuggestion.value = null
+  selectedRewriteSuggestion.value = null
+  rewriteSuggestions.value = []
   matchResults.value = []
   if (!selectedResumeId.value) {
     return
@@ -268,9 +353,12 @@ const loadCurrentMatch = async () => {
       selectedMatch.value = matchResults.value[0] || null
     }
     await loadCurrentSuggestion()
+    await loadRewriteSuggestions()
   } catch (error) {
     selectedMatch.value = null
     selectedSuggestion.value = null
+    selectedRewriteSuggestion.value = null
+    rewriteSuggestions.value = []
     if (error instanceof Error && error.message !== 'AI 岗位匹配结果不存在') {
       ElMessage.warning(error.message)
     }
@@ -366,6 +454,104 @@ const handleGenerateSuggestion = async () => {
     ElMessage.error(error instanceof Error ? error.message : 'AI 优化建议生成失败')
   } finally {
     generatingSuggestion.value = false
+  }
+}
+
+const loadRewriteSuggestions = async () => {
+  rewriteSuggestions.value = []
+  selectedRewriteSuggestion.value = null
+  if (!selectedResumeId.value) {
+    return
+  }
+
+  loadingRewriteSuggestions.value = true
+
+  try {
+    rewriteSuggestions.value = await getAiRewriteSuggestions(selectedResumeId.value)
+    selectedRewriteSuggestion.value = rewriteSuggestions.value[0] || null
+  } catch (error) {
+    rewriteSuggestions.value = []
+    selectedRewriteSuggestion.value = null
+    ElMessage.warning(error instanceof Error ? error.message : '获取局部改写建议失败')
+  } finally {
+    loadingRewriteSuggestions.value = false
+  }
+}
+
+const openRewriteDialog = (suggestion?: AiResumeSuggestionItem) => {
+  if (suggestion) {
+    rewriteForm.targetSection = suggestion.targetSection || '项目经历'
+    rewriteForm.originalText = suggestion.suggestion || ''
+    if (suggestion.type === 'SKILL_GAP') {
+      rewriteForm.rewriteType = 'SKILL'
+    } else if (suggestion.type === 'PROJECT_DESCRIPTION' || suggestion.type === 'EXPERIENCE_WEAKNESS') {
+      rewriteForm.rewriteType = 'PROJECT'
+    }
+  }
+  rewriteDialogVisible.value = true
+}
+
+const handleGenerateRewrite = async () => {
+  if (!selectedResumeId.value) {
+    ElMessage.warning('请先选择简历')
+    return
+  }
+  if (!canGenerateRewrite.value) {
+    ElMessage.warning('请填写改写类型、目标部分和原文片段')
+    return
+  }
+
+  generatingRewrite.value = true
+
+  try {
+    const result = await triggerAiRewriteSuggestion(selectedResumeId.value, {
+      rewriteType: rewriteForm.rewriteType,
+      targetSection: rewriteForm.targetSection.trim(),
+      originalText: rewriteForm.originalText.trim(),
+      jobDescriptionId: selectedJobDescriptionId.value || undefined,
+      aiJobMatchResultId: selectedMatch.value?.matchId,
+      aiResumeSuggestionId: selectedSuggestion.value?.suggestionId,
+    })
+    selectedRewriteSuggestion.value = result
+    if (result.rewriteStatus === 'FAILED') {
+      ElMessage.error(result.errorMessage || 'AI 局部改写生成失败')
+    } else {
+      ElMessage.success('AI 局部改写生成完成')
+      rewriteDialogVisible.value = false
+    }
+    await loadRewriteSuggestions()
+    if (result.rewriteId) {
+      selectedRewriteSuggestion.value = rewriteSuggestions.value.find((item) => item.rewriteId === result.rewriteId) || result
+    }
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : 'AI 局部改写生成失败')
+  } finally {
+    generatingRewrite.value = false
+  }
+}
+
+const handleUpdateRewriteAcceptStatus = async (acceptStatus: 'ACCEPTED' | 'REJECTED') => {
+  if (!selectedRewriteSuggestion.value?.rewriteId) {
+    ElMessage.warning('请先选择局部改写建议')
+    return
+  }
+
+  updatingRewriteAcceptStatus.value = true
+
+  try {
+    const result = await updateAiRewriteAcceptStatus(selectedRewriteSuggestion.value.rewriteId, {
+      acceptStatus,
+    })
+    selectedRewriteSuggestion.value = result
+    const index = rewriteSuggestions.value.findIndex((item) => item.rewriteId === result.rewriteId)
+    if (index >= 0) {
+      rewriteSuggestions.value[index] = result
+    }
+    ElMessage.success(acceptStatus === 'ACCEPTED' ? '已采纳改写建议' : '已拒绝改写建议')
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '更新采纳状态失败')
+  } finally {
+    updatingRewriteAcceptStatus.value = false
   }
 }
 
@@ -588,6 +774,9 @@ onMounted(() => {
                           </div>
                           <p><strong>问题：</strong>{{ suggestion.issue || '-' }}</p>
                           <p><strong>建议：</strong>{{ suggestion.suggestion || '-' }}</p>
+                          <div class="ai-match-inline-actions">
+                            <el-button size="small" @click="openRewriteDialog(suggestion)">基于此建议改写</el-button>
+                          </div>
                           <div v-if="suggestion.evidence.length" class="ai-match-suggestion-evidence">
                             <strong>依据：</strong>
                             <span v-for="evidence in suggestion.evidence" :key="evidence">{{ evidence }}</span>
@@ -616,6 +805,9 @@ onMounted(() => {
                           </div>
                           <p><strong>问题：</strong>{{ suggestion.issue || '-' }}</p>
                           <p><strong>建议：</strong>{{ suggestion.suggestion || '-' }}</p>
+                          <div class="ai-match-inline-actions">
+                            <el-button size="small" @click="openRewriteDialog(suggestion)">基于此建议改写</el-button>
+                          </div>
                           <div v-if="suggestion.relatedItems.length" class="ai-match-related-items">
                             <el-tag v-for="item in suggestion.relatedItems" :key="item" size="small" type="warning">{{ item }}</el-tag>
                           </div>
@@ -643,6 +835,9 @@ onMounted(() => {
                           </div>
                           <p><strong>问题：</strong>{{ suggestion.issue || '-' }}</p>
                           <p><strong>建议：</strong>{{ suggestion.suggestion || '-' }}</p>
+                          <div class="ai-match-inline-actions">
+                            <el-button size="small" @click="openRewriteDialog(suggestion)">基于此建议改写</el-button>
+                          </div>
                           <div v-if="suggestion.evidence.length" class="ai-match-suggestion-evidence">
                             <strong>依据：</strong>
                             <span v-for="evidence in suggestion.evidence" :key="evidence">{{ evidence }}</span>
@@ -668,6 +863,9 @@ onMounted(() => {
                           </div>
                           <p><strong>问题：</strong>{{ suggestion.issue || '-' }}</p>
                           <p><strong>建议：</strong>{{ suggestion.suggestion || '-' }}</p>
+                          <div class="ai-match-inline-actions">
+                            <el-button size="small" @click="openRewriteDialog(suggestion)">基于此建议改写</el-button>
+                          </div>
                           <p v-if="suggestion.caution" class="ai-match-suggestion-caution">
                             <strong>注意：</strong>{{ suggestion.caution }}
                           </p>
@@ -677,6 +875,117 @@ onMounted(() => {
                     </div>
                   </section>
                 </template>
+              </section>
+            </section>
+
+            <section class="ai-match-rewrite-panel">
+              <div class="ai-match-suggestion-header">
+                <div>
+                  <h2 class="ai-match-section-title">局部改写建议</h2>
+                  <p class="ai-match-suggestion-note">AI 改写建议需用户确认，只能作为表达优化参考，不应直接写入未发生的经历或指标。</p>
+                </div>
+                <el-space>
+                  <el-button type="primary" :disabled="!selectedResumeId" @click="openRewriteDialog()">局部改写</el-button>
+                  <el-button :loading="loadingRewriteSuggestions" :disabled="!selectedResumeId" @click="loadRewriteSuggestions">
+                    刷新改写
+                  </el-button>
+                </el-space>
+              </div>
+
+              <section v-loading="loadingRewriteSuggestions" class="ai-match-rewrite-body">
+                <el-empty
+                  v-if="!selectedRewriteSuggestion"
+                  description="暂无局部改写建议"
+                  :image-size="72"
+                />
+
+                <template v-else>
+                  <el-descriptions :column="2" border class="ai-match-descriptions">
+                    <el-descriptions-item label="生成状态">
+                      <el-tag :type="resolveRewriteStatusType(selectedRewriteSuggestion.rewriteStatus)">
+                        {{ resolveRewriteStatusText(selectedRewriteSuggestion.rewriteStatus) }}
+                      </el-tag>
+                    </el-descriptions-item>
+                    <el-descriptions-item label="采纳状态">{{ resolveAcceptStatusText(selectedRewriteSuggestion.acceptStatus) }}</el-descriptions-item>
+                    <el-descriptions-item label="改写类型">{{ resolveRewriteTypeText(selectedRewriteSuggestion.rewriteType) }}</el-descriptions-item>
+                    <el-descriptions-item label="目标部分">{{ selectedRewriteSuggestion.targetSection || '-' }}</el-descriptions-item>
+                    <el-descriptions-item label="模型">{{ selectedRewriteSuggestion.modelName || '-' }}</el-descriptions-item>
+                    <el-descriptions-item label="生成时间">{{ formatDateTime(selectedRewriteSuggestion.updatedAt) }}</el-descriptions-item>
+                  </el-descriptions>
+
+                  <div class="ai-match-rewrite-actions">
+                    <el-button
+                      type="success"
+                      :loading="updatingRewriteAcceptStatus"
+                      :disabled="selectedRewriteSuggestion.acceptStatus === 'ACCEPTED' || selectedRewriteSuggestion.rewriteStatus !== 'SUCCESS'"
+                      @click="handleUpdateRewriteAcceptStatus('ACCEPTED')"
+                    >
+                      采纳
+                    </el-button>
+                    <el-button
+                      type="danger"
+                      plain
+                      :loading="updatingRewriteAcceptStatus"
+                      :disabled="selectedRewriteSuggestion.acceptStatus === 'REJECTED'"
+                      @click="handleUpdateRewriteAcceptStatus('REJECTED')"
+                    >
+                      拒绝
+                    </el-button>
+                  </div>
+
+                  <el-alert
+                    v-if="selectedRewriteSuggestion.rewriteStatus === 'FAILED'"
+                    class="ai-match-alert"
+                    :title="selectedRewriteSuggestion.errorMessage || 'AI 局部改写生成失败'"
+                    type="error"
+                    :closable="false"
+                    show-icon
+                  />
+
+                  <el-alert
+                    v-if="rewriteNeedsSupplement(selectedRewriteSuggestion)"
+                    class="ai-match-alert"
+                    title="该改写建议需要用户补充或确认真实信息后再采用。"
+                    type="warning"
+                    :closable="false"
+                    show-icon
+                  />
+
+                  <div class="ai-match-rewrite-compare">
+                    <article class="ai-match-rewrite-card">
+                      <h3>原文</h3>
+                      <p>{{ selectedRewriteSuggestion.originalText || '-' }}</p>
+                    </article>
+                    <article class="ai-match-rewrite-card">
+                      <h3>改写建议</h3>
+                      <p>{{ selectedRewriteSuggestion.rewrittenText || '-' }}</p>
+                    </article>
+                  </div>
+
+                  <div class="ai-match-rewrite-detail">
+                    <p><strong>改写理由：</strong>{{ selectedRewriteSuggestion.rewriteReason || '-' }}</p>
+                    <p class="ai-match-suggestion-caution"><strong>注意事项：</strong>{{ selectedRewriteSuggestion.caution || '-' }}</p>
+                  </div>
+                </template>
+
+                <div v-if="rewriteSuggestions.length" class="ai-match-rewrite-history">
+                  <h3 class="ai-match-section-title">历史改写建议</h3>
+                  <div class="ai-match-rewrite-history-list">
+                    <button
+                      v-for="(suggestion, index) in rewriteSuggestions"
+                      :key="rewriteSuggestionKey(suggestion, index)"
+                      class="ai-match-rewrite-history-item"
+                      :class="{ 'is-active': selectedRewriteSuggestion?.rewriteId === suggestion.rewriteId }"
+                      type="button"
+                      @click="selectedRewriteSuggestion = suggestion"
+                    >
+                      <span>{{ resolveRewriteTypeText(suggestion.rewriteType) }} / {{ suggestion.targetSection }}</span>
+                      <el-tag size="small" :type="resolveRewriteStatusType(suggestion.rewriteStatus)">
+                        {{ resolveRewriteStatusText(suggestion.rewriteStatus) }}
+                      </el-tag>
+                    </button>
+                  </div>
+                </div>
               </section>
             </section>
 
@@ -753,6 +1062,64 @@ onMounted(() => {
         </section>
       </section>
     </section>
+
+    <el-dialog
+      v-model="rewriteDialogVisible"
+      title="局部改写"
+      width="720px"
+      destroy-on-close
+    >
+      <el-alert
+        class="ai-match-dialog-alert"
+        title="AI 改写只优化表达，采用前请确认内容真实，不要补写不存在的经历、技能或量化指标。"
+        type="warning"
+        :closable="false"
+        show-icon
+      />
+
+      <el-form label-position="top" class="ai-match-rewrite-form">
+        <el-form-item label="改写对象类型">
+          <el-select v-model="rewriteForm.rewriteType" class="ai-match-select">
+            <el-option
+              v-for="item in rewriteTypeOptions"
+              :key="item.value"
+              :label="item.label"
+              :value="item.value"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="目标简历部分">
+          <el-input v-model="rewriteForm.targetSection" maxlength="100" show-word-limit />
+        </el-form-item>
+        <el-form-item label="原文片段">
+          <el-input
+            v-model="rewriteForm.originalText"
+            type="textarea"
+            :rows="7"
+            maxlength="3000"
+            show-word-limit
+            placeholder="粘贴需要优化表达的简历片段"
+          />
+        </el-form-item>
+        <el-descriptions :column="1" border class="ai-match-descriptions">
+          <el-descriptions-item label="关联岗位描述">{{ selectedJobDescription?.title || '未关联' }}</el-descriptions-item>
+          <el-descriptions-item label="关联 AI 匹配">{{ selectedMatch?.matchId ? `#${selectedMatch.matchId}` : '未关联' }}</el-descriptions-item>
+          <el-descriptions-item label="关联优化建议">{{ selectedSuggestion?.suggestionId ? `#${selectedSuggestion.suggestionId}` : '未关联' }}</el-descriptions-item>
+        </el-descriptions>
+      </el-form>
+
+      <template #footer>
+        <el-button @click="rewriteDialogVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :loading="generatingRewrite"
+          :disabled="!canGenerateRewrite"
+          @click="handleGenerateRewrite"
+        >
+          生成改写建议
+        </el-button>
+      </template>
+    </el-dialog>
   </main>
 </template>
 
@@ -852,6 +1219,14 @@ onMounted(() => {
   background: #f8fafc;
 }
 
+.ai-match-rewrite-panel {
+  margin-top: 24px;
+  padding: 18px;
+  border: 1px solid #d6e3f8;
+  border-radius: 8px;
+  background: #f9fbff;
+}
+
 .ai-match-suggestion-header {
   display: flex;
   align-items: flex-start;
@@ -867,6 +1242,11 @@ onMounted(() => {
 }
 
 .ai-match-suggestion-body {
+  min-height: 120px;
+  margin-top: 16px;
+}
+
+.ai-match-rewrite-body {
   min-height: 120px;
   margin-top: 16px;
 }
@@ -967,10 +1347,15 @@ onMounted(() => {
 }
 
 .ai-match-suggestion-tags,
-.ai-match-related-items {
+.ai-match-related-items,
+.ai-match-inline-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.ai-match-inline-actions {
+  justify-content: flex-start;
 }
 
 .ai-match-suggestion-evidence {
@@ -989,6 +1374,88 @@ onMounted(() => {
   color: #b42318 !important;
 }
 
+.ai-match-rewrite-compare {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 18px;
+}
+
+.ai-match-rewrite-card {
+  min-height: 180px;
+  padding: 16px;
+  border: 1px solid #e5ebf3;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.ai-match-rewrite-card h3 {
+  margin: 0 0 10px;
+  color: #111827;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.ai-match-rewrite-card p,
+.ai-match-rewrite-detail p {
+  margin: 0;
+  color: #344054;
+  line-height: 1.8;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.ai-match-rewrite-detail {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+  padding: 16px;
+  border: 1px solid #e5ebf3;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.ai-match-rewrite-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.ai-match-rewrite-history {
+  margin-top: 18px;
+}
+
+.ai-match-rewrite-history-list {
+  display: grid;
+  gap: 10px;
+}
+
+.ai-match-rewrite-history-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid #e5ebf3;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #344054;
+  cursor: pointer;
+  text-align: left;
+}
+
+.ai-match-rewrite-history-item.is-active {
+  border-color: #409eff;
+  background: #eef6ff;
+}
+
+.ai-match-dialog-alert,
+.ai-match-rewrite-form {
+  margin-bottom: 16px;
+}
+
 @media (max-width: 760px) {
   .ai-match-header,
   .ai-match-summary {
@@ -999,12 +1466,15 @@ onMounted(() => {
 
   .ai-match-selectors,
   .ai-match-grid,
-  .ai-match-suggestion-groups {
+  .ai-match-suggestion-groups,
+  .ai-match-rewrite-compare {
     grid-template-columns: 1fr;
   }
 
-  .ai-match-suggestion-header {
+  .ai-match-suggestion-header,
+  .ai-match-rewrite-history-item {
     flex-direction: column;
+    align-items: stretch;
   }
 }
 </style>

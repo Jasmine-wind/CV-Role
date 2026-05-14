@@ -11,16 +11,20 @@ import com.winter.airesumeoptimizer.module.analysis.dto.AiJobMatchItemDTO;
 import com.winter.airesumeoptimizer.module.analysis.dto.AiJobMatchWeakExperienceDTO;
 import com.winter.airesumeoptimizer.module.analysis.dto.AiResumeSuggestionItemDTO;
 import com.winter.airesumeoptimizer.module.analysis.dto.AiResumeSuggestionRequestDTO;
+import com.winter.airesumeoptimizer.module.analysis.dto.AiRewriteSuggestionRequestDTO;
 import com.winter.airesumeoptimizer.module.analysis.entity.AiJobMatchResult;
 import com.winter.airesumeoptimizer.module.analysis.entity.AiResumeSuggestion;
+import com.winter.airesumeoptimizer.module.analysis.entity.AiRewriteSuggestion;
 import com.winter.airesumeoptimizer.module.analysis.entity.ResumeAiAnalysis;
 import com.winter.airesumeoptimizer.module.analysis.service.AiJobMatchService;
 import com.winter.airesumeoptimizer.module.analysis.service.AiResumeSuggestionService;
+import com.winter.airesumeoptimizer.module.analysis.service.AiRewriteSuggestionService;
 import com.winter.airesumeoptimizer.module.analysis.service.ResumeAnalysisService;
 import com.winter.airesumeoptimizer.module.analysis.vo.AiJobMatchResultVO;
 import com.winter.airesumeoptimizer.module.analysis.vo.AiJobMatchTriggerVO;
 import com.winter.airesumeoptimizer.module.analysis.vo.AiResumeSuggestionTriggerVO;
 import com.winter.airesumeoptimizer.module.analysis.vo.AiResumeSuggestionVO;
+import com.winter.airesumeoptimizer.module.analysis.vo.AiRewriteSuggestionVO;
 import com.winter.airesumeoptimizer.module.analysis.vo.ResumeAiAnalysisVO;
 import com.winter.airesumeoptimizer.module.analysis.vo.ResumeAiAnalysisTriggerVO;
 import com.winter.airesumeoptimizer.security.AuthenticatedUser;
@@ -50,16 +54,19 @@ public class ResumeAnalysisController {
     private final ResumeAnalysisService resumeAnalysisService;
     private final AiJobMatchService aiJobMatchService;
     private final AiResumeSuggestionService aiResumeSuggestionService;
+    private final AiRewriteSuggestionService aiRewriteSuggestionService;
     private final ObjectMapper objectMapper;
 
     public ResumeAnalysisController(
             ResumeAnalysisService resumeAnalysisService,
             AiJobMatchService aiJobMatchService,
             AiResumeSuggestionService aiResumeSuggestionService,
+            AiRewriteSuggestionService aiRewriteSuggestionService,
             ObjectMapper objectMapper) {
         this.resumeAnalysisService = resumeAnalysisService;
         this.aiJobMatchService = aiJobMatchService;
         this.aiResumeSuggestionService = aiResumeSuggestionService;
+        this.aiRewriteSuggestionService = aiRewriteSuggestionService;
         this.objectMapper = objectMapper;
     }
 
@@ -155,6 +162,44 @@ public class ResumeAnalysisController {
                 .toList());
     }
 
+    @PostMapping("/{id}/rewrite-suggestions")
+    @Operation(summary = "生成 AI 局部改写建议", description = "基于用户选择的简历片段生成局部改写建议")
+    public Result<AiRewriteSuggestionVO> rewriteSuggestion(
+            @PathVariable @Positive(message = "简历 ID 必须大于 0") Long id,
+            @Valid @RequestBody AiRewriteSuggestionRequestDTO request,
+            Authentication authentication) {
+        AuthenticatedUser authenticatedUser = (AuthenticatedUser) authentication.getPrincipal();
+        AiRewriteSuggestion suggestion = aiRewriteSuggestionService.generate(
+                authenticatedUser.getUserId(),
+                id,
+                request.getRewriteType(),
+                request.getTargetSection(),
+                request.getOriginalText(),
+                request.getJobDescriptionId(),
+                request.getAiJobMatchResultId(),
+                request.getAiResumeSuggestionId());
+        String message = "FAILED".equals(suggestion.getRewriteStatus()) ? "AI 局部改写生成失败" : "AI 局部改写生成完成";
+        return Result.success(message, toAiRewriteSuggestionVO(suggestion));
+    }
+
+    @GetMapping("/{id}/rewrite-suggestions")
+    @Operation(summary = "查询 AI 局部改写建议列表", description = "查询指定简历下当前用户的局部改写建议")
+    public Result<List<AiRewriteSuggestionVO>> rewriteSuggestionList(
+            @PathVariable @Positive(message = "简历 ID 必须大于 0") Long id,
+            @RequestParam(required = false) String rewriteType,
+            @RequestParam(required = false) String acceptStatus,
+            Authentication authentication) {
+        AuthenticatedUser authenticatedUser = (AuthenticatedUser) authentication.getPrincipal();
+        return Result.success(aiRewriteSuggestionService.listByResume(
+                        authenticatedUser.getUserId(),
+                        id,
+                        rewriteType,
+                        acceptStatus)
+                .stream()
+                .map(this::toAiRewriteSuggestionVO)
+                .toList());
+    }
+
     @GetMapping(value = "/{id}/ai-job-matches", params = "jobDescriptionId")
     @Operation(summary = "查询指定 AI 岗位匹配结果", description = "按简历和岗位描述查询当前用户的 AI 匹配结果")
     public Result<AiJobMatchResultVO> aiJobMatchDetail(
@@ -228,6 +273,28 @@ public class ResumeAnalysisController {
                 .aiJobMatchResultId(suggestion.getAiJobMatchResultId())
                 .suggestionStatus(suggestion.getSuggestionStatus())
                 .suggestions(readSuggestionList(suggestion.getSuggestions()))
+                .modelName(suggestion.getModelName())
+                .promptVersion(suggestion.getPromptVersion())
+                .errorMessage(suggestion.getErrorMessage())
+                .updatedAt(suggestion.getUpdatedAt())
+                .build();
+    }
+
+    private AiRewriteSuggestionVO toAiRewriteSuggestionVO(AiRewriteSuggestion suggestion) {
+        return AiRewriteSuggestionVO.builder()
+                .rewriteId(suggestion.getId())
+                .resumeId(suggestion.getResumeId())
+                .jobDescriptionId(suggestion.getJobDescriptionId())
+                .aiJobMatchResultId(suggestion.getAiJobMatchResultId())
+                .aiResumeSuggestionId(suggestion.getAiResumeSuggestionId())
+                .rewriteType(suggestion.getRewriteType())
+                .targetSection(suggestion.getTargetSection())
+                .originalText(suggestion.getOriginalText())
+                .rewrittenText(suggestion.getRewrittenText())
+                .rewriteReason(suggestion.getRewriteReason())
+                .caution(suggestion.getCaution())
+                .acceptStatus(suggestion.getAcceptStatus())
+                .rewriteStatus(suggestion.getRewriteStatus())
                 .modelName(suggestion.getModelName())
                 .promptVersion(suggestion.getPromptVersion())
                 .errorMessage(suggestion.getErrorMessage())

@@ -20,13 +20,18 @@ import com.winter.airesumeoptimizer.common.logging.RequestIdFilter;
 import com.winter.airesumeoptimizer.config.OpenApiConfig;
 import com.winter.airesumeoptimizer.config.SecurityConfig;
 import com.winter.airesumeoptimizer.module.analysis.controller.ResumeAnalysisController;
+import com.winter.airesumeoptimizer.module.analysis.controller.AiRewriteSuggestionController;
 import com.winter.airesumeoptimizer.module.analysis.dto.AiJobMatchRequestDTO;
+import com.winter.airesumeoptimizer.module.analysis.dto.AiRewriteAcceptStatusUpdateDTO;
 import com.winter.airesumeoptimizer.module.analysis.dto.AiResumeSuggestionRequestDTO;
+import com.winter.airesumeoptimizer.module.analysis.dto.AiRewriteSuggestionRequestDTO;
 import com.winter.airesumeoptimizer.module.analysis.entity.AiJobMatchResult;
 import com.winter.airesumeoptimizer.module.analysis.entity.AiResumeSuggestion;
+import com.winter.airesumeoptimizer.module.analysis.entity.AiRewriteSuggestion;
 import com.winter.airesumeoptimizer.module.analysis.entity.ResumeAiAnalysis;
 import com.winter.airesumeoptimizer.module.analysis.service.AiJobMatchService;
 import com.winter.airesumeoptimizer.module.analysis.service.AiResumeSuggestionService;
+import com.winter.airesumeoptimizer.module.analysis.service.AiRewriteSuggestionService;
 import com.winter.airesumeoptimizer.module.analysis.service.ResumeAnalysisService;
 import com.winter.airesumeoptimizer.module.auth.controller.AuthController;
 import com.winter.airesumeoptimizer.module.auth.dto.LoginRequestDTO;
@@ -85,6 +90,7 @@ import org.springframework.web.multipart.MultipartFile;
         UserController.class,
         ResumeController.class,
         ResumeAnalysisController.class,
+        AiRewriteSuggestionController.class,
         JobController.class,
         JobDescriptionController.class,
         JobMatchController.class,
@@ -131,6 +137,9 @@ class Phase1ApiIntegrationTest {
 
     @MockitoBean
     private AiResumeSuggestionService aiResumeSuggestionService;
+
+    @MockitoBean
+    private AiRewriteSuggestionService aiRewriteSuggestionService;
 
     @MockitoBean
     private JobService jobService;
@@ -358,6 +367,21 @@ class Phase1ApiIntegrationTest {
                 .thenReturn(buildAiResumeSuggestion("SUCCESS"));
         when(aiResumeSuggestionService.getByResumeAndJobDescription(1L, 100L, 99L))
                 .thenThrow(new BusinessException(404, "AI 优化建议结果不存在"));
+        when(aiRewriteSuggestionService.generate(1L, 100L, "PROJECT", "项目经历", "做了一个 AI 简历优化系统，负责后端开发。", 10L, 400L, 500L))
+                .thenReturn(buildAiRewriteSuggestion("SUCCESS"));
+        when(aiRewriteSuggestionService.generate(1L, 100L, "PROJECT", "项目经历", "触发失败", 10L, 400L, 500L))
+                .thenReturn(buildFailedAiRewriteSuggestion());
+        when(aiRewriteSuggestionService.listByResume(1L, 100L, null, null)).thenReturn(List.of(
+                buildAiRewriteSuggestion("SUCCESS"),
+                buildFailedAiRewriteSuggestion()));
+        when(aiRewriteSuggestionService.listByResume(1L, 100L, "PROJECT", "PENDING"))
+                .thenReturn(List.of(buildAiRewriteSuggestion("SUCCESS")));
+        when(aiRewriteSuggestionService.updateAcceptStatus(1L, 600L, "ACCEPTED"))
+                .thenReturn(buildAcceptedAiRewriteSuggestion());
+        when(aiRewriteSuggestionService.updateAcceptStatus(1L, 600L, "REJECTED"))
+                .thenReturn(buildRejectedAiRewriteSuggestion());
+        when(aiRewriteSuggestionService.updateAcceptStatus(1L, 999L, "ACCEPTED"))
+                .thenThrow(new BusinessException(404, "AI 局部改写建议不存在"));
         when(jobMatchResultService.match(1L, 100L, 200L)).thenReturn(JobMatchResultVO.builder()
                 .matchId(300L)
                 .resumeId(100L)
@@ -564,6 +588,101 @@ class Phase1ApiIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(404))
                 .andExpect(jsonPath("$.message").value("AI 优化建议结果不存在"));
+
+        AiRewriteSuggestionRequestDTO rewriteRequest = new AiRewriteSuggestionRequestDTO();
+        rewriteRequest.setRewriteType("PROJECT");
+        rewriteRequest.setTargetSection("项目经历");
+        rewriteRequest.setOriginalText("做了一个 AI 简历优化系统，负责后端开发。");
+        rewriteRequest.setJobDescriptionId(10L);
+        rewriteRequest.setAiJobMatchResultId(400L);
+        rewriteRequest.setAiResumeSuggestionId(500L);
+        mockMvc.perform(post("/api/resumes/100/rewrite-suggestions")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(rewriteRequest)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("AI 局部改写生成完成"))
+                .andExpect(jsonPath("$.data.rewriteId").value(600))
+                .andExpect(jsonPath("$.data.resumeId").value(100))
+                .andExpect(jsonPath("$.data.rewriteType").value("PROJECT"))
+                .andExpect(jsonPath("$.data.targetSection").value("项目经历"))
+                .andExpect(jsonPath("$.data.rewriteStatus").value("SUCCESS"))
+                .andExpect(jsonPath("$.data.acceptStatus").value("PENDING"))
+                .andExpect(jsonPath("$.data.promptVersion").value("rewrite_suggestion_v1"));
+
+        rewriteRequest.setOriginalText("触发失败");
+        mockMvc.perform(post("/api/resumes/100/rewrite-suggestions")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(rewriteRequest)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("AI 局部改写生成失败"))
+                .andExpect(jsonPath("$.data.rewriteStatus").value("FAILED"))
+                .andExpect(jsonPath("$.data.errorMessage").value("AI 局部改写结果不是合法 JSON"));
+
+        rewriteRequest.setOriginalText("");
+        mockMvc.perform(post("/api/resumes/100/rewrite-suggestions")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(rewriteRequest)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(400))
+                .andExpect(jsonPath("$.message").value("原文片段不能为空"));
+
+        mockMvc.perform(get("/api/resumes/100/rewrite-suggestions")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data", hasSize(2)))
+                .andExpect(jsonPath("$.data[0].rewriteId").value(600))
+                .andExpect(jsonPath("$.data[0].rewrittenText").value("负责 AI 简历优化系统后端开发。"))
+                .andExpect(jsonPath("$.data[1].rewriteStatus").value("FAILED"))
+                .andExpect(jsonPath("$.data[1].errorMessage").value("AI 局部改写结果不是合法 JSON"));
+
+        mockMvc.perform(get("/api/resumes/100/rewrite-suggestions")
+                        .param("rewriteType", "PROJECT")
+                        .param("acceptStatus", "PENDING")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data", hasSize(1)))
+                .andExpect(jsonPath("$.data[0].rewriteType").value("PROJECT"))
+                .andExpect(jsonPath("$.data[0].acceptStatus").value("PENDING"));
+
+        AiRewriteAcceptStatusUpdateDTO acceptRequest = new AiRewriteAcceptStatusUpdateDTO();
+        acceptRequest.setAcceptStatus("ACCEPTED");
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch("/api/rewrite-suggestions/600/accept-status")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(acceptRequest)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("局部改写采纳状态已更新"))
+                .andExpect(jsonPath("$.data.rewriteId").value(600))
+                .andExpect(jsonPath("$.data.acceptStatus").value("ACCEPTED"));
+
+        acceptRequest.setAcceptStatus("REJECTED");
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch("/api/rewrite-suggestions/600/accept-status")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(acceptRequest)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.acceptStatus").value("REJECTED"));
+
+        acceptRequest.setAcceptStatus("");
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch("/api/rewrite-suggestions/600/accept-status")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(acceptRequest)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(400))
+                .andExpect(jsonPath("$.message").value("采纳状态不能为空"));
+
+        acceptRequest.setAcceptStatus("ACCEPTED");
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch("/api/rewrite-suggestions/999/accept-status")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(acceptRequest)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(404))
+                .andExpect(jsonPath("$.message").value("AI 局部改写建议不存在"));
 
         JobMatchRequestDTO requestDTO = new JobMatchRequestDTO();
         requestDTO.setJobId(200L);
@@ -782,6 +901,58 @@ class Phase1ApiIntegrationTest {
         suggestion.setPromptVersion("resume_suggestion_v1");
         suggestion.setErrorMessage("AI 优化建议结果不是合法 JSON");
         suggestion.setUpdatedAt(LocalDateTime.now());
+        return suggestion;
+    }
+
+    private AiRewriteSuggestion buildAiRewriteSuggestion(String status) {
+        AiRewriteSuggestion suggestion = new AiRewriteSuggestion();
+        suggestion.setId(600L);
+        suggestion.setResumeId(100L);
+        suggestion.setJobDescriptionId(10L);
+        suggestion.setAiJobMatchResultId(400L);
+        suggestion.setAiResumeSuggestionId(500L);
+        suggestion.setRewriteType("PROJECT");
+        suggestion.setTargetSection("项目经历");
+        suggestion.setOriginalText("做了一个 AI 简历优化系统，负责后端开发。");
+        suggestion.setRewrittenText("负责 AI 简历优化系统后端开发。");
+        suggestion.setRewriteReason("表达更具体。");
+        suggestion.setCaution("确认职责真实。");
+        suggestion.setAcceptStatus("PENDING");
+        suggestion.setRewriteStatus(status);
+        suggestion.setModelName("test-model");
+        suggestion.setPromptVersion("rewrite_suggestion_v1");
+        suggestion.setUpdatedAt(LocalDateTime.now());
+        return suggestion;
+    }
+
+    private AiRewriteSuggestion buildFailedAiRewriteSuggestion() {
+        AiRewriteSuggestion suggestion = new AiRewriteSuggestion();
+        suggestion.setId(601L);
+        suggestion.setResumeId(100L);
+        suggestion.setJobDescriptionId(10L);
+        suggestion.setAiJobMatchResultId(400L);
+        suggestion.setAiResumeSuggestionId(500L);
+        suggestion.setRewriteType("PROJECT");
+        suggestion.setTargetSection("项目经历");
+        suggestion.setOriginalText("触发失败");
+        suggestion.setAcceptStatus("PENDING");
+        suggestion.setRewriteStatus("FAILED");
+        suggestion.setModelName("test-model");
+        suggestion.setPromptVersion("rewrite_suggestion_v1");
+        suggestion.setErrorMessage("AI 局部改写结果不是合法 JSON");
+        suggestion.setUpdatedAt(LocalDateTime.now());
+        return suggestion;
+    }
+
+    private AiRewriteSuggestion buildAcceptedAiRewriteSuggestion() {
+        AiRewriteSuggestion suggestion = buildAiRewriteSuggestion("SUCCESS");
+        suggestion.setAcceptStatus("ACCEPTED");
+        return suggestion;
+    }
+
+    private AiRewriteSuggestion buildRejectedAiRewriteSuggestion() {
+        AiRewriteSuggestion suggestion = buildAiRewriteSuggestion("SUCCESS");
+        suggestion.setAcceptStatus("REJECTED");
         return suggestion;
     }
 }
