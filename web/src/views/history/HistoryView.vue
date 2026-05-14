@@ -129,6 +129,17 @@ const goResume = (resumeId: number) => {
 }
 
 const goMatch = (record: HistoryListItem) => {
+  if (record.latestMatchSource === 'AI_JOB_DESCRIPTION' && record.latestJobDescriptionId) {
+    router.push({
+      path: '/ai-job-matches',
+      query: {
+        resumeId: String(record.resumeId),
+        jobDescriptionId: String(record.latestJobDescriptionId),
+      },
+    })
+    return
+  }
+
   if (!record.latestJobId) {
     ElMessage.warning('当前记录暂无岗位匹配结果')
     return
@@ -143,7 +154,22 @@ const goMatch = (record: HistoryListItem) => {
 }
 
 const goMatchDetail = (match: HistoryMatchResult) => {
-  if (!activeDetail.value || !match.jobId) {
+  if (!activeDetail.value) {
+    return
+  }
+
+  if (match.matchSource === 'AI_JOB_DESCRIPTION' && match.jobDescriptionId) {
+    router.push({
+      path: '/ai-job-matches',
+      query: {
+        resumeId: String(activeDetail.value.resumeId),
+        jobDescriptionId: String(match.jobDescriptionId),
+      },
+    })
+    return
+  }
+
+  if (!match.jobId) {
     return
   }
 
@@ -225,7 +251,13 @@ onMounted(() => {
               <div class="history-actions">
                 <el-button size="small" @click="openDetail(row)">详情</el-button>
                 <el-button size="small" type="primary" @click="goResume(row.resumeId)">查看简历</el-button>
-                <el-button size="small" :disabled="!row.latestJobId" @click="goMatch(row)">查看匹配</el-button>
+                <el-button
+                  size="small"
+                  :disabled="!row.latestJobId && !row.latestJobDescriptionId"
+                  @click="goMatch(row)"
+                >
+                  查看匹配
+                </el-button>
               </div>
             </template>
           </el-table-column>

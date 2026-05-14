@@ -7,7 +7,9 @@ import com.winter.airesumeoptimizer.common.exception.BusinessException;
 import com.winter.airesumeoptimizer.common.logging.LogSanitizer;
 import com.winter.airesumeoptimizer.infra.storage.FileStorageService;
 import com.winter.airesumeoptimizer.infra.storage.StoredFile;
+import com.winter.airesumeoptimizer.module.analysis.entity.AiJobMatchResult;
 import com.winter.airesumeoptimizer.module.analysis.entity.ResumeAiAnalysis;
+import com.winter.airesumeoptimizer.module.analysis.mapper.AiJobMatchResultMapper;
 import com.winter.airesumeoptimizer.module.analysis.mapper.ResumeAiAnalysisMapper;
 import com.winter.airesumeoptimizer.module.job.entity.JobMatchResult;
 import com.winter.airesumeoptimizer.module.job.mapper.JobMatchResultMapper;
@@ -51,6 +53,7 @@ public class ResumeServiceImpl implements ResumeService {
     private final ResumeParseResultMapper resumeParseResultMapper;
     private final ResumeAiAnalysisMapper resumeAiAnalysisMapper;
     private final JobMatchResultMapper jobMatchResultMapper;
+    private final AiJobMatchResultMapper aiJobMatchResultMapper;
     private final FileStorageService fileStorageService;
     private final ResumeTextExtractionService resumeTextExtractionService;
     private final ResumeStructureParseService resumeStructureParseService;
@@ -62,6 +65,7 @@ public class ResumeServiceImpl implements ResumeService {
             ResumeParseResultMapper resumeParseResultMapper,
             ResumeAiAnalysisMapper resumeAiAnalysisMapper,
             JobMatchResultMapper jobMatchResultMapper,
+            AiJobMatchResultMapper aiJobMatchResultMapper,
             FileStorageService fileStorageService,
             ResumeTextExtractionService resumeTextExtractionService,
             ResumeStructureParseService resumeStructureParseService,
@@ -71,6 +75,7 @@ public class ResumeServiceImpl implements ResumeService {
         this.resumeParseResultMapper = resumeParseResultMapper;
         this.resumeAiAnalysisMapper = resumeAiAnalysisMapper;
         this.jobMatchResultMapper = jobMatchResultMapper;
+        this.aiJobMatchResultMapper = aiJobMatchResultMapper;
         this.fileStorageService = fileStorageService;
         this.resumeTextExtractionService = resumeTextExtractionService;
         this.resumeStructureParseService = resumeStructureParseService;
@@ -223,6 +228,8 @@ public class ResumeServiceImpl implements ResumeService {
     }
 
     private void deleteResumeChildren(Long resumeId) {
+        aiJobMatchResultMapper.delete(new LambdaQueryWrapper<AiJobMatchResult>()
+                .eq(AiJobMatchResult::getResumeId, resumeId));
         jobMatchResultMapper.delete(new LambdaQueryWrapper<JobMatchResult>()
                 .eq(JobMatchResult::getResumeId, resumeId));
         resumeAiAnalysisMapper.delete(new LambdaQueryWrapper<ResumeAiAnalysis>()

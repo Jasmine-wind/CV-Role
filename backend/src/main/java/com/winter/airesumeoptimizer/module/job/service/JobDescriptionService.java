@@ -11,4 +11,6 @@ public interface JobDescriptionService {
     List<JobDescriptionVO> listByUser(Long userId);
 
     JobDescriptionVO getDetail(Long userId, Long jobDescriptionId);
+
+    void delete(Long userId, Long jobDescriptionId);
 }

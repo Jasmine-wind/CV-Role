@@ -5,6 +5,7 @@ import static org.hamcrest.Matchers.hasSize;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -19,7 +20,10 @@ import com.winter.airesumeoptimizer.common.logging.RequestIdFilter;
 import com.winter.airesumeoptimizer.config.OpenApiConfig;
 import com.winter.airesumeoptimizer.config.SecurityConfig;
 import com.winter.airesumeoptimizer.module.analysis.controller.ResumeAnalysisController;
+import com.winter.airesumeoptimizer.module.analysis.dto.AiJobMatchRequestDTO;
+import com.winter.airesumeoptimizer.module.analysis.entity.AiJobMatchResult;
 import com.winter.airesumeoptimizer.module.analysis.entity.ResumeAiAnalysis;
+import com.winter.airesumeoptimizer.module.analysis.service.AiJobMatchService;
 import com.winter.airesumeoptimizer.module.analysis.service.ResumeAnalysisService;
 import com.winter.airesumeoptimizer.module.auth.controller.AuthController;
 import com.winter.airesumeoptimizer.module.auth.dto.LoginRequestDTO;
@@ -118,6 +122,9 @@ class Phase1ApiIntegrationTest {
 
     @MockitoBean
     private ResumeAnalysisService resumeAnalysisService;
+
+    @MockitoBean
+    private AiJobMatchService aiJobMatchService;
 
     @MockitoBean
     private JobService jobService;
@@ -295,6 +302,11 @@ class Phase1ApiIntegrationTest {
                         .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.resumeId").value(100));
+
+        mockMvc.perform(delete("/api/resumes/100")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("删除成功"));
     }
 
     @Test
@@ -312,6 +324,19 @@ class Phase1ApiIntegrationTest {
 
         when(resumeAnalysisService.analyze(1L, 100L)).thenReturn(analysis);
         when(resumeAnalysisService.getAnalysis(1L, 100L)).thenReturn(analysis);
+        when(aiJobMatchService.match(1L, 100L, 10L)).thenReturn(buildAiJobMatchResult("SUCCESS"));
+        when(aiJobMatchService.match(1L, 100L, 11L)).thenReturn(buildFailedAiJobMatchResult());
+        when(aiJobMatchService.listByResume(1L, 100L)).thenReturn(List.of(
+                buildAiJobMatchResult("SUCCESS"),
+                buildFailedAiJobMatchResult()));
+        when(aiJobMatchService.getByResumeAndJobDescription(1L, 100L, 10L))
+                .thenReturn(buildAiJobMatchResult("SUCCESS"));
+        when(aiJobMatchService.getByResumeAndJobDescription(1L, 100L, 11L))
+                .thenReturn(buildFailedAiJobMatchResult());
+        when(aiJobMatchService.getByResumeAndJobDescription(1L, 100L, 99L))
+                .thenThrow(new BusinessException(404, "AI 岗位匹配结果不存在"));
+        when(aiJobMatchService.match(1L, 101L, 10L))
+                .thenThrow(new BusinessException(400, "简历解析未成功，不能进行 AI 匹配"));
         when(jobMatchResultService.match(1L, 100L, 200L)).thenReturn(JobMatchResultVO.builder()
                 .matchId(300L)
                 .resumeId(100L)
@@ -369,6 +394,74 @@ class Phase1ApiIntegrationTest {
                         .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.strengths[0]").value("Java 基础扎实"));
+
+        AiJobMatchRequestDTO aiJobMatchRequest = new AiJobMatchRequestDTO();
+        aiJobMatchRequest.setJobDescriptionId(10L);
+        mockMvc.perform(post("/api/resumes/100/ai-job-matches")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(aiJobMatchRequest)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("AI 岗位匹配完成"))
+                .andExpect(jsonPath("$.data.matchId").value(400))
+                .andExpect(jsonPath("$.data.resumeId").value(100))
+                .andExpect(jsonPath("$.data.jobDescriptionId").value(10))
+                .andExpect(jsonPath("$.data.overallScore").value(82))
+                .andExpect(jsonPath("$.data.matchStatus").value("SUCCESS"));
+
+        aiJobMatchRequest.setJobDescriptionId(11L);
+        mockMvc.perform(post("/api/resumes/100/ai-job-matches")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(aiJobMatchRequest)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("AI 岗位匹配失败"))
+                .andExpect(jsonPath("$.data.matchStatus").value("FAILED"))
+                .andExpect(jsonPath("$.data.errorMessage").value("AI 匹配结果不是合法 JSON"));
+
+        aiJobMatchRequest.setJobDescriptionId(10L);
+        mockMvc.perform(post("/api/resumes/101/ai-job-matches")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(aiJobMatchRequest)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(400))
+                .andExpect(jsonPath("$.message").value("简历解析未成功，不能进行 AI 匹配"));
+
+        aiJobMatchRequest.setJobDescriptionId(null);
+        mockMvc.perform(post("/api/resumes/100/ai-job-matches")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(aiJobMatchRequest)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(400))
+                .andExpect(jsonPath("$.message").value("岗位描述 ID 不能为空"));
+
+        mockMvc.perform(get("/api/resumes/100/ai-job-matches")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data", hasSize(2)))
+                .andExpect(jsonPath("$.data[0].matchId").value(400))
+                .andExpect(jsonPath("$.data[0].strongMatches[0].item").value("Java"))
+                .andExpect(jsonPath("$.data[0].riskNotes[0]").value("部分技能缺少项目支撑"))
+                .andExpect(jsonPath("$.data[1].matchStatus").value("FAILED"))
+                .andExpect(jsonPath("$.data[1].errorMessage").value("AI 匹配结果不是合法 JSON"));
+
+        mockMvc.perform(get("/api/resumes/100/ai-job-matches")
+                        .param("jobDescriptionId", "10")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.matchId").value(400))
+                .andExpect(jsonPath("$.data.jobDescriptionId").value(10))
+                .andExpect(jsonPath("$.data.overallScore").value(82))
+                .andExpect(jsonPath("$.data.strongMatches[0].reason").value("双方都出现 Java"));
+
+        mockMvc.perform(get("/api/resumes/100/ai-job-matches")
+                        .param("jobDescriptionId", "99")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(404))
+                .andExpect(jsonPath("$.message").value("AI 岗位匹配结果不存在"));
 
         JobMatchRequestDTO requestDTO = new JobMatchRequestDTO();
         requestDTO.setJobId(200L);
@@ -507,6 +600,11 @@ class Phase1ApiIntegrationTest {
                 .andExpect(jsonPath("$.message").value("岗位描述解析失败"))
                 .andExpect(jsonPath("$.data.parseStatus").value("FAILED"))
                 .andExpect(jsonPath("$.data.errorMessage").value("岗位描述解析结果不是合法 JSON"));
+
+        mockMvc.perform(delete("/api/job-descriptions/10")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("岗位描述删除成功"));
     }
 
     @Test
@@ -521,5 +619,37 @@ class Phase1ApiIntegrationTest {
                 .getSecuritySchemes()
                 .get(OpenApiConfig.JWT_SECURITY_SCHEME)
                 .getScheme()).isEqualTo("bearer");
+    }
+
+    private AiJobMatchResult buildAiJobMatchResult(String status) {
+        AiJobMatchResult result = new AiJobMatchResult();
+        result.setId(400L);
+        result.setResumeId(100L);
+        result.setJobDescriptionId(10L);
+        result.setMatchStatus(status);
+        result.setOverallScore(82);
+        result.setStrongMatches("[{\"item\":\"Java\",\"reason\":\"双方都出现 Java\"}]");
+        result.setWeakMatches("[{\"item\":\"Redis\",\"reason\":\"简历缺少项目支撑\"}]");
+        result.setMissingSkills("[{\"item\":\"Docker\",\"reason\":\"岗位要求但简历未出现\"}]");
+        result.setWeakExperienceDescriptions("[{\"section\":\"项目经历\",\"issue\":\"缺少结果说明\"}]");
+        result.setEvidence("[{\"source\":\"resume\",\"content\":\"简历提到 Java\"}]");
+        result.setRiskNotes("[\"部分技能缺少项目支撑\"]");
+        result.setModelName("test-model");
+        result.setPromptVersion("ai_job_match_v1");
+        result.setUpdatedAt(LocalDateTime.now());
+        return result;
+    }
+
+    private AiJobMatchResult buildFailedAiJobMatchResult() {
+        AiJobMatchResult result = new AiJobMatchResult();
+        result.setId(401L);
+        result.setResumeId(100L);
+        result.setJobDescriptionId(11L);
+        result.setMatchStatus("FAILED");
+        result.setModelName("test-model");
+        result.setPromptVersion("ai_job_match_v1");
+        result.setErrorMessage("AI 匹配结果不是合法 JSON");
+        result.setUpdatedAt(LocalDateTime.now());
+        return result;
     }
 }

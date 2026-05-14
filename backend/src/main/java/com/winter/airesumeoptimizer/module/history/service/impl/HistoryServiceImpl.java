@@ -5,7 +5,9 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.winter.airesumeoptimizer.common.exception.BusinessException;
+import com.winter.airesumeoptimizer.module.analysis.entity.AiJobMatchResult;
 import com.winter.airesumeoptimizer.module.analysis.entity.ResumeAiAnalysis;
+import com.winter.airesumeoptimizer.module.analysis.mapper.AiJobMatchResultMapper;
 import com.winter.airesumeoptimizer.module.analysis.mapper.ResumeAiAnalysisMapper;
 import com.winter.airesumeoptimizer.module.history.service.HistoryService;
 import com.winter.airesumeoptimizer.module.history.vo.HistoryAiAnalysisVO;
@@ -16,7 +18,9 @@ import com.winter.airesumeoptimizer.module.history.vo.HistoryPageVO;
 import com.winter.airesumeoptimizer.module.history.vo.HistoryParseResultVO;
 import com.winter.airesumeoptimizer.module.history.vo.HistoryResumeVO;
 import com.winter.airesumeoptimizer.module.job.entity.Job;
+import com.winter.airesumeoptimizer.module.job.entity.JobDescription;
 import com.winter.airesumeoptimizer.module.job.entity.JobMatchResult;
+import com.winter.airesumeoptimizer.module.job.mapper.JobDescriptionMapper;
 import com.winter.airesumeoptimizer.module.job.mapper.JobMapper;
 import com.winter.airesumeoptimizer.module.job.mapper.JobMatchResultMapper;
 import com.winter.airesumeoptimizer.module.resume.entity.Resume;
@@ -36,6 +40,8 @@ public class HistoryServiceImpl implements HistoryService {
     private static final int DEFAULT_SIZE = 10;
     private static final int MAX_SIZE = 50;
     private static final int PREVIEW_LENGTH = 120;
+    private static final String MATCH_SOURCE_JOB = "JOB";
+    private static final String MATCH_SOURCE_AI_JOB_DESCRIPTION = "AI_JOB_DESCRIPTION";
     private static final TypeReference<List<String>> STRING_LIST_TYPE = new TypeReference<>() {
     };
 
@@ -43,7 +49,9 @@ public class HistoryServiceImpl implements HistoryService {
     private final ResumeParseResultMapper resumeParseResultMapper;
     private final ResumeAiAnalysisMapper resumeAiAnalysisMapper;
     private final JobMatchResultMapper jobMatchResultMapper;
+    private final AiJobMatchResultMapper aiJobMatchResultMapper;
     private final JobMapper jobMapper;
+    private final JobDescriptionMapper jobDescriptionMapper;
     private final ObjectMapper objectMapper;
 
     public HistoryServiceImpl(
@@ -51,13 +59,17 @@ public class HistoryServiceImpl implements HistoryService {
             ResumeParseResultMapper resumeParseResultMapper,
             ResumeAiAnalysisMapper resumeAiAnalysisMapper,
             JobMatchResultMapper jobMatchResultMapper,
+            AiJobMatchResultMapper aiJobMatchResultMapper,
             JobMapper jobMapper,
+            JobDescriptionMapper jobDescriptionMapper,
             ObjectMapper objectMapper) {
         this.resumeMapper = resumeMapper;
         this.resumeParseResultMapper = resumeParseResultMapper;
         this.resumeAiAnalysisMapper = resumeAiAnalysisMapper;
         this.jobMatchResultMapper = jobMatchResultMapper;
+        this.aiJobMatchResultMapper = aiJobMatchResultMapper;
         this.jobMapper = jobMapper;
+        this.jobDescriptionMapper = jobDescriptionMapper;
         this.objectMapper = objectMapper;
     }
 
@@ -93,11 +105,8 @@ public class HistoryServiceImpl implements HistoryService {
         Resume resume = getOwnedResume(userId, resumeId);
         ResumeParseResult parseResult = getParseResult(resume.getId());
         ResumeAiAnalysis aiAnalysis = getAiAnalysis(resume.getId());
-        List<JobMatchResult> matchResults = getMatchResults(resume.getId());
-        HistoryMatchResultVO latestMatch = matchResults.stream()
-                .findFirst()
-                .map(this::toMatchResultVO)
-                .orElse(null);
+        List<HistoryMatchResultVO> matchResults = getMatchResults(resume.getId());
+        HistoryMatchResultVO latestMatch = matchResults.stream().findFirst().orElse(null);
 
         return HistoryDetailVO.builder()
                 .recordId(resume.getId())
@@ -106,16 +115,16 @@ public class HistoryServiceImpl implements HistoryService {
                 .parseResult(toParseResultVO(parseResult))
                 .aiAnalysis(toAiAnalysisVO(aiAnalysis))
                 .latestMatch(latestMatch)
-                .matchResults(matchResults.stream().map(this::toMatchResultVO).toList())
-                .updatedAt(resolveUpdatedAt(resume, parseResult, aiAnalysis, matchResults.stream().findFirst().orElse(null)))
+                .matchResults(matchResults)
+                .updatedAt(resolveUpdatedAt(resume, parseResult, aiAnalysis,
+                        latestMatch == null ? null : latestMatch.getMatchUpdatedAt()))
                 .build();
     }
 
     private HistoryListVO toListVO(Resume resume) {
         ResumeParseResult parseResult = getParseResult(resume.getId());
         ResumeAiAnalysis aiAnalysis = getAiAnalysis(resume.getId());
-        JobMatchResult latestMatch = getLatestMatchResult(resume.getId());
-        Job latestJob = latestMatch == null ? null : getJob(latestMatch.getJobId());
+        HistoryMatchResultVO latestMatch = getLatestMatchResult(resume.getId());
 
         return HistoryListVO.builder()
                 .recordId(resume.getId())
@@ -128,11 +137,14 @@ public class HistoryServiceImpl implements HistoryService {
                 .parseStatus(parseResult == null ? STATUS_NOT_STARTED : parseResult.getParseStatus())
                 .analysisStatus(aiAnalysis == null ? STATUS_NOT_STARTED : aiAnalysis.getAnalysisStatus())
                 .analysisScore(aiAnalysis == null ? null : aiAnalysis.getScore())
-                .latestJobId(latestJob == null ? null : latestJob.getId())
-                .latestJobTitle(latestJob == null ? null : latestJob.getTitle())
-                .latestCompanyName(latestJob == null ? null : latestJob.getCompanyName())
+                .latestJobId(latestMatch == null ? null : latestMatch.getJobId())
+                .latestJobDescriptionId(latestMatch == null ? null : latestMatch.getJobDescriptionId())
+                .latestMatchSource(latestMatch == null ? null : latestMatch.getMatchSource())
+                .latestJobTitle(latestMatch == null ? null : latestMatch.getJobTitle())
+                .latestCompanyName(latestMatch == null ? null : latestMatch.getCompanyName())
                 .latestMatchScore(latestMatch == null ? null : latestMatch.getMatchScore())
-                .updatedAt(resolveUpdatedAt(resume, parseResult, aiAnalysis, latestMatch))
+                .updatedAt(resolveUpdatedAt(resume, parseResult, aiAnalysis,
+                        latestMatch == null ? null : latestMatch.getMatchUpdatedAt()))
                 .build();
     }
 
@@ -185,12 +197,29 @@ public class HistoryServiceImpl implements HistoryService {
         return HistoryMatchResultVO.builder()
                 .matchId(matchResult.getId())
                 .jobId(matchResult.getJobId())
+                .matchSource(MATCH_SOURCE_JOB)
                 .jobTitle(job == null ? null : job.getTitle())
                 .companyName(job == null ? null : job.getCompanyName())
                 .jobCategory(job == null ? null : job.getJobCategory())
                 .matchScore(matchResult.getMatchScore())
                 .matchReason(matchResult.getMatchReason())
                 .suggestionsPreview(preview(matchResult.getSuggestions()))
+                .matchUpdatedAt(matchResult.getUpdatedAt())
+                .build();
+    }
+
+    private HistoryMatchResultVO toMatchResultVO(AiJobMatchResult matchResult) {
+        JobDescription jobDescription = getJobDescription(matchResult.getJobDescriptionId());
+        return HistoryMatchResultVO.builder()
+                .matchId(matchResult.getId())
+                .jobDescriptionId(matchResult.getJobDescriptionId())
+                .matchSource(MATCH_SOURCE_AI_JOB_DESCRIPTION)
+                .jobTitle(jobDescription == null ? null : jobDescription.getTitle())
+                .companyName("岗位描述")
+                .jobCategory("AI 匹配")
+                .matchScore(matchResult.getOverallScore())
+                .matchReason(preview(matchResult.getStrongMatches()))
+                .suggestionsPreview(preview(matchResult.getRiskNotes()))
                 .matchUpdatedAt(matchResult.getUpdatedAt())
                 .build();
     }
@@ -220,21 +249,48 @@ public class HistoryServiceImpl implements HistoryService {
                 .eq(ResumeAiAnalysis::getResumeId, resumeId));
     }
 
-    private JobMatchResult getLatestMatchResult(Long resumeId) {
-        return jobMatchResultMapper.selectList(new LambdaQueryWrapper<JobMatchResult>()
+    private HistoryMatchResultVO getLatestMatchResult(Long resumeId) {
+        HistoryMatchResultVO latestLegacyMatch = jobMatchResultMapper.selectList(new LambdaQueryWrapper<JobMatchResult>()
                         .eq(JobMatchResult::getResumeId, resumeId)
                         .orderByDesc(JobMatchResult::getUpdatedAt)
                         .orderByDesc(JobMatchResult::getId))
                 .stream()
                 .findFirst()
+                .map(this::toMatchResultVO)
                 .orElse(null);
+
+        HistoryMatchResultVO latestAiMatch = aiJobMatchResultMapper.selectList(new LambdaQueryWrapper<AiJobMatchResult>()
+                        .eq(AiJobMatchResult::getResumeId, resumeId)
+                        .orderByDesc(AiJobMatchResult::getUpdatedAt)
+                        .orderByDesc(AiJobMatchResult::getId))
+                .stream()
+                .findFirst()
+                .map(this::toMatchResultVO)
+                .orElse(null);
+
+        return latest(latestLegacyMatch, latestAiMatch);
     }
 
-    private List<JobMatchResult> getMatchResults(Long resumeId) {
-        return jobMatchResultMapper.selectList(new LambdaQueryWrapper<JobMatchResult>()
-                .eq(JobMatchResult::getResumeId, resumeId)
-                .orderByDesc(JobMatchResult::getUpdatedAt)
-                .orderByDesc(JobMatchResult::getId));
+    private List<HistoryMatchResultVO> getMatchResults(Long resumeId) {
+        List<HistoryMatchResultVO> legacyMatches = jobMatchResultMapper.selectList(new LambdaQueryWrapper<JobMatchResult>()
+                        .eq(JobMatchResult::getResumeId, resumeId)
+                        .orderByDesc(JobMatchResult::getUpdatedAt)
+                        .orderByDesc(JobMatchResult::getId))
+                .stream()
+                .map(this::toMatchResultVO)
+                .toList();
+        List<HistoryMatchResultVO> aiMatches = aiJobMatchResultMapper.selectList(new LambdaQueryWrapper<AiJobMatchResult>()
+                        .eq(AiJobMatchResult::getResumeId, resumeId)
+                        .orderByDesc(AiJobMatchResult::getUpdatedAt)
+                        .orderByDesc(AiJobMatchResult::getId))
+                .stream()
+                .map(this::toMatchResultVO)
+                .toList();
+
+        return java.util.stream.Stream.concat(legacyMatches.stream(), aiMatches.stream())
+                .sorted(Comparator.comparing(HistoryMatchResultVO::getMatchUpdatedAt, this::compareNullableTime)
+                        .reversed())
+                .toList();
     }
 
     private Job getJob(Long jobId) {
@@ -244,15 +300,32 @@ public class HistoryServiceImpl implements HistoryService {
         return jobMapper.selectById(jobId);
     }
 
+    private JobDescription getJobDescription(Long jobDescriptionId) {
+        if (jobDescriptionId == null) {
+            return null;
+        }
+        return jobDescriptionMapper.selectById(jobDescriptionId);
+    }
+
+    private HistoryMatchResultVO latest(HistoryMatchResultVO first, HistoryMatchResultVO second) {
+        if (first == null) {
+            return second;
+        }
+        if (second == null) {
+            return first;
+        }
+        return compareNullableTime(first.getMatchUpdatedAt(), second.getMatchUpdatedAt()) >= 0 ? first : second;
+    }
+
     private LocalDateTime resolveUpdatedAt(
             Resume resume,
             ResumeParseResult parseResult,
             ResumeAiAnalysis aiAnalysis,
-            JobMatchResult latestMatch) {
+            LocalDateTime latestMatchUpdatedAt) {
         LocalDateTime updatedAt = resume.getUpdatedAt();
         updatedAt = max(updatedAt, parseResult == null ? null : parseResult.getUpdatedAt());
         updatedAt = max(updatedAt, aiAnalysis == null ? null : aiAnalysis.getUpdatedAt());
-        updatedAt = max(updatedAt, latestMatch == null ? null : latestMatch.getUpdatedAt());
+        updatedAt = max(updatedAt, latestMatchUpdatedAt);
         return updatedAt;
     }
 

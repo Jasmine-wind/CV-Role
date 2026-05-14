@@ -2,6 +2,8 @@ package com.winter.airesumeoptimizer.module.job.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.winter.airesumeoptimizer.common.exception.BusinessException;
+import com.winter.airesumeoptimizer.module.analysis.entity.AiJobMatchResult;
+import com.winter.airesumeoptimizer.module.analysis.mapper.AiJobMatchResultMapper;
 import com.winter.airesumeoptimizer.module.job.dto.JobDescriptionSubmitDTO;
 import com.winter.airesumeoptimizer.module.job.entity.JobDescription;
 import com.winter.airesumeoptimizer.module.job.mapper.JobDescriptionMapper;
@@ -18,9 +20,13 @@ public class JobDescriptionServiceImpl implements JobDescriptionService {
     private static final String PARSE_STATUS_PENDING = "PENDING";
 
     private final JobDescriptionMapper jobDescriptionMapper;
+    private final AiJobMatchResultMapper aiJobMatchResultMapper;
 
-    public JobDescriptionServiceImpl(JobDescriptionMapper jobDescriptionMapper) {
+    public JobDescriptionServiceImpl(
+            JobDescriptionMapper jobDescriptionMapper,
+            AiJobMatchResultMapper aiJobMatchResultMapper) {
         this.jobDescriptionMapper = jobDescriptionMapper;
+        this.aiJobMatchResultMapper = aiJobMatchResultMapper;
     }
 
     @Override
@@ -63,6 +69,19 @@ public class JobDescriptionServiceImpl implements JobDescriptionService {
 
     @Override
     public JobDescriptionVO getDetail(Long userId, Long jobDescriptionId) {
+        return toVO(getOwnedJobDescription(userId, jobDescriptionId));
+    }
+
+    @Override
+    @Transactional
+    public void delete(Long userId, Long jobDescriptionId) {
+        JobDescription jobDescription = getOwnedJobDescription(userId, jobDescriptionId);
+        aiJobMatchResultMapper.delete(new LambdaQueryWrapper<AiJobMatchResult>()
+                .eq(AiJobMatchResult::getJobDescriptionId, jobDescription.getId()));
+        jobDescriptionMapper.deleteById(jobDescription.getId());
+    }
+
+    private JobDescription getOwnedJobDescription(Long userId, Long jobDescriptionId) {
         validateUserId(userId);
         if (jobDescriptionId == null) {
             throw new BusinessException(400, "岗位描述 ID 不能为空");
@@ -75,7 +94,7 @@ public class JobDescriptionServiceImpl implements JobDescriptionService {
             throw new BusinessException(404, "岗位描述不存在");
         }
 
-        return toVO(jobDescription);
+        return jobDescription;
     }
 
     private void validateUserId(Long userId) {

@@ -13,6 +13,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.winter.airesumeoptimizer.common.exception.BusinessException;
 import com.winter.airesumeoptimizer.infra.storage.FileStorageService;
 import com.winter.airesumeoptimizer.infra.storage.StoredFile;
+import com.winter.airesumeoptimizer.module.analysis.mapper.AiJobMatchResultMapper;
 import com.winter.airesumeoptimizer.module.analysis.mapper.ResumeAiAnalysisMapper;
 import com.winter.airesumeoptimizer.module.job.mapper.JobMatchResultMapper;
 import com.winter.airesumeoptimizer.module.resume.entity.Resume;
@@ -30,6 +31,7 @@ class ResumeServiceImplTest {
     private final ResumeParseResultMapper resumeParseResultMapper = mock(ResumeParseResultMapper.class);
     private final ResumeAiAnalysisMapper resumeAiAnalysisMapper = mock(ResumeAiAnalysisMapper.class);
     private final JobMatchResultMapper jobMatchResultMapper = mock(JobMatchResultMapper.class);
+    private final AiJobMatchResultMapper aiJobMatchResultMapper = mock(AiJobMatchResultMapper.class);
     private final FileStorageService fileStorageService = mock(FileStorageService.class);
     private final ResumeTextExtractionService resumeTextExtractionService = mock(ResumeTextExtractionService.class);
     private final ResumeStructureParseService resumeStructureParseService = mock(ResumeStructureParseService.class);
@@ -38,6 +40,7 @@ class ResumeServiceImplTest {
             resumeParseResultMapper,
             resumeAiAnalysisMapper,
             jobMatchResultMapper,
+            aiJobMatchResultMapper,
             fileStorageService,
             resumeTextExtractionService,
             resumeStructureParseService,
@@ -104,6 +107,7 @@ class ResumeServiceImplTest {
                 resumeParseResultMapper,
                 resumeAiAnalysisMapper,
                 jobMatchResultMapper,
+                aiJobMatchResultMapper,
                 fileStorageService,
                 resumeTextExtractionService,
                 resumeStructureParseService,
@@ -156,6 +160,7 @@ class ResumeServiceImplTest {
 
         service.delete(1L, 100L);
 
+        verify(aiJobMatchResultMapper).delete(any(Wrapper.class));
         verify(jobMatchResultMapper).delete(any(Wrapper.class));
         verify(resumeAiAnalysisMapper).delete(any(Wrapper.class));
         verify(resumeParseResultMapper).delete(any(Wrapper.class));

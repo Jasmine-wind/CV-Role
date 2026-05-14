@@ -9,6 +9,7 @@ import static org.mockito.Mockito.when;
 
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.winter.airesumeoptimizer.common.exception.BusinessException;
+import com.winter.airesumeoptimizer.module.analysis.mapper.AiJobMatchResultMapper;
 import com.winter.airesumeoptimizer.module.job.dto.JobDescriptionSubmitDTO;
 import com.winter.airesumeoptimizer.module.job.entity.JobDescription;
 import com.winter.airesumeoptimizer.module.job.mapper.JobDescriptionMapper;
@@ -19,7 +20,10 @@ import org.junit.jupiter.api.Test;
 class JobDescriptionServiceImplTest {
 
     private final JobDescriptionMapper jobDescriptionMapper = mock(JobDescriptionMapper.class);
-    private final JobDescriptionServiceImpl service = new JobDescriptionServiceImpl(jobDescriptionMapper);
+    private final AiJobMatchResultMapper aiJobMatchResultMapper = mock(AiJobMatchResultMapper.class);
+    private final JobDescriptionServiceImpl service = new JobDescriptionServiceImpl(
+            jobDescriptionMapper,
+            aiJobMatchResultMapper);
 
     @Test
     void submitShouldSaveJobDescriptionWithPendingStatus() {
@@ -97,5 +101,22 @@ class JobDescriptionServiceImplTest {
         assertThatThrownBy(() -> service.submit(null, request))
                 .isInstanceOf(BusinessException.class)
                 .hasMessage("请先登录");
+    }
+
+    @Test
+    void deleteShouldRemoveAiMatchesAndOwnedJobDescription() {
+        JobDescription jobDescription = new JobDescription();
+        jobDescription.setId(10L);
+        jobDescription.setUserId(1L);
+        jobDescription.setTitle("Java 后端开发工程师");
+        jobDescription.setRawText("负责 Java 后端开发");
+        jobDescription.setParseStatus("SUCCESS");
+
+        when(jobDescriptionMapper.selectOne(any(Wrapper.class))).thenReturn(jobDescription);
+
+        service.delete(1L, 10L);
+
+        verify(aiJobMatchResultMapper).delete(any(Wrapper.class));
+        verify(jobDescriptionMapper).deleteById(10L);
     }
 }

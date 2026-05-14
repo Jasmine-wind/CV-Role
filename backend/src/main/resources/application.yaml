@@ -58,4 +58,4 @@ app:
       model: ${spring.ai.openai.chat.options.model}
       timeout-seconds: ${OPENAI_TIMEOUT_SECONDS:90}
       temperature: ${OPENAI_TEMPERATURE:0.2}
-      max-tokens: ${OPENAI_MAX_TOKENS:800}
+      max-tokens: ${OPENAI_MAX_TOKENS:4000}

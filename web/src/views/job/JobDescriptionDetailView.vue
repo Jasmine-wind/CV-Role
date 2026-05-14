@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { getJobDescriptionDetail, parseJobDescription } from '@/api/job-description'
+import { deleteJobDescription, getJobDescriptionDetail, parseJobDescription } from '@/api/job-description'
 import type { JobDescriptionDetail, JobDescriptionStructuredContent } from '@/types/job-description'
 
 const route = useRoute()
@@ -10,6 +10,7 @@ const router = useRouter()
 const detail = ref<JobDescriptionDetail | null>(null)
 const loading = ref(false)
 const parsing = ref(false)
+const deleting = ref(false)
 const loadFailed = ref(false)
 
 const jobDescriptionId = computed(() => Number(route.params.id))
@@ -105,6 +106,34 @@ const handleParse = async () => {
   }
 }
 
+const handleDelete = async () => {
+  if (!detail.value) {
+    return
+  }
+
+  try {
+    await ElMessageBox.confirm(`确认删除「${detail.value.title}」吗？关联的 AI 匹配结果也会一起删除。`, '删除岗位描述', {
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+  } catch {
+    return
+  }
+
+  deleting.value = true
+
+  try {
+    await deleteJobDescription(detail.value.id)
+    ElMessage.success('岗位描述删除成功')
+    router.push('/job-descriptions')
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '岗位描述删除失败')
+  } finally {
+    deleting.value = false
+  }
+}
+
 onMounted(() => {
   loadDetail()
 })
@@ -121,6 +150,21 @@ onMounted(() => {
         <el-space>
           <el-button @click="router.push('/job-descriptions')">我的岗位描述</el-button>
           <el-button @click="router.push('/job-descriptions/new')">新建岗位描述</el-button>
+          <el-button
+            :disabled="detail?.parseStatus !== 'SUCCESS'"
+            @click="router.push(`/ai-job-matches?jobDescriptionId=${detail?.id}`)"
+          >
+            AI 匹配
+          </el-button>
+          <el-button
+            v-if="detail"
+            type="danger"
+            :loading="deleting"
+            :disabled="parsing"
+            @click="handleDelete"
+          >
+            删除
+          </el-button>
           <el-button @click="router.push('/jobs')">岗位列表</el-button>
         </el-space>
       </header>

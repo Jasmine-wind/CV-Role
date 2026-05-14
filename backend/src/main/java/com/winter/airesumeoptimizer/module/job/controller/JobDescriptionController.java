@@ -14,6 +14,7 @@ import jakarta.validation.constraints.Positive;
 import java.util.List;
 import org.springframework.security.core.Authentication;
 import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -62,6 +63,16 @@ public class JobDescriptionController {
             Authentication authentication) {
         AuthenticatedUser authenticatedUser = (AuthenticatedUser) authentication.getPrincipal();
         return Result.success(jobDescriptionService.getDetail(authenticatedUser.getUserId(), id));
+    }
+
+    @DeleteMapping("/{id}")
+    @Operation(summary = "删除岗位描述", description = "删除当前用户提交的岗位描述及关联 AI 匹配结果")
+    public Result<Void> delete(
+            @PathVariable @Positive(message = "岗位描述 ID 必须大于 0") Long id,
+            Authentication authentication) {
+        AuthenticatedUser authenticatedUser = (AuthenticatedUser) authentication.getPrincipal();
+        jobDescriptionService.delete(authenticatedUser.getUserId(), id);
+        return Result.success("岗位描述删除成功", null);
     }
 
     @PostMapping("/{id}/parse")

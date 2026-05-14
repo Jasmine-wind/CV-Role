@@ -115,14 +115,50 @@ public class OpenAiCompatibleAiClientService implements AiClientService {
     String extractContent(String responseBody) {
         try {
             JsonNode root = objectMapper.readTree(responseBody);
-            JsonNode contentNode = root.path("choices").path(0).path("message").path("content");
-            if (contentNode.isMissingNode() || contentNode.asText().isBlank()) {
-                throw new AiClientException("AI 响应中缺少文本内容");
+            JsonNode choiceNode = root.path("choices").path(0);
+            JsonNode messageNode = choiceNode.path("message");
+            String content = readMessageContent(messageNode);
+            if (content.isBlank()) {
+                String finishReason = choiceNode.path("finish_reason").asText("");
+                if ("length".equals(finishReason)) {
+                    throw new AiClientException("AI 响应中缺少文本内容，可能是 max_tokens 不足，请调大 OPENAI_MAX_TOKENS 后重试");
+                }
+                String refusal = messageNode.path("refusal").asText("");
+                if (!refusal.isBlank()) {
+                    throw new AiClientException("AI 拒绝返回文本内容：" + truncate(refusal));
+                }
+                throw new AiClientException("AI 响应中缺少文本内容，finish_reason=" + emptyToUnknown(finishReason));
             }
-            return contentNode.asText();
+            return content;
         } catch (IOException exception) {
             throw new AiClientException("AI 响应 JSON 解析失败", exception);
         }
+    }
+
+    private String readMessageContent(JsonNode messageNode) {
+        JsonNode contentNode = messageNode.path("content");
+        if (contentNode.isTextual()) {
+            return contentNode.asText();
+        }
+        if (contentNode.isArray()) {
+            StringBuilder result = new StringBuilder();
+            for (JsonNode item : contentNode) {
+                JsonNode textNode = item.path("text");
+                if (textNode.isTextual() && !textNode.asText().isBlank()) {
+                    if (!result.isEmpty()) {
+                        result.append('\n');
+                    }
+                    result.append(textNode.asText());
+                }
+            }
+            return result.toString();
+        }
+
+        JsonNode legacyTextNode = messageNode.path("text");
+        if (legacyTextNode.isTextual()) {
+            return legacyTextNode.asText();
+        }
+        return "";
     }
 
     private void validateConfig() {
@@ -146,9 +182,16 @@ public class OpenAiCompatibleAiClientService implements AiClientService {
 
     private int resolveMaxTokens() {
         if (properties.getMaxTokens() == null || properties.getMaxTokens() <= 0) {
-            return 800;
+            return 4000;
         }
         return properties.getMaxTokens();
+    }
+
+    private String emptyToUnknown(String value) {
+        if (value == null || value.isBlank()) {
+            return "unknown";
+        }
+        return value;
     }
 
     private String normalizeBaseUrl(String baseUrl) {

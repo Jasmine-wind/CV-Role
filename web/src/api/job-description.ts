@@ -15,6 +15,10 @@ export const getJobDescriptionDetail = (id: number) => {
   return request.get<JobDescriptionDetail>(`/api/job-descriptions/${id}`)
 }
 
+export const deleteJobDescription = (id: number) => {
+  return request.delete<void>(`/api/job-descriptions/${id}`)
+}
+
 export const parseJobDescription = (id: number) => {
   return request.post<JobDescriptionDetail>(`/api/job-descriptions/${id}/parse`, undefined, {
     timeout: AI_PARSE_TIMEOUT_MS,

@@ -22,6 +22,34 @@ class OpenAiCompatibleAiClientServiceTest {
     }
 
     @Test
+    void extractContentShouldReadArrayContentText() {
+        OpenAiCompatibleAiClientService service = new OpenAiCompatibleAiClientService(
+                new AiClientProperties(),
+                new ObjectMapper());
+
+        String responseBody = """
+                {"choices":[{"message":{"content":[{"type":"text","text":"数组文本内容"}]}}]}
+                """;
+
+        assertThat(service.extractContent(responseBody)).isEqualTo("数组文本内容");
+    }
+
+    @Test
+    void extractContentShouldReportLengthFinishReason() {
+        OpenAiCompatibleAiClientService service = new OpenAiCompatibleAiClientService(
+                new AiClientProperties(),
+                new ObjectMapper());
+
+        String responseBody = """
+                {"choices":[{"finish_reason":"length","message":{"content":""}}]}
+                """;
+
+        assertThatThrownBy(() -> service.extractContent(responseBody))
+                .isInstanceOf(AiClientException.class)
+                .hasMessage("AI 响应中缺少文本内容，可能是 max_tokens 不足，请调大 OPENAI_MAX_TOKENS 后重试");
+    }
+
+    @Test
     void completeShouldRejectMissingApiKey() {
         AiClientProperties properties = new AiClientProperties();
         properties.setBaseUrl("http://localhost:8080/v1");

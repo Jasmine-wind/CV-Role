@@ -68,6 +68,14 @@ const router = createRouter({
       },
     },
     {
+      path: '/ai-job-matches',
+      name: 'ai-job-matches',
+      component: () => import('@/views/job/AiJobMatchView.vue'),
+      meta: {
+        requiresAuth: true,
+      },
+    },
+    {
       path: '/history',
       name: 'history',
       component: () => import('@/views/history/HistoryView.vue'),

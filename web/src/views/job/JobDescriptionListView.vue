@@ -1,13 +1,14 @@
 <script setup lang="ts">
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { getJobDescriptionList } from '@/api/job-description'
+import { deleteJobDescription, getJobDescriptionList } from '@/api/job-description'
 import type { JobDescriptionDetail } from '@/types/job-description'
 
 const router = useRouter()
 const records = ref<JobDescriptionDetail[]>([])
 const loading = ref(false)
+const deletingId = ref<number | null>(null)
 
 const loadRecords = async () => {
   loading.value = true
@@ -49,6 +50,30 @@ const statusText = (status: string) => {
   return '未解析'
 }
 
+const handleDelete = async (record: JobDescriptionDetail) => {
+  try {
+    await ElMessageBox.confirm(`确认删除「${record.title}」吗？关联的 AI 匹配结果也会一起删除。`, '删除岗位描述', {
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+  } catch {
+    return
+  }
+
+  deletingId.value = record.id
+
+  try {
+    await deleteJobDescription(record.id)
+    records.value = records.value.filter((item) => item.id !== record.id)
+    ElMessage.success('岗位描述删除成功')
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '岗位描述删除失败')
+  } finally {
+    deletingId.value = null
+  }
+}
+
 onMounted(() => {
   loadRecords()
 })
@@ -64,6 +89,7 @@ onMounted(() => {
         </div>
         <el-space>
           <el-button type="primary" @click="router.push('/job-descriptions/new')">新建岗位描述</el-button>
+          <el-button @click="router.push('/ai-job-matches')">AI 匹配</el-button>
           <el-button @click="router.push('/')">返回首页</el-button>
         </el-space>
       </header>
@@ -85,9 +111,27 @@ onMounted(() => {
             {{ formatDateTime(row.updatedAt) }}
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="120" fixed="right">
+        <el-table-column label="操作" width="250" fixed="right">
           <template #default="{ row }: { row: JobDescriptionDetail }">
-            <el-button size="small" type="primary" @click="router.push(`/job-descriptions/${row.id}`)">查看</el-button>
+            <el-space>
+              <el-button size="small" type="primary" @click="router.push(`/job-descriptions/${row.id}`)">查看</el-button>
+              <el-button
+                size="small"
+                :disabled="row.parseStatus !== 'SUCCESS'"
+                @click="router.push(`/ai-job-matches?jobDescriptionId=${row.id}`)"
+              >
+                匹配
+              </el-button>
+              <el-button
+                size="small"
+                type="danger"
+                :loading="deletingId === row.id"
+                :disabled="deletingId !== null && deletingId !== row.id"
+                @click="handleDelete(row)"
+              >
+                删除
+              </el-button>
+            </el-space>
           </template>
         </el-table-column>
       </el-table>

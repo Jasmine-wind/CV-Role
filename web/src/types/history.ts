@@ -10,6 +10,8 @@ export interface HistoryListItem {
   analysisStatus: string
   analysisScore: number | null
   latestJobId: number | null
+  latestJobDescriptionId: number | null
+  latestMatchSource: 'JOB' | 'AI_JOB_DESCRIPTION' | string | null
   latestJobTitle: string | null
   latestCompanyName: string | null
   latestMatchScore: number | null
@@ -52,7 +54,9 @@ export interface HistoryAiAnalysis {
 
 export interface HistoryMatchResult {
   matchId: number
-  jobId: number
+  jobId: number | null
+  jobDescriptionId: number | null
+  matchSource: 'JOB' | 'AI_JOB_DESCRIPTION' | string | null
   jobTitle: string | null
   companyName: string | null
   jobCategory: string | null

@@ -16,6 +16,12 @@ public class HistoryMatchResultVO {
     @Schema(description = "岗位 ID", example = "1")
     private Long jobId;
 
+    @Schema(description = "岗位描述 ID", example = "1")
+    private Long jobDescriptionId;
+
+    @Schema(description = "匹配来源", example = "AI_JOB_DESCRIPTION")
+    private String matchSource;
+
     @Schema(description = "岗位标题")
     private String jobTitle;
 
