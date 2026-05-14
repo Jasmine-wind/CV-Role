@@ -21,9 +21,12 @@ import com.winter.airesumeoptimizer.config.OpenApiConfig;
 import com.winter.airesumeoptimizer.config.SecurityConfig;
 import com.winter.airesumeoptimizer.module.analysis.controller.ResumeAnalysisController;
 import com.winter.airesumeoptimizer.module.analysis.dto.AiJobMatchRequestDTO;
+import com.winter.airesumeoptimizer.module.analysis.dto.AiResumeSuggestionRequestDTO;
 import com.winter.airesumeoptimizer.module.analysis.entity.AiJobMatchResult;
+import com.winter.airesumeoptimizer.module.analysis.entity.AiResumeSuggestion;
 import com.winter.airesumeoptimizer.module.analysis.entity.ResumeAiAnalysis;
 import com.winter.airesumeoptimizer.module.analysis.service.AiJobMatchService;
+import com.winter.airesumeoptimizer.module.analysis.service.AiResumeSuggestionService;
 import com.winter.airesumeoptimizer.module.analysis.service.ResumeAnalysisService;
 import com.winter.airesumeoptimizer.module.auth.controller.AuthController;
 import com.winter.airesumeoptimizer.module.auth.dto.LoginRequestDTO;
@@ -125,6 +128,9 @@ class Phase1ApiIntegrationTest {
 
     @MockitoBean
     private AiJobMatchService aiJobMatchService;
+
+    @MockitoBean
+    private AiResumeSuggestionService aiResumeSuggestionService;
 
     @MockitoBean
     private JobService jobService;
@@ -337,6 +343,21 @@ class Phase1ApiIntegrationTest {
                 .thenThrow(new BusinessException(404, "AI 岗位匹配结果不存在"));
         when(aiJobMatchService.match(1L, 101L, 10L))
                 .thenThrow(new BusinessException(400, "简历解析未成功，不能进行 AI 匹配"));
+        when(aiResumeSuggestionService.generate(1L, 100L, 10L, 400L))
+                .thenReturn(buildAiResumeSuggestion("SUCCESS"));
+        when(aiResumeSuggestionService.generate(1L, 100L, 11L, 401L))
+                .thenReturn(buildFailedAiResumeSuggestion());
+        when(aiResumeSuggestionService.generate(1L, 100L, 12L, 402L))
+                .thenThrow(new BusinessException(400, "AI 岗位匹配未成功，不能生成优化建议"));
+        when(aiResumeSuggestionService.listByResume(1L, 100L)).thenReturn(List.of(
+                buildAiResumeSuggestion("SUCCESS"),
+                buildFailedAiResumeSuggestion()));
+        when(aiResumeSuggestionService.getByResumeAndJobDescription(1L, 100L, 10L))
+                .thenReturn(buildAiResumeSuggestion("SUCCESS"));
+        when(aiResumeSuggestionService.getByResumeAndMatchResult(1L, 100L, 400L))
+                .thenReturn(buildAiResumeSuggestion("SUCCESS"));
+        when(aiResumeSuggestionService.getByResumeAndJobDescription(1L, 100L, 99L))
+                .thenThrow(new BusinessException(404, "AI 优化建议结果不存在"));
         when(jobMatchResultService.match(1L, 100L, 200L)).thenReturn(JobMatchResultVO.builder()
                 .matchId(300L)
                 .resumeId(100L)
@@ -462,6 +483,87 @@ class Phase1ApiIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(404))
                 .andExpect(jsonPath("$.message").value("AI 岗位匹配结果不存在"));
+
+        AiResumeSuggestionRequestDTO suggestionRequest = new AiResumeSuggestionRequestDTO();
+        suggestionRequest.setJobDescriptionId(10L);
+        suggestionRequest.setAiJobMatchResultId(400L);
+        mockMvc.perform(post("/api/resumes/100/ai-suggestions")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(suggestionRequest)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("AI 优化建议生成完成"))
+                .andExpect(jsonPath("$.data.suggestionId").value(500))
+                .andExpect(jsonPath("$.data.resumeId").value(100))
+                .andExpect(jsonPath("$.data.jobDescriptionId").value(10))
+                .andExpect(jsonPath("$.data.aiJobMatchResultId").value(400))
+                .andExpect(jsonPath("$.data.suggestionStatus").value("SUCCESS"))
+                .andExpect(jsonPath("$.data.suggestionCount").value(1));
+
+        suggestionRequest.setJobDescriptionId(11L);
+        suggestionRequest.setAiJobMatchResultId(401L);
+        mockMvc.perform(post("/api/resumes/100/ai-suggestions")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(suggestionRequest)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("AI 优化建议生成失败"))
+                .andExpect(jsonPath("$.data.suggestionStatus").value("FAILED"))
+                .andExpect(jsonPath("$.data.suggestionCount").value(0))
+                .andExpect(jsonPath("$.data.errorMessage").value("AI 优化建议结果不是合法 JSON"));
+
+        suggestionRequest.setJobDescriptionId(12L);
+        suggestionRequest.setAiJobMatchResultId(402L);
+        mockMvc.perform(post("/api/resumes/100/ai-suggestions")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(suggestionRequest)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(400))
+                .andExpect(jsonPath("$.message").value("AI 岗位匹配未成功，不能生成优化建议"));
+
+        suggestionRequest.setJobDescriptionId(null);
+        suggestionRequest.setAiJobMatchResultId(400L);
+        mockMvc.perform(post("/api/resumes/100/ai-suggestions")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(suggestionRequest)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(400))
+                .andExpect(jsonPath("$.message").value("岗位描述 ID 不能为空"));
+
+        mockMvc.perform(get("/api/resumes/100/ai-suggestions")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data", hasSize(2)))
+                .andExpect(jsonPath("$.data[0].suggestionId").value(500))
+                .andExpect(jsonPath("$.data[0].suggestions[0].type").value("SKILL_GAP"))
+                .andExpect(jsonPath("$.data[1].suggestionStatus").value("FAILED"))
+                .andExpect(jsonPath("$.data[1].errorMessage").value("AI 优化建议结果不是合法 JSON"));
+
+        mockMvc.perform(get("/api/resumes/100/ai-suggestions")
+                        .param("jobDescriptionId", "10")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.suggestionId").value(500))
+                .andExpect(jsonPath("$.data.jobDescriptionId").value(10))
+                .andExpect(jsonPath("$.data.aiJobMatchResultId").value(400))
+                .andExpect(jsonPath("$.data.suggestions[0].priority").value("HIGH"));
+
+        mockMvc.perform(get("/api/resumes/100/ai-suggestions")
+                        .param("aiJobMatchResultId", "400")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.suggestionId").value(500))
+                .andExpect(jsonPath("$.data.aiJobMatchResultId").value(400))
+                .andExpect(jsonPath("$.data.promptVersion").value("resume_suggestion_v1"));
+
+        mockMvc.perform(get("/api/resumes/100/ai-suggestions")
+                        .param("jobDescriptionId", "99")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(404))
+                .andExpect(jsonPath("$.message").value("AI 优化建议结果不存在"));
 
         JobMatchRequestDTO requestDTO = new JobMatchRequestDTO();
         requestDTO.setJobId(200L);
@@ -651,5 +753,35 @@ class Phase1ApiIntegrationTest {
         result.setErrorMessage("AI 匹配结果不是合法 JSON");
         result.setUpdatedAt(LocalDateTime.now());
         return result;
+    }
+
+    private AiResumeSuggestion buildAiResumeSuggestion(String status) {
+        AiResumeSuggestion suggestion = new AiResumeSuggestion();
+        suggestion.setId(500L);
+        suggestion.setResumeId(100L);
+        suggestion.setJobDescriptionId(10L);
+        suggestion.setAiJobMatchResultId(400L);
+        suggestion.setSuggestionStatus(status);
+        suggestion.setSuggestions("""
+                [{"type":"SKILL_GAP","priority":"HIGH","targetSection":"技能","issue":"缺少 Docker","suggestion":"如果真实掌握 Docker，补充项目实践。","evidence":["岗位要求 Docker"],"caution":"不要虚构技能","relatedItems":["Docker"]}]
+                """);
+        suggestion.setModelName("test-model");
+        suggestion.setPromptVersion("resume_suggestion_v1");
+        suggestion.setUpdatedAt(LocalDateTime.now());
+        return suggestion;
+    }
+
+    private AiResumeSuggestion buildFailedAiResumeSuggestion() {
+        AiResumeSuggestion suggestion = new AiResumeSuggestion();
+        suggestion.setId(501L);
+        suggestion.setResumeId(100L);
+        suggestion.setJobDescriptionId(11L);
+        suggestion.setAiJobMatchResultId(401L);
+        suggestion.setSuggestionStatus("FAILED");
+        suggestion.setModelName("test-model");
+        suggestion.setPromptVersion("resume_suggestion_v1");
+        suggestion.setErrorMessage("AI 优化建议结果不是合法 JSON");
+        suggestion.setUpdatedAt(LocalDateTime.now());
+        return suggestion;
     }
 }

@@ -3,9 +3,11 @@ import { ElMessage } from 'element-plus'
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { getAiJobMatch, getAiJobMatches, triggerAiJobMatch } from '@/api/ai-job-match'
+import { getAiResumeSuggestionByMatchResult, triggerAiResumeSuggestion } from '@/api/ai-resume-suggestion'
 import { getJobDescriptionList } from '@/api/job-description'
 import { getResumeList, getResumeParseResult } from '@/api/resume'
 import type { AiJobMatchResult } from '@/types/ai-job-match'
+import type { AiResumeSuggestionItem, AiResumeSuggestionResult } from '@/types/ai-resume-suggestion'
 import type { JobDescriptionDetail } from '@/types/job-description'
 import type { ResumeListItem, ResumeParseResult } from '@/types/resume'
 
@@ -18,11 +20,14 @@ const selectedResumeId = ref<number | null>(null)
 const selectedJobDescriptionId = ref<number | null>(null)
 const selectedResumeParseResult = ref<ResumeParseResult | null>(null)
 const selectedMatch = ref<AiJobMatchResult | null>(null)
+const selectedSuggestion = ref<AiResumeSuggestionResult | null>(null)
 const matchResults = ref<AiJobMatchResult[]>([])
 const loading = ref(false)
 const loadingResumeParse = ref(false)
 const matching = ref(false)
 const loadingResult = ref(false)
+const generatingSuggestion = ref(false)
+const loadingSuggestion = ref(false)
 
 const parsedJobDescriptions = computed(() => {
   return jobDescriptions.value.filter((item) => item.parseStatus === 'SUCCESS')
@@ -38,6 +43,43 @@ const selectedJobDescription = computed(() => {
 
 const canMatch = computed(() => {
   return Boolean(selectedResumeId.value && selectedJobDescriptionId.value && selectedJobDescription.value?.parseStatus === 'SUCCESS')
+})
+
+const canGenerateSuggestion = computed(() => {
+  return Boolean(
+    selectedResumeId.value
+    && selectedJobDescriptionId.value
+    && selectedMatch.value?.matchId
+    && selectedMatch.value.matchStatus === 'SUCCESS',
+  )
+})
+
+const highPrioritySuggestions = computed(() => {
+  return suggestionsByPriority('HIGH')
+})
+
+const skillGapSuggestions = computed(() => {
+  return suggestionsByType('SKILL_GAP')
+})
+
+const experienceSuggestions = computed(() => {
+  return selectedSuggestion.value?.suggestions.filter((item) => {
+    return item.type === 'EXPERIENCE_WEAKNESS' || item.type === 'PROJECT_DESCRIPTION'
+  }) ?? []
+})
+
+const strengthSuggestions = computed(() => {
+  return suggestionsByType('HIGHLIGHT_STRENGTH')
+})
+
+const generalSuggestions = computed(() => {
+  return selectedSuggestion.value?.suggestions.filter((item) => {
+    return item.type === 'STRUCTURE' || item.type === 'GENERAL'
+  }) ?? []
+})
+
+const strengthAndGeneralSuggestions = computed(() => {
+  return [...strengthSuggestions.value, ...generalSuggestions.value]
 })
 
 const formatDateTime = (value: string | null) => {
@@ -71,6 +113,67 @@ const resolveMatchStatusType = (status: string | null | undefined) => {
   return 'info'
 }
 
+const resolveSuggestionStatusText = (status: string | null | undefined) => {
+  if (status === 'SUCCESS') {
+    return '建议生成成功'
+  }
+  if (status === 'FAILED') {
+    return '建议生成失败'
+  }
+  if (status === 'PENDING') {
+    return '待生成'
+  }
+  return status || '-'
+}
+
+const resolveSuggestionStatusType = (status: string | null | undefined) => {
+  if (status === 'SUCCESS') {
+    return 'success'
+  }
+  if (status === 'FAILED') {
+    return 'danger'
+  }
+  return 'info'
+}
+
+const resolveSuggestionTypeText = (type: string | null | undefined) => {
+  const typeMap: Record<string, string> = {
+    SKILL_GAP: '技能缺口',
+    EXPERIENCE_WEAKNESS: '经历表达不足',
+    PROJECT_DESCRIPTION: '项目描述优化',
+    HIGHLIGHT_STRENGTH: '优势突出',
+    STRUCTURE: '结构优化',
+    GENERAL: '综合建议',
+  }
+  return type ? typeMap[type] || type : '-'
+}
+
+const resolvePriorityType = (priority: string | null | undefined) => {
+  if (priority === 'HIGH') {
+    return 'danger'
+  }
+  if (priority === 'MEDIUM') {
+    return 'warning'
+  }
+  if (priority === 'LOW') {
+    return 'info'
+  }
+  return 'info'
+}
+
+const resolvePriorityText = (priority: string | null | undefined) => {
+  if (priority === 'HIGH') {
+    return '高优先级'
+  }
+  if (priority === 'MEDIUM') {
+    return '中优先级'
+  }
+  if (priority === 'LOW') {
+    return '低优先级'
+  }
+  return priority || '-'
+}
+
 const resolveParseStatusText = (status: string | null | undefined) => {
   if (status === 'SUCCESS') {
     return '已解析'
@@ -79,6 +182,18 @@ const resolveParseStatusText = (status: string | null | undefined) => {
     return '解析失败'
   }
   return status || '未解析'
+}
+
+const suggestionKey = (suggestion: AiResumeSuggestionItem, index: number) => {
+  return `${suggestion.type}-${suggestion.priority}-${suggestion.issue}-${index}`
+}
+
+const suggestionsByType = (type: string) => {
+  return selectedSuggestion.value?.suggestions.filter((item) => item.type === type) ?? []
+}
+
+const suggestionsByPriority = (priority: string) => {
+  return selectedSuggestion.value?.suggestions.filter((item) => item.priority === priority) ?? []
 }
 
 const loadInitialData = async () => {
@@ -137,6 +252,7 @@ const loadSelectedResumeParseResult = async () => {
 
 const loadCurrentMatch = async () => {
   selectedMatch.value = null
+  selectedSuggestion.value = null
   matchResults.value = []
   if (!selectedResumeId.value) {
     return
@@ -151,13 +267,35 @@ const loadCurrentMatch = async () => {
     } else {
       selectedMatch.value = matchResults.value[0] || null
     }
+    await loadCurrentSuggestion()
   } catch (error) {
     selectedMatch.value = null
+    selectedSuggestion.value = null
     if (error instanceof Error && error.message !== 'AI 岗位匹配结果不存在') {
       ElMessage.warning(error.message)
     }
   } finally {
     loadingResult.value = false
+  }
+}
+
+const loadCurrentSuggestion = async () => {
+  selectedSuggestion.value = null
+  if (!selectedResumeId.value || !selectedMatch.value?.matchId) {
+    return
+  }
+
+  loadingSuggestion.value = true
+
+  try {
+    selectedSuggestion.value = await getAiResumeSuggestionByMatchResult(selectedResumeId.value, selectedMatch.value.matchId)
+  } catch (error) {
+    selectedSuggestion.value = null
+    if (error instanceof Error && error.message !== 'AI 优化建议结果不存在') {
+      ElMessage.warning(error.message)
+    }
+  } finally {
+    loadingSuggestion.value = false
   }
 }
 
@@ -197,6 +335,37 @@ const handleMatch = async () => {
     ElMessage.error(error instanceof Error ? error.message : 'AI 岗位匹配失败')
   } finally {
     matching.value = false
+  }
+}
+
+const handleGenerateSuggestion = async () => {
+  if (!selectedResumeId.value || !selectedJobDescriptionId.value || !selectedMatch.value?.matchId) {
+    ElMessage.warning('请先完成 AI 岗位匹配')
+    return
+  }
+
+  if (selectedMatch.value.matchStatus !== 'SUCCESS') {
+    ElMessage.warning('AI 岗位匹配成功后才能生成优化建议')
+    return
+  }
+
+  generatingSuggestion.value = true
+
+  try {
+    const triggerResult = await triggerAiResumeSuggestion(selectedResumeId.value, {
+      jobDescriptionId: selectedJobDescriptionId.value,
+      aiJobMatchResultId: selectedMatch.value.matchId,
+    })
+    if (triggerResult.suggestionStatus === 'FAILED') {
+      ElMessage.error(triggerResult.errorMessage || 'AI 优化建议生成失败')
+    } else {
+      ElMessage.success('AI 优化建议生成完成')
+    }
+    await loadCurrentSuggestion()
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : 'AI 优化建议生成失败')
+  } finally {
+    generatingSuggestion.value = false
   }
 }
 
@@ -336,6 +505,180 @@ onMounted(() => {
               :closable="false"
               show-icon
             />
+
+            <section class="ai-match-suggestion-panel">
+              <div class="ai-match-suggestion-header">
+                <div>
+                  <h2 class="ai-match-section-title">简历优化建议</h2>
+                  <p class="ai-match-suggestion-note">AI 建议需用户确认，不应直接伪造经历、技能、证书、奖项或量化指标。</p>
+                </div>
+                <el-space>
+                  <el-button
+                    type="primary"
+                    :loading="generatingSuggestion"
+                    :disabled="!canGenerateSuggestion"
+                    @click="handleGenerateSuggestion"
+                  >
+                    生成优化建议
+                  </el-button>
+                  <el-button
+                    :loading="loadingSuggestion"
+                    :disabled="!selectedMatch?.matchId"
+                    @click="loadCurrentSuggestion"
+                  >
+                    刷新建议
+                  </el-button>
+                </el-space>
+              </div>
+
+              <el-alert
+                v-if="selectedMatch.matchStatus !== 'SUCCESS'"
+                class="ai-match-alert"
+                title="请先完成成功的 AI 岗位匹配，再生成优化建议。"
+                type="warning"
+                :closable="false"
+                show-icon
+              />
+
+              <section v-loading="loadingSuggestion" class="ai-match-suggestion-body">
+                <el-empty
+                  v-if="!selectedSuggestion"
+                  description="暂无优化建议"
+                  :image-size="72"
+                />
+
+                <template v-else>
+                  <el-descriptions :column="2" border class="ai-match-descriptions">
+                    <el-descriptions-item label="建议状态">
+                      <el-tag :type="resolveSuggestionStatusType(selectedSuggestion.suggestionStatus)">
+                        {{ resolveSuggestionStatusText(selectedSuggestion.suggestionStatus) }}
+                      </el-tag>
+                    </el-descriptions-item>
+                    <el-descriptions-item label="建议数量">{{ selectedSuggestion.suggestions.length }}</el-descriptions-item>
+                    <el-descriptions-item label="模型">{{ selectedSuggestion.modelName || '-' }}</el-descriptions-item>
+                    <el-descriptions-item label="生成时间">{{ formatDateTime(selectedSuggestion.updatedAt) }}</el-descriptions-item>
+                  </el-descriptions>
+
+                  <el-alert
+                    v-if="selectedSuggestion.suggestionStatus === 'FAILED'"
+                    class="ai-match-alert"
+                    :title="selectedSuggestion.errorMessage || 'AI 优化建议生成失败'"
+                    type="error"
+                    :closable="false"
+                    show-icon
+                  />
+
+                  <section class="ai-match-suggestion-groups">
+                    <div class="ai-match-block">
+                      <h3 class="ai-match-section-title">高优先级建议</h3>
+                      <div v-if="highPrioritySuggestions.length" class="ai-match-suggestion-list">
+                        <article
+                          v-for="(suggestion, index) in highPrioritySuggestions"
+                          :key="suggestionKey(suggestion, index)"
+                          class="ai-match-suggestion-item"
+                        >
+                          <div class="ai-match-suggestion-tags">
+                            <el-tag size="small">{{ resolveSuggestionTypeText(suggestion.type) }}</el-tag>
+                            <el-tag size="small" :type="resolvePriorityType(suggestion.priority)">
+                              {{ resolvePriorityText(suggestion.priority) }}
+                            </el-tag>
+                            <el-tag v-if="suggestion.targetSection" size="small" type="info">
+                              {{ suggestion.targetSection }}
+                            </el-tag>
+                          </div>
+                          <p><strong>问题：</strong>{{ suggestion.issue || '-' }}</p>
+                          <p><strong>建议：</strong>{{ suggestion.suggestion || '-' }}</p>
+                          <div v-if="suggestion.evidence.length" class="ai-match-suggestion-evidence">
+                            <strong>依据：</strong>
+                            <span v-for="evidence in suggestion.evidence" :key="evidence">{{ evidence }}</span>
+                          </div>
+                          <p v-if="suggestion.caution" class="ai-match-suggestion-caution">
+                            <strong>注意：</strong>{{ suggestion.caution }}
+                          </p>
+                        </article>
+                      </div>
+                      <el-empty v-else description="暂无高优先级建议" :image-size="64" />
+                    </div>
+
+                    <div class="ai-match-block">
+                      <h3 class="ai-match-section-title">技能缺口建议</h3>
+                      <div v-if="skillGapSuggestions.length" class="ai-match-suggestion-list">
+                        <article
+                          v-for="(suggestion, index) in skillGapSuggestions"
+                          :key="suggestionKey(suggestion, index)"
+                          class="ai-match-suggestion-item"
+                        >
+                          <div class="ai-match-suggestion-tags">
+                            <el-tag size="small">{{ resolveSuggestionTypeText(suggestion.type) }}</el-tag>
+                            <el-tag size="small" :type="resolvePriorityType(suggestion.priority)">
+                              {{ resolvePriorityText(suggestion.priority) }}
+                            </el-tag>
+                          </div>
+                          <p><strong>问题：</strong>{{ suggestion.issue || '-' }}</p>
+                          <p><strong>建议：</strong>{{ suggestion.suggestion || '-' }}</p>
+                          <div v-if="suggestion.relatedItems.length" class="ai-match-related-items">
+                            <el-tag v-for="item in suggestion.relatedItems" :key="item" size="small" type="warning">{{ item }}</el-tag>
+                          </div>
+                        </article>
+                      </div>
+                      <el-empty v-else description="暂无技能缺口建议" :image-size="64" />
+                    </div>
+
+                    <div class="ai-match-block">
+                      <h3 class="ai-match-section-title">经历表达建议</h3>
+                      <div v-if="experienceSuggestions.length" class="ai-match-suggestion-list">
+                        <article
+                          v-for="(suggestion, index) in experienceSuggestions"
+                          :key="suggestionKey(suggestion, index)"
+                          class="ai-match-suggestion-item"
+                        >
+                          <div class="ai-match-suggestion-tags">
+                            <el-tag size="small">{{ resolveSuggestionTypeText(suggestion.type) }}</el-tag>
+                            <el-tag size="small" :type="resolvePriorityType(suggestion.priority)">
+                              {{ resolvePriorityText(suggestion.priority) }}
+                            </el-tag>
+                            <el-tag v-if="suggestion.targetSection" size="small" type="info">
+                              {{ suggestion.targetSection }}
+                            </el-tag>
+                          </div>
+                          <p><strong>问题：</strong>{{ suggestion.issue || '-' }}</p>
+                          <p><strong>建议：</strong>{{ suggestion.suggestion || '-' }}</p>
+                          <div v-if="suggestion.evidence.length" class="ai-match-suggestion-evidence">
+                            <strong>依据：</strong>
+                            <span v-for="evidence in suggestion.evidence" :key="evidence">{{ evidence }}</span>
+                          </div>
+                        </article>
+                      </div>
+                      <el-empty v-else description="暂无经历表达建议" :image-size="64" />
+                    </div>
+
+                    <div class="ai-match-block">
+                      <h3 class="ai-match-section-title">优势与综合建议</h3>
+                      <div v-if="strengthAndGeneralSuggestions.length" class="ai-match-suggestion-list">
+                        <article
+                          v-for="(suggestion, index) in strengthAndGeneralSuggestions"
+                          :key="suggestionKey(suggestion, index)"
+                          class="ai-match-suggestion-item"
+                        >
+                          <div class="ai-match-suggestion-tags">
+                            <el-tag size="small">{{ resolveSuggestionTypeText(suggestion.type) }}</el-tag>
+                            <el-tag size="small" :type="resolvePriorityType(suggestion.priority)">
+                              {{ resolvePriorityText(suggestion.priority) }}
+                            </el-tag>
+                          </div>
+                          <p><strong>问题：</strong>{{ suggestion.issue || '-' }}</p>
+                          <p><strong>建议：</strong>{{ suggestion.suggestion || '-' }}</p>
+                          <p v-if="suggestion.caution" class="ai-match-suggestion-caution">
+                            <strong>注意：</strong>{{ suggestion.caution }}
+                          </p>
+                        </article>
+                      </div>
+                      <el-empty v-else description="暂无优势或综合建议" :image-size="64" />
+                    </div>
+                  </section>
+                </template>
+              </section>
+            </section>
 
             <section class="ai-match-grid">
               <div class="ai-match-block">
@@ -501,6 +844,33 @@ onMounted(() => {
   margin-top: 24px;
 }
 
+.ai-match-suggestion-panel {
+  margin-top: 24px;
+  padding: 18px;
+  border: 1px solid #e5ebf3;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.ai-match-suggestion-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.ai-match-suggestion-note {
+  margin: 0;
+  color: #667085;
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.ai-match-suggestion-body {
+  min-height: 120px;
+  margin-top: 16px;
+}
+
 .ai-match-summary {
   display: grid;
   grid-template-columns: 180px minmax(0, 1fr);
@@ -565,6 +935,60 @@ onMounted(() => {
   font-weight: 700;
 }
 
+.ai-match-suggestion-groups {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+  margin-top: 20px;
+}
+
+.ai-match-suggestion-list {
+  display: grid;
+  gap: 12px;
+}
+
+.ai-match-suggestion-item {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid #e5ebf3;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.ai-match-suggestion-item p {
+  margin: 0;
+  color: #344054;
+  line-height: 1.7;
+}
+
+.ai-match-suggestion-item strong {
+  color: #111827;
+}
+
+.ai-match-suggestion-tags,
+.ai-match-related-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ai-match-suggestion-evidence {
+  display: grid;
+  gap: 6px;
+  color: #344054;
+  line-height: 1.7;
+}
+
+.ai-match-suggestion-evidence span {
+  padding-left: 10px;
+  border-left: 3px solid #d0d5dd;
+}
+
+.ai-match-suggestion-caution {
+  color: #b42318 !important;
+}
+
 @media (max-width: 760px) {
   .ai-match-header,
   .ai-match-summary {
@@ -574,8 +998,13 @@ onMounted(() => {
   }
 
   .ai-match-selectors,
-  .ai-match-grid {
+  .ai-match-grid,
+  .ai-match-suggestion-groups {
     grid-template-columns: 1fr;
+  }
+
+  .ai-match-suggestion-header {
+    flex-direction: column;
   }
 }
 </style>

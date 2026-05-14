@@ -9,12 +9,18 @@ import com.winter.airesumeoptimizer.module.analysis.dto.AiJobMatchRequestDTO;
 import com.winter.airesumeoptimizer.module.analysis.dto.AiJobMatchEvidenceDTO;
 import com.winter.airesumeoptimizer.module.analysis.dto.AiJobMatchItemDTO;
 import com.winter.airesumeoptimizer.module.analysis.dto.AiJobMatchWeakExperienceDTO;
+import com.winter.airesumeoptimizer.module.analysis.dto.AiResumeSuggestionItemDTO;
+import com.winter.airesumeoptimizer.module.analysis.dto.AiResumeSuggestionRequestDTO;
 import com.winter.airesumeoptimizer.module.analysis.entity.AiJobMatchResult;
+import com.winter.airesumeoptimizer.module.analysis.entity.AiResumeSuggestion;
 import com.winter.airesumeoptimizer.module.analysis.entity.ResumeAiAnalysis;
 import com.winter.airesumeoptimizer.module.analysis.service.AiJobMatchService;
+import com.winter.airesumeoptimizer.module.analysis.service.AiResumeSuggestionService;
 import com.winter.airesumeoptimizer.module.analysis.service.ResumeAnalysisService;
 import com.winter.airesumeoptimizer.module.analysis.vo.AiJobMatchResultVO;
 import com.winter.airesumeoptimizer.module.analysis.vo.AiJobMatchTriggerVO;
+import com.winter.airesumeoptimizer.module.analysis.vo.AiResumeSuggestionTriggerVO;
+import com.winter.airesumeoptimizer.module.analysis.vo.AiResumeSuggestionVO;
 import com.winter.airesumeoptimizer.module.analysis.vo.ResumeAiAnalysisVO;
 import com.winter.airesumeoptimizer.module.analysis.vo.ResumeAiAnalysisTriggerVO;
 import com.winter.airesumeoptimizer.security.AuthenticatedUser;
@@ -43,14 +49,17 @@ public class ResumeAnalysisController {
 
     private final ResumeAnalysisService resumeAnalysisService;
     private final AiJobMatchService aiJobMatchService;
+    private final AiResumeSuggestionService aiResumeSuggestionService;
     private final ObjectMapper objectMapper;
 
     public ResumeAnalysisController(
             ResumeAnalysisService resumeAnalysisService,
             AiJobMatchService aiJobMatchService,
+            AiResumeSuggestionService aiResumeSuggestionService,
             ObjectMapper objectMapper) {
         this.resumeAnalysisService = resumeAnalysisService;
         this.aiJobMatchService = aiJobMatchService;
+        this.aiResumeSuggestionService = aiResumeSuggestionService;
         this.objectMapper = objectMapper;
     }
 
@@ -88,6 +97,62 @@ public class ResumeAnalysisController {
                 request.getJobDescriptionId());
         String message = "FAILED".equals(matchResult.getMatchStatus()) ? "AI 岗位匹配失败" : "AI 岗位匹配完成";
         return Result.success(message, toAiJobMatchTriggerVO(matchResult));
+    }
+
+    @PostMapping("/{id}/ai-suggestions")
+    @Operation(summary = "触发 AI 简历优化建议", description = "基于成功的 AI 岗位匹配结果生成简历优化建议")
+    public Result<AiResumeSuggestionTriggerVO> suggestResumeOptimization(
+            @PathVariable @Positive(message = "简历 ID 必须大于 0") Long id,
+            @Valid @RequestBody AiResumeSuggestionRequestDTO request,
+            Authentication authentication) {
+        AuthenticatedUser authenticatedUser = (AuthenticatedUser) authentication.getPrincipal();
+        AiResumeSuggestion suggestion = aiResumeSuggestionService.generate(
+                authenticatedUser.getUserId(),
+                id,
+                request.getJobDescriptionId(),
+                request.getAiJobMatchResultId());
+        String message = "FAILED".equals(suggestion.getSuggestionStatus()) ? "AI 优化建议生成失败" : "AI 优化建议生成完成";
+        return Result.success(message, toAiResumeSuggestionTriggerVO(suggestion));
+    }
+
+    @GetMapping(value = "/{id}/ai-suggestions", params = "jobDescriptionId")
+    @Operation(summary = "查询指定 AI 简历优化建议", description = "按简历和岗位描述查询当前用户的 AI 优化建议")
+    public Result<AiResumeSuggestionVO> aiResumeSuggestionDetail(
+            @PathVariable @Positive(message = "简历 ID 必须大于 0") Long id,
+            @RequestParam @Positive(message = "岗位描述 ID 必须大于 0") Long jobDescriptionId,
+            Authentication authentication) {
+        AuthenticatedUser authenticatedUser = (AuthenticatedUser) authentication.getPrincipal();
+        AiResumeSuggestion suggestion = aiResumeSuggestionService.getByResumeAndJobDescription(
+                authenticatedUser.getUserId(),
+                id,
+                jobDescriptionId);
+        return Result.success(toAiResumeSuggestionVO(suggestion));
+    }
+
+    @GetMapping(value = "/{id}/ai-suggestions", params = "aiJobMatchResultId")
+    @Operation(summary = "查询指定 AI 简历优化建议", description = "按简历和 AI 匹配结果查询当前用户的 AI 优化建议")
+    public Result<AiResumeSuggestionVO> aiResumeSuggestionByMatchResult(
+            @PathVariable @Positive(message = "简历 ID 必须大于 0") Long id,
+            @RequestParam @Positive(message = "AI 匹配结果 ID 必须大于 0") Long aiJobMatchResultId,
+            Authentication authentication) {
+        AuthenticatedUser authenticatedUser = (AuthenticatedUser) authentication.getPrincipal();
+        AiResumeSuggestion suggestion = aiResumeSuggestionService.getByResumeAndMatchResult(
+                authenticatedUser.getUserId(),
+                id,
+                aiJobMatchResultId);
+        return Result.success(toAiResumeSuggestionVO(suggestion));
+    }
+
+    @GetMapping("/{id}/ai-suggestions")
+    @Operation(summary = "查询 AI 简历优化建议列表", description = "查询指定简历下当前用户的 AI 优化建议列表")
+    public Result<List<AiResumeSuggestionVO>> aiResumeSuggestionList(
+            @PathVariable @Positive(message = "简历 ID 必须大于 0") Long id,
+            Authentication authentication) {
+        AuthenticatedUser authenticatedUser = (AuthenticatedUser) authentication.getPrincipal();
+        return Result.success(aiResumeSuggestionService.listByResume(authenticatedUser.getUserId(), id)
+                .stream()
+                .map(this::toAiResumeSuggestionVO)
+                .toList());
     }
 
     @GetMapping(value = "/{id}/ai-job-matches", params = "jobDescriptionId")
@@ -139,6 +204,34 @@ public class ResumeAnalysisController {
                 .promptVersion(matchResult.getPromptVersion())
                 .errorMessage(matchResult.getErrorMessage())
                 .updatedAt(matchResult.getUpdatedAt())
+                .build();
+    }
+
+    private AiResumeSuggestionTriggerVO toAiResumeSuggestionTriggerVO(AiResumeSuggestion suggestion) {
+        return AiResumeSuggestionTriggerVO.builder()
+                .suggestionId(suggestion.getId())
+                .resumeId(suggestion.getResumeId())
+                .jobDescriptionId(suggestion.getJobDescriptionId())
+                .aiJobMatchResultId(suggestion.getAiJobMatchResultId())
+                .suggestionStatus(suggestion.getSuggestionStatus())
+                .suggestionCount(readSuggestionCount(suggestion.getSuggestions()))
+                .errorMessage(suggestion.getErrorMessage())
+                .updatedAt(suggestion.getUpdatedAt())
+                .build();
+    }
+
+    private AiResumeSuggestionVO toAiResumeSuggestionVO(AiResumeSuggestion suggestion) {
+        return AiResumeSuggestionVO.builder()
+                .suggestionId(suggestion.getId())
+                .resumeId(suggestion.getResumeId())
+                .jobDescriptionId(suggestion.getJobDescriptionId())
+                .aiJobMatchResultId(suggestion.getAiJobMatchResultId())
+                .suggestionStatus(suggestion.getSuggestionStatus())
+                .suggestions(readSuggestionList(suggestion.getSuggestions()))
+                .modelName(suggestion.getModelName())
+                .promptVersion(suggestion.getPromptVersion())
+                .errorMessage(suggestion.getErrorMessage())
+                .updatedAt(suggestion.getUpdatedAt())
                 .build();
     }
 
@@ -234,6 +327,30 @@ public class ResumeAnalysisController {
             });
         } catch (JsonProcessingException exception) {
             throw new BusinessException(500, "AI 岗位匹配结果格式不正确");
+        }
+    }
+
+    private Integer readSuggestionCount(String value) {
+        if (value == null || value.isBlank()) {
+            return 0;
+        }
+        try {
+            return objectMapper.readValue(value, new TypeReference<List<AiResumeSuggestionItemDTO>>() {
+            }).size();
+        } catch (JsonProcessingException exception) {
+            throw new BusinessException(500, "AI 优化建议结果格式不正确");
+        }
+    }
+
+    private List<AiResumeSuggestionItemDTO> readSuggestionList(String value) {
+        if (value == null || value.isBlank()) {
+            return List.of();
+        }
+        try {
+            return objectMapper.readValue(value, new TypeReference<List<AiResumeSuggestionItemDTO>>() {
+            });
+        } catch (JsonProcessingException exception) {
+            throw new BusinessException(500, "AI 优化建议结果格式不正确");
         }
     }
 }
