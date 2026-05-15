@@ -60,6 +60,7 @@ public class SecurityConfig {
                                 "/api/users/me",
                                 "/api/resumes/**",
                                 "/api/rewrite-suggestions/**",
+                                "/api/ai-results/**",
                                 "/api/history/**",
                                 "/api/job-descriptions/**").authenticated()
                         .anyRequest().permitAll())

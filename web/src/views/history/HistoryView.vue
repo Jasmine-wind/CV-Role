@@ -2,21 +2,49 @@
 import { ElMessage } from 'element-plus'
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { getHistoryDetail, getHistoryPage } from '@/api/history'
-import type { HistoryDetail, HistoryListItem, HistoryMatchResult } from '@/types/history'
+import { getAiResultDetail, getAiResultPage } from '@/api/history'
+import type { AiResultDetail, AiResultRecord } from '@/types/history'
 
 const router = useRouter()
 
-const records = ref<HistoryListItem[]>([])
-const activeDetail = ref<HistoryDetail | null>(null)
+const records = ref<AiResultRecord[]>([])
+const activeDetail = ref<AiResultDetail | null>(null)
 const loading = ref(false)
 const loadingDetail = ref(false)
 const detailVisible = ref(false)
 const page = ref(1)
 const size = ref(10)
 const total = ref(0)
+const resultType = ref('')
+const status = ref('')
+const resumeIdInput = ref('')
+const jobDescriptionIdInput = ref('')
+
+const resultTypeOptions = [
+  { label: '全部类型', value: '' },
+  { label: '简历诊断', value: 'RESUME_DIAGNOSIS' },
+  { label: '目标岗位解析', value: 'TARGET_JOB_PARSE' },
+  { label: '匹配分析', value: 'MATCH_ANALYSIS' },
+  { label: '岗位优化建议', value: 'JOB_OPTIMIZATION_SUGGESTION' },
+  { label: '局部改写', value: 'LOCAL_REWRITE' },
+]
+
+const statusOptions = [
+  { label: '全部状态', value: '' },
+  { label: '处理中', value: 'PENDING' },
+  { label: '成功', value: 'SUCCESS' },
+  { label: '失败', value: 'FAILED' },
+]
 
 const hasRecords = computed(() => records.value.length > 0)
+
+const detailEntries = computed(() => {
+  if (!activeDetail.value?.content) {
+    return []
+  }
+
+  return Object.entries(activeDetail.value.content)
+})
 
 const formatDateTime = (value: string | null | undefined) => {
   if (!value) {
@@ -26,62 +54,108 @@ const formatDateTime = (value: string | null | undefined) => {
   return value.replace('T', ' ').slice(0, 19)
 }
 
-const formatFileSize = (value: number | null | undefined) => {
-  if (!value) {
-    return '-'
+const parseOptionalId = (value: string) => {
+  const trimmed = value.trim()
+  if (!trimmed) {
+    return undefined
   }
 
-  if (value >= 1024 * 1024) {
-    return `${(value / 1024 / 1024).toFixed(2)} MB`
-  }
-
-  return `${(value / 1024).toFixed(1)} KB`
+  const parsed = Number(trimmed)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined
 }
 
-const resolveParseStatusText = (status: string | null | undefined) => {
+const resolveResultTypeText = (type: string | null | undefined) => {
+  const typeMap: Record<string, string> = {
+    RESUME_DIAGNOSIS: '简历诊断',
+    TARGET_JOB_PARSE: '目标岗位解析',
+    MATCH_ANALYSIS: '匹配分析',
+    JOB_OPTIMIZATION_SUGGESTION: '岗位优化建议',
+    LOCAL_REWRITE: '局部改写',
+  }
+
+  return type ? (typeMap[type] ?? type) : '-'
+}
+
+const resolveStatusText = (value: string | null | undefined) => {
   const statusMap: Record<string, string> = {
-    NOT_STARTED: '未解析',
-    PENDING: '待解析',
-    PROCESSING: '解析中',
-    SUCCESS: '解析成功',
-    FAILED: '解析失败',
+    PENDING: '处理中',
+    SUCCESS: '成功',
+    FAILED: '失败',
   }
 
-  return status ? (statusMap[status] ?? status) : '未解析'
+  return value ? (statusMap[value] ?? value) : '-'
 }
 
-const resolveAnalysisStatusText = (status: string | null | undefined) => {
-  const statusMap: Record<string, string> = {
-    NOT_STARTED: '未分析',
-    PENDING: '待分析',
-    SUCCESS: '分析成功',
-    FAILED: '分析失败',
-  }
-
-  return status ? (statusMap[status] ?? status) : '未分析'
-}
-
-const resolveStatusType = (status: string | null | undefined) => {
-  if (status === 'SUCCESS') {
+const resolveStatusType = (value: string | null | undefined) => {
+  if (value === 'SUCCESS') {
     return 'success'
   }
 
-  if (status === 'FAILED') {
+  if (value === 'FAILED') {
     return 'danger'
   }
 
-  if (status === 'PENDING' || status === 'PROCESSING') {
+  if (value === 'PENDING') {
     return 'warning'
   }
 
   return 'info'
 }
 
+const formatContentKey = (key: string) => {
+  const keyMap: Record<string, string> = {
+    score: '评分',
+    strengths: '优势',
+    problems: '问题',
+    suggestionsSummary: '建议摘要',
+    rawTextPreview: '原文摘要',
+    structuredContent: '解析结果',
+    overallScore: '匹配分数',
+    strongMatches: '强匹配',
+    weakMatches: '弱匹配',
+    missingSkills: '缺失技能',
+    weakExperienceDescriptions: '表达较弱经历',
+    evidence: '依据',
+    riskNotes: '风险提示',
+    aiJobMatchResultId: '匹配结果 ID',
+    suggestions: '优化建议',
+    aiResumeSuggestionId: '优化建议 ID',
+    rewriteType: '改写类型',
+    targetSection: '目标章节',
+    originalText: '原文',
+    rewrittenText: '改写文本',
+    rewriteReason: '改写理由',
+    caution: '注意事项',
+    acceptStatus: '采纳状态',
+  }
+
+  return keyMap[key] ?? key
+}
+
+const formatContentValue = (value: unknown) => {
+  if (value === null || value === undefined || value === '') {
+    return '-'
+  }
+
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return String(value)
+  }
+
+  return JSON.stringify(value, null, 2)
+}
+
 const loadHistory = async () => {
   loading.value = true
 
   try {
-    const result = await getHistoryPage(page.value, size.value)
+    const result = await getAiResultPage({
+      resultType: resultType.value || undefined,
+      status: status.value || undefined,
+      resumeId: parseOptionalId(resumeIdInput.value),
+      jobDescriptionId: parseOptionalId(jobDescriptionIdInput.value),
+      page: page.value,
+      size: size.value,
+    })
     records.value = result.records
     total.value = result.total
   } catch (error) {
@@ -91,6 +165,20 @@ const loadHistory = async () => {
   } finally {
     loading.value = false
   }
+}
+
+const search = async () => {
+  page.value = 1
+  await loadHistory()
+}
+
+const resetFilters = async () => {
+  resultType.value = ''
+  status.value = ''
+  resumeIdInput.value = ''
+  jobDescriptionIdInput.value = ''
+  page.value = 1
+  await loadHistory()
 }
 
 const handlePageChange = async (nextPage: number) => {
@@ -104,22 +192,26 @@ const handleSizeChange = async (nextSize: number) => {
   await loadHistory()
 }
 
-const openDetail = async (record: HistoryListItem) => {
+const openDetail = async (record: AiResultRecord) => {
   loadingDetail.value = true
   detailVisible.value = true
 
   try {
-    activeDetail.value = await getHistoryDetail(record.resumeId)
+    activeDetail.value = await getAiResultDetail(record.resultType, record.recordId)
   } catch (error) {
     activeDetail.value = null
     detailVisible.value = false
-    ElMessage.error(error instanceof Error ? error.message : '获取历史详情失败')
+    ElMessage.error(error instanceof Error ? error.message : '获取 AI 结果详情失败')
   } finally {
     loadingDetail.value = false
   }
 }
 
-const goResume = (resumeId: number) => {
+const goResume = (resumeId: number | null) => {
+  if (!resumeId) {
+    return
+  }
+
   router.push({
     path: '/resumes',
     query: {
@@ -128,55 +220,25 @@ const goResume = (resumeId: number) => {
   })
 }
 
-const goMatch = (record: HistoryListItem) => {
-  if (record.latestMatchSource === 'AI_JOB_DESCRIPTION' && record.latestJobDescriptionId) {
-    router.push({
-      path: '/ai-job-matches',
-      query: {
-        resumeId: String(record.resumeId),
-        jobDescriptionId: String(record.latestJobDescriptionId),
-      },
-    })
+const goJobDescription = (jobDescriptionId: number | null) => {
+  if (!jobDescriptionId) {
     return
   }
 
-  if (!record.latestJobId) {
-    ElMessage.warning('当前记录暂无匹配分析结果')
-    return
-  }
-
-  router.push({
-    path: `/jobs/${record.latestJobId}`,
-    query: {
-      resumeId: String(record.resumeId),
-    },
-  })
+  router.push(`/job-descriptions/${jobDescriptionId}`)
 }
 
-const goMatchDetail = (match: HistoryMatchResult) => {
-  if (!activeDetail.value) {
-    return
-  }
-
-  if (match.matchSource === 'AI_JOB_DESCRIPTION' && match.jobDescriptionId) {
-    router.push({
-      path: '/ai-job-matches',
-      query: {
-        resumeId: String(activeDetail.value.resumeId),
-        jobDescriptionId: String(match.jobDescriptionId),
-      },
-    })
-    return
-  }
-
-  if (!match.jobId) {
+const goMatch = (record: AiResultRecord) => {
+  if (!record.resumeId || !record.jobDescriptionId) {
+    ElMessage.warning('当前 AI 结果缺少简历或目标岗位关联')
     return
   }
 
   router.push({
-    path: `/jobs/${match.jobId}`,
+    path: '/ai-job-matches',
     query: {
-      resumeId: String(activeDetail.value.resumeId),
+      resumeId: String(record.resumeId),
+      jobDescriptionId: String(record.jobDescriptionId),
     },
   })
 }
@@ -192,13 +254,50 @@ onMounted(() => {
       <header class="history-header">
         <div>
           <h1 class="history-title">AI 历史</h1>
-          <p class="history-subtitle">回看简历诊断、目标岗位解析、匹配分析和优化建议的最近状态。</p>
+          <p class="history-subtitle">回看简历诊断、目标岗位解析、匹配分析、岗位优化建议和局部改写结果。</p>
         </div>
         <el-space>
           <el-button @click="router.push('/')">返回工作台</el-button>
           <el-button type="primary" @click="loadHistory">刷新</el-button>
         </el-space>
       </header>
+
+      <section class="history-filter-panel">
+        <el-form class="history-filter-form" label-position="top">
+          <el-form-item label="结果类型">
+            <el-select v-model="resultType" class="history-filter-control">
+              <el-option
+                v-for="item in resultTypeOptions"
+                :key="item.value"
+                :label="item.label"
+                :value="item.value"
+              />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="状态">
+            <el-select v-model="status" class="history-filter-control">
+              <el-option
+                v-for="item in statusOptions"
+                :key="item.value"
+                :label="item.label"
+                :value="item.value"
+              />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="简历 ID">
+            <el-input v-model="resumeIdInput" class="history-filter-control" placeholder="可选" clearable />
+          </el-form-item>
+          <el-form-item label="目标岗位 ID">
+            <el-input v-model="jobDescriptionIdInput" class="history-filter-control" placeholder="可选" clearable />
+          </el-form-item>
+          <el-form-item label="操作">
+            <el-space>
+              <el-button type="primary" @click="search">筛选</el-button>
+              <el-button @click="resetFilters">重置</el-button>
+            </el-space>
+          </el-form-item>
+        </el-form>
+      </section>
 
       <section class="history-table-panel">
         <el-table
@@ -207,64 +306,72 @@ onMounted(() => {
           class="history-table"
           empty-text="暂无 AI 历史"
         >
-          <el-table-column prop="resumeName" label="简历" min-width="220" />
-          <el-table-column label="上传信息" min-width="180">
-            <template #default="{ row }: { row: HistoryListItem }">
+          <el-table-column label="AI 结果" min-width="260">
+            <template #default="{ row }: { row: AiResultRecord }">
               <div class="history-cell-stack">
-                <span>{{ row.fileType || '-' }} · {{ formatFileSize(row.fileSize) }}</span>
-                <span>{{ formatDateTime(row.uploadTime) }}</span>
+                <div class="history-title-line">
+                  <el-tag size="small" type="primary">{{ resolveResultTypeText(row.resultType) }}</el-tag>
+                  <strong>{{ row.title || '-' }}</strong>
+                </div>
+                <span>{{ row.summary || '-' }}</span>
               </div>
             </template>
           </el-table-column>
-          <el-table-column label="解析" width="120">
-            <template #default="{ row }: { row: HistoryListItem }">
-              <el-tag :type="resolveStatusType(row.parseStatus)">
-                {{ resolveParseStatusText(row.parseStatus) }}
+          <el-table-column label="状态" width="120">
+            <template #default="{ row }: { row: AiResultRecord }">
+              <el-tag :type="resolveStatusType(row.status)">
+                {{ resolveStatusText(row.status) }}
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="简历诊断" min-width="150">
-            <template #default="{ row }: { row: HistoryListItem }">
+          <el-table-column label="关联对象" min-width="220">
+            <template #default="{ row }: { row: AiResultRecord }">
               <div class="history-cell-stack">
-                <el-tag :type="resolveStatusType(row.analysisStatus)">
-                  {{ resolveAnalysisStatusText(row.analysisStatus) }}
-                </el-tag>
-                <span>评分：{{ row.analysisScore ?? '-' }}</span>
+                <span>简历：{{ row.resumeName || '-' }}</span>
+                <span>目标岗位：{{ row.jobTitle || '-' }}</span>
               </div>
             </template>
           </el-table-column>
-          <el-table-column label="最近匹配分析" min-width="190">
-            <template #default="{ row }: { row: HistoryListItem }">
+          <el-table-column label="模型" min-width="190">
+            <template #default="{ row }: { row: AiResultRecord }">
               <div class="history-cell-stack">
-                <span>{{ row.latestJobTitle || '暂无匹配岗位' }}</span>
-                <span>{{ row.latestCompanyName || '-' }} · {{ row.latestMatchScore ?? '-' }}</span>
+                <span>{{ row.modelName || '-' }}</span>
+                <span>{{ row.promptVersion || '-' }}</span>
               </div>
             </template>
           </el-table-column>
           <el-table-column label="更新时间" width="180">
-            <template #default="{ row }: { row: HistoryListItem }">
-              {{ formatDateTime(row.updatedAt) }}
+            <template #default="{ row }: { row: AiResultRecord }">
+              {{ formatDateTime(row.updatedAt || row.createdAt) }}
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="300" fixed="right">
-            <template #default="{ row }: { row: HistoryListItem }">
+          <el-table-column label="操作" width="290" fixed="right">
+            <template #default="{ row }: { row: AiResultRecord }">
               <div class="history-actions">
                 <el-button size="small" @click="openDetail(row)">详情</el-button>
-                <el-button size="small" type="primary" @click="goResume(row.resumeId)">查看简历</el-button>
+                <el-button size="small" :disabled="!row.resumeId" @click="goResume(row.resumeId)">简历</el-button>
                 <el-button
                   size="small"
-                  :disabled="!row.latestJobId && !row.latestJobDescriptionId"
+                  :disabled="!row.jobDescriptionId"
+                  @click="goJobDescription(row.jobDescriptionId)"
+                >
+                  目标岗位
+                </el-button>
+                <el-button
+                  size="small"
+                  type="primary"
+                  :disabled="!row.resumeId || !row.jobDescriptionId"
                   @click="goMatch(row)"
                 >
-                  查看匹配分析
+                  匹配与优化
                 </el-button>
               </div>
             </template>
           </el-table-column>
         </el-table>
 
-        <el-empty v-if="!loading && !hasRecords" description="暂无 AI 历史，请先上传简历" :image-size="96">
-          <el-button type="primary" @click="router.push('/resumes')">去上传简历</el-button>
+        <el-empty v-if="!loading && !hasRecords" description="暂无 AI 历史" :image-size="96">
+          <el-button type="primary" @click="router.push('/resumes')">去生成 AI 结果</el-button>
         </el-empty>
 
         <div v-if="total > 0" class="history-pagination">
@@ -284,8 +391,8 @@ onMounted(() => {
 
     <el-drawer
       v-model="detailVisible"
-      title="历史详情"
-      size="560px"
+      title="AI 结果详情"
+      size="640px"
       class="history-detail-drawer"
     >
       <section v-loading="loadingDetail" class="history-detail">
@@ -293,78 +400,45 @@ onMounted(() => {
 
         <template v-else>
           <section class="history-detail-section">
-            <h2 class="history-section-title">简历信息</h2>
-            <el-descriptions :column="1" border>
-              <el-descriptions-item label="文件名">{{ activeDetail.resume.resumeName }}</el-descriptions-item>
-              <el-descriptions-item label="类型">{{ activeDetail.resume.fileType }}</el-descriptions-item>
-              <el-descriptions-item label="大小">{{ formatFileSize(activeDetail.resume.fileSize) }}</el-descriptions-item>
-              <el-descriptions-item label="上传时间">{{ formatDateTime(activeDetail.resume.uploadTime) }}</el-descriptions-item>
-            </el-descriptions>
-          </section>
-
-          <section class="history-detail-section">
-            <h2 class="history-section-title">解析摘要</h2>
-            <el-tag :type="resolveStatusType(activeDetail.parseResult.parseStatus)">
-              {{ resolveParseStatusText(activeDetail.parseResult.parseStatus) }}
-            </el-tag>
-            <p class="history-detail-text">{{ activeDetail.parseResult.extractedTextPreview || '-' }}</p>
-            <el-alert
-              v-if="activeDetail.parseResult.parseErrorMessage"
-              :title="activeDetail.parseResult.parseErrorMessage"
-              type="error"
-              :closable="false"
-              show-icon
-            />
-          </section>
-
-          <section class="history-detail-section">
-            <h2 class="history-section-title">简历诊断摘要</h2>
-            <div class="history-score-row">
-              <el-tag :type="resolveStatusType(activeDetail.aiAnalysis.analysisStatus)">
-                {{ resolveAnalysisStatusText(activeDetail.aiAnalysis.analysisStatus) }}
-              </el-tag>
-              <strong>评分：{{ activeDetail.aiAnalysis.analysisScore ?? '-' }}</strong>
+            <div class="history-detail-header">
+              <div>
+                <h2 class="history-section-title">{{ activeDetail.title || '-' }}</h2>
+                <el-space wrap>
+                  <el-tag type="primary">{{ resolveResultTypeText(activeDetail.resultType) }}</el-tag>
+                  <el-tag :type="resolveStatusType(activeDetail.status)">
+                    {{ resolveStatusText(activeDetail.status) }}
+                  </el-tag>
+                </el-space>
+              </div>
             </div>
+            <el-descriptions :column="1" border class="history-meta">
+              <el-descriptions-item label="关联简历">{{ activeDetail.resumeName || '-' }}</el-descriptions-item>
+              <el-descriptions-item label="目标岗位">{{ activeDetail.jobTitle || '-' }}</el-descriptions-item>
+              <el-descriptions-item label="模型">{{ activeDetail.modelName || '-' }}</el-descriptions-item>
+              <el-descriptions-item label="Prompt 版本">{{ activeDetail.promptVersion || '-' }}</el-descriptions-item>
+              <el-descriptions-item label="创建时间">{{ formatDateTime(activeDetail.createdAt) }}</el-descriptions-item>
+              <el-descriptions-item label="更新时间">{{ formatDateTime(activeDetail.updatedAt) }}</el-descriptions-item>
+            </el-descriptions>
             <el-alert
-              title="简历诊断仅供参考，涉及经历、技能、证书、奖项和量化结果的内容需要你确认后再使用。"
-              type="warning"
-              :closable="false"
-              show-icon
-              class="history-ai-warning"
-            />
-            <p class="history-detail-text">{{ activeDetail.aiAnalysis.suggestionsSummary || '-' }}</p>
-            <el-alert
-              v-if="activeDetail.aiAnalysis.analysisErrorMessage"
-              :title="activeDetail.aiAnalysis.analysisErrorMessage"
+              v-if="activeDetail.errorMessage"
+              :title="activeDetail.errorMessage"
               type="error"
               :closable="false"
               show-icon
+              class="history-error"
             />
           </section>
 
           <section class="history-detail-section">
-            <h2 class="history-section-title">匹配分析记录</h2>
-            <el-empty
-              v-if="activeDetail.matchResults.length === 0"
-              description="暂无匹配分析结果"
-              :image-size="80"
-            />
-            <div v-else class="history-match-list">
+            <h2 class="history-section-title">结构化内容</h2>
+            <div class="history-content-list">
               <article
-                v-for="match in activeDetail.matchResults"
-                :key="match.matchId"
-                class="history-match-item"
+                v-for="[key, value] in detailEntries"
+                :key="key"
+                class="history-content-item"
               >
-                <div>
-                  <h3 class="history-match-title">{{ match.jobTitle || '未知岗位' }}</h3>
-                  <p class="history-detail-text">
-                    {{ match.companyName || '-' }} · {{ match.jobCategory || '-' }} · {{ formatDateTime(match.matchUpdatedAt) }}
-                  </p>
-                </div>
-                <div class="history-match-score">{{ match.matchScore ?? '-' }}</div>
-                <p class="history-detail-text">{{ match.matchReason || '-' }}</p>
-                <p class="history-detail-text">{{ match.suggestionsPreview || '-' }}</p>
-                <el-button size="small" type="primary" @click="goMatchDetail(match)">查看匹配</el-button>
+                <h3 class="history-content-title">{{ formatContentKey(key) }}</h3>
+                <pre class="history-content-value">{{ formatContentValue(value) }}</pre>
               </article>
             </div>
           </section>
@@ -408,11 +482,31 @@ onMounted(() => {
   line-height: 1.7;
 }
 
+.history-filter-panel,
 .history-table-panel {
   padding: 24px;
   border: 1px solid #dde5f0;
   border-radius: 8px;
   background: #ffffff;
+}
+
+.history-filter-panel {
+  margin-bottom: 16px;
+}
+
+.history-filter-form {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(150px, 1fr));
+  gap: 14px;
+  align-items: end;
+}
+
+.history-filter-form :deep(.el-form-item) {
+  margin-bottom: 0;
+}
+
+.history-filter-control {
+  width: 100%;
 }
 
 .history-table {
@@ -426,6 +520,12 @@ onMounted(() => {
   color: #344054;
   font-size: 13px;
   line-height: 1.5;
+}
+
+.history-title-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .history-actions {
@@ -448,6 +548,12 @@ onMounted(() => {
   margin-top: 24px;
 }
 
+.history-detail-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .history-section-title {
   margin: 0 0 12px;
   color: #111827;
@@ -455,54 +561,47 @@ onMounted(() => {
   font-weight: 700;
 }
 
-.history-detail-text {
-  margin: 10px 0 0;
-  color: #344054;
-  font-size: 14px;
-  line-height: 1.8;
-  overflow-wrap: anywhere;
+.history-meta {
+  margin-top: 16px;
 }
 
-.history-score-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
+.history-error {
+  margin-top: 16px;
 }
 
-.history-ai-warning {
-  margin-top: 12px;
-}
-
-.history-match-list {
+.history-content-list {
   display: grid;
   gap: 12px;
 }
 
-.history-match-item {
-  position: relative;
-  padding: 16px;
+.history-content-item {
+  padding: 14px;
   border: 1px solid #dde5f0;
   border-radius: 8px;
   background: #f8fafc;
 }
 
-.history-match-title {
-  margin: 0;
-  padding-right: 56px;
+.history-content-title {
+  margin: 0 0 8px;
   color: #111827;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 700;
 }
 
-.history-match-score {
-  position: absolute;
-  top: 16px;
-  right: 16px;
-  min-width: 44px;
-  color: #2563eb;
-  font-size: 22px;
-  font-weight: 700;
-  text-align: right;
+.history-content-value {
+  margin: 0;
+  color: #344054;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 960px) {
+  .history-filter-form {
+    grid-template-columns: repeat(2, minmax(150px, 1fr));
+  }
 }
 
 @media (max-width: 760px) {
@@ -511,8 +610,13 @@ onMounted(() => {
     flex-direction: column;
   }
 
+  .history-filter-panel,
   .history-table-panel {
     padding: 16px;
+  }
+
+  .history-filter-form {
+    grid-template-columns: 1fr;
   }
 
   .history-pagination {

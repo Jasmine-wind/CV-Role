@@ -64,6 +64,7 @@ public class AiRewriteSuggestionController {
                 .modelName(suggestion.getModelName())
                 .promptVersion(suggestion.getPromptVersion())
                 .errorMessage(suggestion.getErrorMessage())
+                .createdAt(suggestion.getCreatedAt())
                 .updatedAt(suggestion.getUpdatedAt())
                 .build();
     }

@@ -76,3 +76,53 @@ export interface HistoryDetail {
   matchResults: HistoryMatchResult[]
   updatedAt: string | null
 }
+
+export type AiResultType =
+  | 'RESUME_DIAGNOSIS'
+  | 'TARGET_JOB_PARSE'
+  | 'MATCH_ANALYSIS'
+  | 'JOB_OPTIMIZATION_SUGGESTION'
+  | 'LOCAL_REWRITE'
+  | string
+
+export interface AiResultRecord {
+  recordId: number
+  resultType: AiResultType
+  title: string
+  summary: string | null
+  status: string
+  resumeId: number | null
+  resumeName: string | null
+  jobDescriptionId: number | null
+  jobTitle: string | null
+  modelName: string | null
+  promptVersion: string | null
+  errorMessage: string | null
+  createdAt: string | null
+  updatedAt: string | null
+}
+
+export interface AiResultPage {
+  records: AiResultRecord[]
+  page: number
+  size: number
+  total: number
+  totalPages: number
+}
+
+export interface AiResultDetail {
+  recordId: number
+  resultType: AiResultType
+  title: string
+  status: string
+  content: Record<string, unknown>
+  resumeId: number | null
+  resumeName: string | null
+  jobDescriptionId: number | null
+  jobTitle: string | null
+  modelName: string | null
+  promptVersion: string | null
+  errorMessage: string | null
+  createdAt: string | null
+  updatedAt: string | null
+}

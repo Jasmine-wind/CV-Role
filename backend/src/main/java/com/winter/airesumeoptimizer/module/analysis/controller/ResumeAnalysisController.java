@@ -276,6 +276,7 @@ public class ResumeAnalysisController {
                 .modelName(suggestion.getModelName())
                 .promptVersion(suggestion.getPromptVersion())
                 .errorMessage(suggestion.getErrorMessage())
+                .createdAt(suggestion.getCreatedAt())
                 .updatedAt(suggestion.getUpdatedAt())
                 .build();
     }
@@ -298,6 +299,7 @@ public class ResumeAnalysisController {
                 .modelName(suggestion.getModelName())
                 .promptVersion(suggestion.getPromptVersion())
                 .errorMessage(suggestion.getErrorMessage())
+                .createdAt(suggestion.getCreatedAt())
                 .updatedAt(suggestion.getUpdatedAt())
                 .build();
     }
@@ -318,6 +320,7 @@ public class ResumeAnalysisController {
                 .promptVersion(matchResult.getPromptVersion())
                 .matchStatus(matchResult.getMatchStatus())
                 .errorMessage(matchResult.getErrorMessage())
+                .createdAt(matchResult.getCreatedAt())
                 .updatedAt(matchResult.getUpdatedAt())
                 .build();
     }
@@ -333,6 +336,7 @@ public class ResumeAnalysisController {
                 .modelName(analysis.getModelName())
                 .promptVersion(analysis.getPromptVersion())
                 .errorMessage(analysis.getErrorMessage())
+                .createdAt(analysis.getCreatedAt())
                 .updatedAt(analysis.getUpdatedAt())
                 .build();
     }

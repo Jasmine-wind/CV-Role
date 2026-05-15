@@ -39,7 +39,12 @@ import com.winter.airesumeoptimizer.module.auth.dto.RegisterRequestDTO;
 import com.winter.airesumeoptimizer.module.auth.service.AuthService;
 import com.winter.airesumeoptimizer.module.auth.vo.LoginVO;
 import com.winter.airesumeoptimizer.module.history.controller.HistoryController;
+import com.winter.airesumeoptimizer.module.history.controller.AiHistoryController;
+import com.winter.airesumeoptimizer.module.history.service.AiHistoryService;
 import com.winter.airesumeoptimizer.module.history.service.HistoryService;
+import com.winter.airesumeoptimizer.module.history.vo.AiResultDetailVO;
+import com.winter.airesumeoptimizer.module.history.vo.AiResultPageVO;
+import com.winter.airesumeoptimizer.module.history.vo.AiResultRecordVO;
 import com.winter.airesumeoptimizer.module.history.vo.HistoryDetailVO;
 import com.winter.airesumeoptimizer.module.history.vo.HistoryListVO;
 import com.winter.airesumeoptimizer.module.history.vo.HistoryPageVO;
@@ -72,6 +77,7 @@ import com.winter.airesumeoptimizer.security.JwtTokenProvider;
 import io.swagger.v3.oas.models.OpenAPI;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -94,6 +100,7 @@ import org.springframework.web.multipart.MultipartFile;
         JobController.class,
         JobDescriptionController.class,
         JobMatchController.class,
+        AiHistoryController.class,
         HistoryController.class
 })
 @Import({
@@ -155,6 +162,9 @@ class Phase1ApiIntegrationTest {
 
     @MockitoBean
     private HistoryService historyService;
+
+    @MockitoBean
+    private AiHistoryService aiHistoryService;
 
     @MockitoBean
     private JwtTokenProvider jwtTokenProvider;
@@ -428,6 +438,44 @@ class Phase1ApiIntegrationTest {
                 .resumeId(100L)
                 .updatedAt(LocalDateTime.now())
                 .build());
+        when(aiHistoryService.list(1L, "MATCH_ANALYSIS", 100L, 10L, "SUCCESS", 1, 10))
+                .thenReturn(AiResultPageVO.builder()
+                        .records(List.of(AiResultRecordVO.builder()
+                                .recordId(400L)
+                                .resultType("MATCH_ANALYSIS")
+                                .title("匹配分析 - Java 后端开发")
+                                .summary("风险提示摘要")
+                                .status("SUCCESS")
+                                .resumeId(100L)
+                                .resumeName("resume.pdf")
+                                .jobDescriptionId(10L)
+                                .jobTitle("Java 后端开发")
+                                .modelName("deepseek-v4-flash")
+                                .promptVersion("ai_job_match_v1")
+                                .createdAt(LocalDateTime.now())
+                                .updatedAt(LocalDateTime.now())
+                                .build()))
+                        .page(1)
+                        .size(10)
+                        .total(1L)
+                        .totalPages(1)
+                        .build());
+        when(aiHistoryService.detail(1L, "MATCH_ANALYSIS", 400L))
+                .thenReturn(AiResultDetailVO.builder()
+                        .recordId(400L)
+                        .resultType("MATCH_ANALYSIS")
+                        .title("匹配分析 - Java 后端开发")
+                        .status("SUCCESS")
+                        .content(Map.of("overallScore", 86))
+                        .resumeId(100L)
+                        .resumeName("resume.pdf")
+                        .jobDescriptionId(10L)
+                        .jobTitle("Java 后端开发")
+                        .modelName("deepseek-v4-flash")
+                        .promptVersion("ai_job_match_v1")
+                        .createdAt(LocalDateTime.now())
+                        .updatedAt(LocalDateTime.now())
+                        .build());
 
         mockMvc.perform(post("/api/resumes/100/ai-analysis")
                         .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
@@ -710,6 +758,26 @@ class Phase1ApiIntegrationTest {
                         .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.resumeId").value(100));
+
+        mockMvc.perform(get("/api/ai-results")
+                        .param("resultType", "MATCH_ANALYSIS")
+                        .param("resumeId", "100")
+                        .param("jobDescriptionId", "10")
+                        .param("status", "SUCCESS")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.total").value(1))
+                .andExpect(jsonPath("$.data.records[0].recordId").value(400))
+                .andExpect(jsonPath("$.data.records[0].resultType").value("MATCH_ANALYSIS"))
+                .andExpect(jsonPath("$.data.records[0].resumeId").value(100))
+                .andExpect(jsonPath("$.data.records[0].jobDescriptionId").value(10));
+
+        mockMvc.perform(get("/api/ai-results/MATCH_ANALYSIS/400")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.recordId").value(400))
+                .andExpect(jsonPath("$.data.resultType").value("MATCH_ANALYSIS"))
+                .andExpect(jsonPath("$.data.content.overallScore").value(86));
     }
 
     @Test
