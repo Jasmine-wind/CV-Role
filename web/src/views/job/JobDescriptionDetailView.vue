@@ -67,7 +67,7 @@ const statusText = computed(() => {
 const loadDetail = async () => {
   if (!Number.isFinite(jobDescriptionId.value)) {
     loadFailed.value = true
-    ElMessage.error('岗位描述 ID 不正确')
+    ElMessage.error('目标岗位 ID 不正确')
     return
   }
 
@@ -79,7 +79,7 @@ const loadDetail = async () => {
   } catch (error) {
     detail.value = null
     loadFailed.value = true
-    ElMessage.error(error instanceof Error ? error.message : '获取岗位描述失败')
+    ElMessage.error(error instanceof Error ? error.message : '获取目标岗位失败')
   } finally {
     loading.value = false
   }
@@ -95,12 +95,12 @@ const handleParse = async () => {
   try {
     detail.value = await parseJobDescription(detail.value.id)
     if (detail.value.parseStatus === 'FAILED') {
-      ElMessage.error(detail.value.errorMessage || '岗位描述解析失败')
+      ElMessage.error(detail.value.errorMessage || '目标岗位解析失败')
     } else {
-      ElMessage.success('岗位描述解析完成')
+      ElMessage.success('目标岗位解析完成')
     }
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '岗位描述解析失败')
+    ElMessage.error(error instanceof Error ? error.message : '目标岗位解析失败')
   } finally {
     parsing.value = false
   }
@@ -112,7 +112,7 @@ const handleDelete = async () => {
   }
 
   try {
-    await ElMessageBox.confirm(`确认删除「${detail.value.title}」吗？关联的 AI 匹配结果也会一起删除。`, '删除岗位描述', {
+    await ElMessageBox.confirm(`确认删除「${detail.value.title}」吗？关联的匹配分析结果也会一起删除。`, '删除目标岗位', {
       confirmButtonText: '删除',
       cancelButtonText: '取消',
       type: 'warning',
@@ -125,10 +125,10 @@ const handleDelete = async () => {
 
   try {
     await deleteJobDescription(detail.value.id)
-    ElMessage.success('岗位描述删除成功')
+    ElMessage.success('目标岗位删除成功')
     router.push('/job-descriptions')
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '岗位描述删除失败')
+    ElMessage.error(error instanceof Error ? error.message : '目标岗位删除失败')
   } finally {
     deleting.value = false
   }
@@ -144,17 +144,17 @@ onMounted(() => {
     <section class="job-description-shell">
       <header class="job-description-header">
         <div>
-          <h1 class="job-description-title">{{ detail?.title || '岗位描述详情' }}</h1>
-          <p class="job-description-subtitle">查看岗位描述原文，并触发 AI 结构化解析。</p>
+          <h1 class="job-description-title">{{ detail?.title || '目标岗位详情' }}</h1>
+          <p class="job-description-subtitle">查看目标岗位 JD，并触发目标岗位解析。</p>
         </div>
         <el-space>
-          <el-button @click="router.push('/job-descriptions')">我的岗位描述</el-button>
-          <el-button @click="router.push('/job-descriptions/new')">新建岗位描述</el-button>
+          <el-button @click="router.push('/job-descriptions')">目标岗位</el-button>
+          <el-button @click="router.push('/job-descriptions/new')">新增目标岗位</el-button>
           <el-button
             :disabled="detail?.parseStatus !== 'SUCCESS'"
             @click="router.push(`/ai-job-matches?jobDescriptionId=${detail?.id}`)"
           >
-            AI 匹配
+            匹配分析
           </el-button>
           <el-button
             v-if="detail"
@@ -165,13 +165,13 @@ onMounted(() => {
           >
             删除
           </el-button>
-          <el-button @click="router.push('/jobs')">岗位列表</el-button>
+          <el-button @click="router.push('/jobs')">岗位库</el-button>
         </el-space>
       </header>
 
       <section v-loading="loading" class="job-description-panel">
-        <el-empty v-if="loadFailed" description="岗位描述不存在或无权访问" :image-size="96">
-          <el-button type="primary" @click="router.push('/job-descriptions/new')">新建岗位描述</el-button>
+        <el-empty v-if="loadFailed" description="目标岗位不存在或无权访问" :image-size="96">
+          <el-button type="primary" @click="router.push('/job-descriptions/new')">新增目标岗位</el-button>
         </el-empty>
 
         <template v-else-if="detail">
@@ -191,14 +191,14 @@ onMounted(() => {
           <el-alert
             v-if="detail.parseStatus === 'FAILED'"
             class="job-description-alert"
-            :title="detail.errorMessage || '岗位描述解析失败'"
+            :title="detail.errorMessage || '目标岗位解析失败'"
             type="error"
             :closable="false"
             show-icon
           />
 
           <section class="job-description-section">
-            <h2 class="job-description-section-title">岗位描述原文</h2>
+            <h2 class="job-description-section-title">目标岗位 JD 原文</h2>
             <p class="job-description-text">{{ detail.rawText }}</p>
           </section>
 

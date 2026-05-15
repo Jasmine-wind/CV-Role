@@ -14,11 +14,11 @@ const form = reactive({
 
 const handleSubmit = async () => {
   if (!form.title.trim()) {
-    ElMessage.warning('请输入岗位描述标题')
+    ElMessage.warning('请输入目标岗位标题')
     return
   }
   if (!form.rawText.trim()) {
-    ElMessage.warning('请输入岗位描述原文')
+    ElMessage.warning('请输入目标岗位 JD 原文')
     return
   }
 
@@ -29,10 +29,10 @@ const handleSubmit = async () => {
       title: form.title.trim(),
       rawText: form.rawText.trim(),
     })
-    ElMessage.success('岗位描述提交成功')
+    ElMessage.success('目标岗位提交成功')
     router.push(`/job-descriptions/${result.id}`)
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '提交岗位描述失败')
+    ElMessage.error(error instanceof Error ? error.message : '提交目标岗位失败')
   } finally {
     submitting.value = false
   }
@@ -44,13 +44,13 @@ const handleSubmit = async () => {
     <section class="job-description-shell">
       <header class="job-description-header">
         <div>
-          <h1 class="job-description-title">岗位描述解析</h1>
-          <p class="job-description-subtitle">提交目标岗位 JD，抽取职位名称、技能要求、经验信号和职责内容。</p>
+          <h1 class="job-description-title">新增目标岗位</h1>
+          <p class="job-description-subtitle">提交目标岗位 JD，后续可解析岗位要求并进入匹配与优化。</p>
         </div>
         <el-space>
-          <el-button @click="router.push('/job-descriptions')">我的岗位描述</el-button>
-          <el-button @click="router.push('/jobs')">岗位列表</el-button>
-          <el-button @click="router.push('/')">返回首页</el-button>
+          <el-button @click="router.push('/job-descriptions')">目标岗位</el-button>
+          <el-button @click="router.push('/jobs')">岗位库</el-button>
+          <el-button @click="router.push('/')">返回工作台</el-button>
         </el-space>
       </header>
 
@@ -65,7 +65,7 @@ const handleSubmit = async () => {
             />
           </el-form-item>
 
-          <el-form-item label="岗位描述原文">
+          <el-form-item label="目标岗位 JD 原文">
             <el-input
               v-model="form.rawText"
               type="textarea"
@@ -77,7 +77,7 @@ const handleSubmit = async () => {
           </el-form-item>
 
           <div class="job-description-actions">
-            <el-button @click="router.push('/jobs')">取消</el-button>
+            <el-button @click="router.push('/job-descriptions')">取消</el-button>
             <el-button type="primary" :loading="submitting" @click="handleSubmit">提交</el-button>
           </div>
         </el-form>

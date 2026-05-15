@@ -16,7 +16,7 @@ const loadRecords = async () => {
   try {
     records.value = await getJobDescriptionList()
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '获取岗位描述列表失败')
+    ElMessage.error(error instanceof Error ? error.message : '获取目标岗位列表失败')
   } finally {
     loading.value = false
   }
@@ -52,7 +52,7 @@ const statusText = (status: string) => {
 
 const handleDelete = async (record: JobDescriptionDetail) => {
   try {
-    await ElMessageBox.confirm(`确认删除「${record.title}」吗？关联的 AI 匹配结果也会一起删除。`, '删除岗位描述', {
+    await ElMessageBox.confirm(`确认删除「${record.title}」吗？关联的匹配分析结果也会一起删除。`, '删除目标岗位', {
       confirmButtonText: '删除',
       cancelButtonText: '取消',
       type: 'warning',
@@ -66,9 +66,9 @@ const handleDelete = async (record: JobDescriptionDetail) => {
   try {
     await deleteJobDescription(record.id)
     records.value = records.value.filter((item) => item.id !== record.id)
-    ElMessage.success('岗位描述删除成功')
+    ElMessage.success('目标岗位删除成功')
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '岗位描述删除失败')
+    ElMessage.error(error instanceof Error ? error.message : '目标岗位删除失败')
   } finally {
     deletingId.value = null
   }
@@ -84,17 +84,17 @@ onMounted(() => {
     <section class="job-description-shell">
       <header class="job-description-header">
         <div>
-          <h1 class="job-description-title">我的岗位描述</h1>
-          <p class="job-description-subtitle">查看已提交的岗位描述，继续解析或回看结构化结果。</p>
+          <h1 class="job-description-title">目标岗位</h1>
+          <p class="job-description-subtitle">管理自己的目标 JD，解析岗位要求后进入匹配与优化。</p>
         </div>
         <el-space>
-          <el-button type="primary" @click="router.push('/job-descriptions/new')">新建岗位描述</el-button>
-          <el-button @click="router.push('/ai-job-matches')">AI 匹配</el-button>
-          <el-button @click="router.push('/')">返回首页</el-button>
+          <el-button type="primary" @click="router.push('/job-descriptions/new')">新增目标岗位</el-button>
+          <el-button @click="router.push('/ai-job-matches')">匹配与优化</el-button>
+          <el-button @click="router.push('/')">返回工作台</el-button>
         </el-space>
       </header>
 
-      <el-table v-loading="loading" :data="records" class="job-description-table" empty-text="暂无岗位描述">
+      <el-table v-loading="loading" :data="records" class="job-description-table" empty-text="暂无目标岗位">
         <el-table-column prop="title" label="标题" min-width="220" />
         <el-table-column label="解析状态" width="120">
           <template #default="{ row }: { row: JobDescriptionDetail }">
@@ -120,7 +120,7 @@ onMounted(() => {
                 :disabled="row.parseStatus !== 'SUCCESS'"
                 @click="router.push(`/ai-job-matches?jobDescriptionId=${row.id}`)"
               >
-                匹配
+                匹配分析
               </el-button>
               <el-button
                 size="small"

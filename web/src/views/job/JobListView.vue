@@ -15,7 +15,7 @@ const loadJobs = async () => {
   try {
     jobs.value = await getJobList()
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '获取岗位列表失败')
+    ElMessage.error(error instanceof Error ? error.message : '获取岗位库失败')
   } finally {
     loading.value = false
   }
@@ -35,12 +35,12 @@ onMounted(() => {
     <section class="job-shell">
       <header class="job-header">
         <div>
-          <h1 class="job-title">岗位列表</h1>
-          <p class="job-subtitle">选择目标岗位，查看岗位要求与技能关键词。</p>
+          <h1 class="job-title">岗位库</h1>
+          <p class="job-subtitle">查看系统预置岗位，作为目标岗位和匹配分析的参考。</p>
         </div>
         <el-space>
-          <el-button @click="router.push('/job-descriptions')">岗位解析</el-button>
-          <el-button @click="router.push('/')">返回首页</el-button>
+          <el-button @click="router.push('/job-descriptions')">目标岗位</el-button>
+          <el-button @click="router.push('/')">返回工作台</el-button>
         </el-space>
       </header>
 

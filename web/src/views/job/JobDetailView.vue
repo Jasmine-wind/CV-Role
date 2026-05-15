@@ -132,9 +132,9 @@ const handleMatch = async () => {
     await matchResumeToJob(selectedResumeId.value, job.value.id)
     activeMatchResult.value = null
     await loadCurrentResumeMatches()
-    ElMessage.success('岗位匹配完成')
+    ElMessage.success('基础匹配完成')
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '岗位匹配失败')
+    ElMessage.error(error instanceof Error ? error.message : '基础匹配失败')
   } finally {
     matching.value = false
   }
@@ -160,15 +160,15 @@ onMounted(async () => {
           <p class="job-subtitle">{{ job ? `${job.companyName} · ${job.location}` : '查看岗位要求与技能关键词。' }}</p>
         </div>
         <el-space>
-          <el-button @click="router.push('/jobs')">返回列表</el-button>
+          <el-button @click="router.push('/jobs')">返回岗位库</el-button>
           <el-button @click="router.push('/resumes')">我的简历</el-button>
-          <el-button type="primary" @click="router.push('/history')">历史记录</el-button>
+          <el-button type="primary" @click="router.push('/history')">AI 历史</el-button>
         </el-space>
       </header>
 
       <section v-loading="loading" class="job-detail-panel">
         <el-empty v-if="loadFailed" description="岗位不存在或已不可用" :image-size="96">
-          <el-button type="primary" @click="router.push('/jobs')">查看岗位列表</el-button>
+          <el-button type="primary" @click="router.push('/jobs')">查看岗位库</el-button>
         </el-empty>
 
         <template v-else-if="job">
@@ -199,8 +199,8 @@ onMounted(async () => {
 
           <section class="job-match-entry">
             <div>
-              <h2 class="job-section-title">简历匹配</h2>
-              <p class="job-text">从已上传简历中选择一份进行岗位匹配。</p>
+              <h2 class="job-section-title">基础匹配</h2>
+              <p class="job-text">从已上传简历中选择一份进行基础匹配；完整 AI 流程请使用匹配与优化。</p>
             </div>
             <div class="job-match-controls">
               <el-select
@@ -223,7 +223,7 @@ onMounted(async () => {
                 :loading="matching"
                 @click="handleMatch"
               >
-                开始匹配
+                开始基础匹配
               </el-button>
             </div>
           </section>
@@ -240,7 +240,7 @@ onMounted(async () => {
           <section v-if="selectedResume" v-loading="loadingMatches" class="job-match-result">
             <header class="job-match-result-header">
               <div>
-                <h2 class="job-section-title">匹配结果</h2>
+                <h2 class="job-section-title">基础匹配结果</h2>
                 <p class="job-text">{{ selectedResume.originalFilename }}</p>
               </div>
               <el-button @click="loadCurrentResumeMatches">刷新结果</el-button>
@@ -289,7 +289,7 @@ onMounted(async () => {
               </section>
 
               <section class="job-section">
-                <h2 class="job-section-title">优化建议</h2>
+                <h2 class="job-section-title">基础优化建议</h2>
                 <div class="job-suggestion-list">
                   <article
                     v-for="(suggestion, index) in activeMatchResult.suggestions"

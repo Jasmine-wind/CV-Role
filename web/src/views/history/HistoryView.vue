@@ -87,7 +87,7 @@ const loadHistory = async () => {
   } catch (error) {
     records.value = []
     total.value = 0
-    ElMessage.error(error instanceof Error ? error.message : '获取历史记录失败')
+    ElMessage.error(error instanceof Error ? error.message : '获取 AI 历史失败')
   } finally {
     loading.value = false
   }
@@ -141,7 +141,7 @@ const goMatch = (record: HistoryListItem) => {
   }
 
   if (!record.latestJobId) {
-    ElMessage.warning('当前记录暂无岗位匹配结果')
+    ElMessage.warning('当前记录暂无匹配分析结果')
     return
   }
 
@@ -191,11 +191,11 @@ onMounted(() => {
     <section class="history-shell">
       <header class="history-header">
         <div>
-          <h1 class="history-title">历史记录</h1>
-          <p class="history-subtitle">查看简历上传、解析、AI 分析和岗位匹配的最近状态。</p>
+          <h1 class="history-title">AI 历史</h1>
+          <p class="history-subtitle">回看简历诊断、目标岗位解析、匹配分析和优化建议的最近状态。</p>
         </div>
         <el-space>
-          <el-button @click="router.push('/')">返回首页</el-button>
+          <el-button @click="router.push('/')">返回工作台</el-button>
           <el-button type="primary" @click="loadHistory">刷新</el-button>
         </el-space>
       </header>
@@ -205,7 +205,7 @@ onMounted(() => {
           v-loading="loading"
           :data="records"
           class="history-table"
-          empty-text="暂无历史记录"
+          empty-text="暂无 AI 历史"
         >
           <el-table-column prop="resumeName" label="简历" min-width="220" />
           <el-table-column label="上传信息" min-width="180">
@@ -223,7 +223,7 @@ onMounted(() => {
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="AI 分析" min-width="150">
+          <el-table-column label="简历诊断" min-width="150">
             <template #default="{ row }: { row: HistoryListItem }">
               <div class="history-cell-stack">
                 <el-tag :type="resolveStatusType(row.analysisStatus)">
@@ -233,7 +233,7 @@ onMounted(() => {
               </div>
             </template>
           </el-table-column>
-          <el-table-column label="最近匹配" min-width="190">
+          <el-table-column label="最近匹配分析" min-width="190">
             <template #default="{ row }: { row: HistoryListItem }">
               <div class="history-cell-stack">
                 <span>{{ row.latestJobTitle || '暂无匹配岗位' }}</span>
@@ -256,14 +256,14 @@ onMounted(() => {
                   :disabled="!row.latestJobId && !row.latestJobDescriptionId"
                   @click="goMatch(row)"
                 >
-                  查看匹配
+                  查看匹配分析
                 </el-button>
               </div>
             </template>
           </el-table-column>
         </el-table>
 
-        <el-empty v-if="!loading && !hasRecords" description="暂无历史记录，请先上传简历" :image-size="96">
+        <el-empty v-if="!loading && !hasRecords" description="暂无 AI 历史，请先上传简历" :image-size="96">
           <el-button type="primary" @click="router.push('/resumes')">去上传简历</el-button>
         </el-empty>
 
@@ -318,7 +318,7 @@ onMounted(() => {
           </section>
 
           <section class="history-detail-section">
-            <h2 class="history-section-title">AI 分析摘要</h2>
+            <h2 class="history-section-title">简历诊断摘要</h2>
             <div class="history-score-row">
               <el-tag :type="resolveStatusType(activeDetail.aiAnalysis.analysisStatus)">
                 {{ resolveAnalysisStatusText(activeDetail.aiAnalysis.analysisStatus) }}
@@ -326,7 +326,7 @@ onMounted(() => {
               <strong>评分：{{ activeDetail.aiAnalysis.analysisScore ?? '-' }}</strong>
             </div>
             <el-alert
-              title="AI 分析仅供参考，涉及经历、技能、证书、奖项和量化结果的内容需要你确认后再使用。"
+              title="简历诊断仅供参考，涉及经历、技能、证书、奖项和量化结果的内容需要你确认后再使用。"
               type="warning"
               :closable="false"
               show-icon
@@ -343,10 +343,10 @@ onMounted(() => {
           </section>
 
           <section class="history-detail-section">
-            <h2 class="history-section-title">岗位匹配记录</h2>
+            <h2 class="history-section-title">匹配分析记录</h2>
             <el-empty
               v-if="activeDetail.matchResults.length === 0"
-              description="暂无岗位匹配结果"
+              description="暂无匹配分析结果"
               :image-size="80"
             />
             <div v-else class="history-match-list">

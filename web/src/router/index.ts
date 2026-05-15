@@ -5,6 +5,7 @@ declare module 'vue-router' {
   interface RouteMeta {
     requiresAuth?: boolean
     guestOnly?: boolean
+    title?: string
   }
 }
 
@@ -17,6 +18,7 @@ const router = createRouter({
       component: () => import('@/views/HomeView.vue'),
       meta: {
         requiresAuth: true,
+        title: '工作台',
       },
     },
     {
@@ -25,6 +27,7 @@ const router = createRouter({
       component: () => import('@/views/resume/ResumeView.vue'),
       meta: {
         requiresAuth: true,
+        title: '我的简历',
       },
     },
     {
@@ -33,6 +36,7 @@ const router = createRouter({
       component: () => import('@/views/job/JobListView.vue'),
       meta: {
         requiresAuth: true,
+        title: '岗位库',
       },
     },
     {
@@ -41,6 +45,7 @@ const router = createRouter({
       component: () => import('@/views/job/JobDetailView.vue'),
       meta: {
         requiresAuth: true,
+        title: '岗位详情',
       },
     },
     {
@@ -49,6 +54,7 @@ const router = createRouter({
       component: () => import('@/views/job/JobDescriptionListView.vue'),
       meta: {
         requiresAuth: true,
+        title: '目标岗位',
       },
     },
     {
@@ -57,6 +63,7 @@ const router = createRouter({
       component: () => import('@/views/job/JobDescriptionCreateView.vue'),
       meta: {
         requiresAuth: true,
+        title: '新增目标岗位',
       },
     },
     {
@@ -65,6 +72,7 @@ const router = createRouter({
       component: () => import('@/views/job/JobDescriptionDetailView.vue'),
       meta: {
         requiresAuth: true,
+        title: '目标岗位详情',
       },
     },
     {
@@ -73,6 +81,7 @@ const router = createRouter({
       component: () => import('@/views/job/AiJobMatchView.vue'),
       meta: {
         requiresAuth: true,
+        title: '匹配与优化',
       },
     },
     {
@@ -81,6 +90,7 @@ const router = createRouter({
       component: () => import('@/views/history/HistoryView.vue'),
       meta: {
         requiresAuth: true,
+        title: 'AI 历史',
       },
     },
     {
@@ -89,6 +99,7 @@ const router = createRouter({
       component: () => import('@/views/auth/LoginView.vue'),
       meta: {
         guestOnly: true,
+        title: '登录',
       },
     },
     {
@@ -97,6 +108,7 @@ const router = createRouter({
       component: () => import('@/views/auth/RegisterView.vue'),
       meta: {
         guestOnly: true,
+        title: '注册',
       },
     },
   ],

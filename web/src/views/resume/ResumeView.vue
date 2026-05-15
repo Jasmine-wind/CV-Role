@@ -260,7 +260,7 @@ const loadAiAnalysis = async (resume: ResumeListItem) => {
     aiAnalysis.value = await getResumeAiAnalysis(resume.id)
   } catch (error) {
     aiAnalysis.value = null
-    ElMessage.warning(error instanceof Error ? error.message : '获取 AI 分析结果失败')
+    ElMessage.warning(error instanceof Error ? error.message : '获取简历诊断结果失败')
   } finally {
     loadingAiAnalysis.value = false
   }
@@ -297,12 +297,12 @@ const handleAiAnalysis = async (resume: ResumeListItem) => {
     aiAnalysis.value = await getResumeAiAnalysis(resume.id)
 
     if (triggerResult.analysisStatus === 'FAILED') {
-      ElMessage.error(triggerResult.errorMessage || 'AI 分析失败')
+      ElMessage.error(triggerResult.errorMessage || '简历诊断失败')
     } else {
-      ElMessage.success('AI 分析完成')
+      ElMessage.success('简历诊断完成')
     }
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : 'AI 分析失败')
+    ElMessage.error(error instanceof Error ? error.message : '简历诊断失败')
   } finally {
     analyzingResumeId.value = null
   }
@@ -363,8 +363,8 @@ onMounted(() => {
           <p class="resume-subtitle">上传 PDF、DOC 或 DOCX 简历，并查看已上传记录。</p>
         </div>
         <el-space>
-          <el-button @click="router.push('/')">返回首页</el-button>
-          <el-button type="primary" @click="router.push('/history')">历史记录</el-button>
+          <el-button @click="router.push('/')">返回工作台</el-button>
+          <el-button type="primary" @click="router.push('/history')">AI 历史</el-button>
         </el-space>
       </header>
 
@@ -427,7 +427,7 @@ onMounted(() => {
                 :loading="analyzingResumeId === row.id"
                 @click="handleAiAnalysis(row)"
               >
-                AI 分析
+                简历诊断
               </el-button>
               <el-button
                 size="small"
@@ -435,7 +435,7 @@ onMounted(() => {
                 :loading="loadingAiAnalysis && activeResume?.id === row.id"
                 @click="loadAiAnalysis(row)"
               >
-                查看分析
+                查看诊断
               </el-button>
               <el-button
                 size="small"
@@ -467,8 +467,8 @@ onMounted(() => {
         </el-descriptions>
         <div class="resume-detail-actions">
           <el-button type="primary" @click="loadParseResult(activeResume)">查看解析</el-button>
-          <el-button type="success" @click="loadAiAnalysis(activeResume)">查看分析</el-button>
-          <el-button @click="router.push('/jobs')">查看岗位</el-button>
+          <el-button type="success" @click="loadAiAnalysis(activeResume)">查看简历诊断</el-button>
+          <el-button @click="router.push('/job-descriptions')">选择目标岗位</el-button>
         </div>
       </section>
 
@@ -555,7 +555,7 @@ onMounted(() => {
       >
         <header class="resume-ai-header">
           <div>
-            <h3 class="resume-block-title">AI 分析</h3>
+            <h3 class="resume-block-title">简历诊断</h3>
             <p class="resume-ai-meta">
               {{ aiAnalysis.modelName || '-' }} · {{ formatDateTime(aiAnalysis.updatedAt || '') }}
             </p>
@@ -567,7 +567,7 @@ onMounted(() => {
 
         <el-alert
           v-if="aiAnalysis.analysisStatus === 'FAILED'"
-          :title="aiAnalysis.errorMessage || 'AI 分析失败'"
+          :title="aiAnalysis.errorMessage || '简历诊断失败'"
           type="error"
           :closable="false"
           show-icon
@@ -575,7 +575,7 @@ onMounted(() => {
 
         <template v-else>
           <el-alert
-            title="AI 分析仅供参考，涉及经历、技能、证书、奖项和量化结果的内容需要你确认后再使用。"
+            title="简历诊断仅供参考，涉及经历、技能、证书、奖项和量化结果的内容需要你确认后再使用。"
             type="warning"
             :closable="false"
             show-icon

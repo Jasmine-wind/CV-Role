@@ -398,12 +398,12 @@ const handleJobDescriptionChange = async () => {
 
 const handleMatch = async () => {
   if (!selectedResumeId.value || !selectedJobDescriptionId.value) {
-    ElMessage.warning('请先选择简历和岗位描述')
+    ElMessage.warning('请先选择简历和目标岗位')
     return
   }
 
   if (selectedJobDescription.value?.parseStatus !== 'SUCCESS') {
-    ElMessage.warning('请先完成岗位描述解析')
+    ElMessage.warning('请先完成目标岗位解析')
     return
   }
 
@@ -414,13 +414,13 @@ const handleMatch = async () => {
       jobDescriptionId: selectedJobDescriptionId.value,
     })
     if (triggerResult.matchStatus === 'FAILED') {
-      ElMessage.error(triggerResult.errorMessage || 'AI 岗位匹配失败')
+      ElMessage.error(triggerResult.errorMessage || '匹配分析失败')
     } else {
-      ElMessage.success('AI 岗位匹配完成')
+      ElMessage.success('匹配分析完成')
     }
     await loadCurrentMatch()
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : 'AI 岗位匹配失败')
+    ElMessage.error(error instanceof Error ? error.message : '匹配分析失败')
   } finally {
     matching.value = false
   }
@@ -428,12 +428,12 @@ const handleMatch = async () => {
 
 const handleGenerateSuggestion = async () => {
   if (!selectedResumeId.value || !selectedJobDescriptionId.value || !selectedMatch.value?.matchId) {
-    ElMessage.warning('请先完成 AI 岗位匹配')
+    ElMessage.warning('请先完成匹配分析')
     return
   }
 
   if (selectedMatch.value.matchStatus !== 'SUCCESS') {
-    ElMessage.warning('AI 岗位匹配成功后才能生成优化建议')
+    ElMessage.warning('匹配分析成功后才能生成岗位优化建议')
     return
   }
 
@@ -445,13 +445,13 @@ const handleGenerateSuggestion = async () => {
       aiJobMatchResultId: selectedMatch.value.matchId,
     })
     if (triggerResult.suggestionStatus === 'FAILED') {
-      ElMessage.error(triggerResult.errorMessage || 'AI 优化建议生成失败')
+      ElMessage.error(triggerResult.errorMessage || '岗位优化建议生成失败')
     } else {
-      ElMessage.success('AI 优化建议生成完成')
+      ElMessage.success('岗位优化建议生成完成')
     }
     await loadCurrentSuggestion()
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : 'AI 优化建议生成失败')
+    ElMessage.error(error instanceof Error ? error.message : '岗位优化建议生成失败')
   } finally {
     generatingSuggestion.value = false
   }
@@ -472,7 +472,7 @@ const loadRewriteSuggestions = async () => {
   } catch (error) {
     rewriteSuggestions.value = []
     selectedRewriteSuggestion.value = null
-    ElMessage.warning(error instanceof Error ? error.message : '获取局部改写建议失败')
+    ElMessage.warning(error instanceof Error ? error.message : '获取 AI 局部改写建议失败')
   } finally {
     loadingRewriteSuggestions.value = false
   }
@@ -532,7 +532,7 @@ const handleGenerateRewrite = async () => {
 
 const handleUpdateRewriteAcceptStatus = async (acceptStatus: 'ACCEPTED' | 'REJECTED') => {
   if (!selectedRewriteSuggestion.value?.rewriteId) {
-    ElMessage.warning('请先选择局部改写建议')
+    ElMessage.warning('请先选择 AI 局部改写建议')
     return
   }
 
@@ -565,13 +565,13 @@ onMounted(() => {
     <section class="ai-match-shell">
       <header class="ai-match-header">
         <div>
-          <h1 class="ai-match-title">AI 岗位匹配</h1>
-          <p class="ai-match-subtitle">选择已解析简历和已解析岗位描述，生成结构化匹配反馈。</p>
+          <h1 class="ai-match-title">匹配与优化</h1>
+          <p class="ai-match-subtitle">选择已解析简历和目标岗位，生成匹配分析、岗位优化建议和 AI 局部改写。</p>
         </div>
         <el-space>
           <el-button @click="router.push('/resumes')">我的简历</el-button>
-          <el-button @click="router.push('/job-descriptions')">岗位描述</el-button>
-          <el-button @click="router.push('/')">返回首页</el-button>
+          <el-button @click="router.push('/job-descriptions')">目标岗位</el-button>
+          <el-button @click="router.push('/')">返回工作台</el-button>
         </el-space>
       </header>
 
@@ -603,11 +603,11 @@ onMounted(() => {
           </div>
 
           <div class="ai-match-selector">
-            <h2 class="ai-match-section-title">选择岗位描述</h2>
+            <h2 class="ai-match-section-title">选择目标岗位</h2>
             <el-select
               v-model="selectedJobDescriptionId"
               class="ai-match-select"
-              placeholder="请选择岗位描述"
+              placeholder="请选择目标岗位"
               filterable
               @change="handleJobDescriptionChange"
             >
@@ -623,7 +623,7 @@ onMounted(() => {
               </el-option>
             </el-select>
             <div class="ai-match-meta">
-              <span>岗位解析：</span>
+              <span>目标岗位解析：</span>
               <el-tag v-if="selectedJobDescription" :type="selectedJobDescription.parseStatus === 'SUCCESS' ? 'success' : 'warning'">
                 {{ resolveParseStatusText(selectedJobDescription.parseStatus) }}
               </el-tag>
@@ -644,7 +644,7 @@ onMounted(() => {
         <el-alert
           v-if="selectedJobDescription && selectedJobDescription.parseStatus !== 'SUCCESS'"
           class="ai-match-alert"
-          title="当前岗位描述尚未解析成功，请先完成岗位描述解析。"
+          title="当前目标岗位尚未解析成功，请先完成目标岗位解析。"
           type="warning"
           :closable="false"
           show-icon
@@ -657,13 +657,13 @@ onMounted(() => {
             :disabled="!canMatch"
             @click="handleMatch"
           >
-            开始 AI 匹配
+            开始匹配分析
           </el-button>
           <el-button :loading="loadingResult" :disabled="!selectedResumeId" @click="loadCurrentMatch">刷新结果</el-button>
         </div>
 
         <section v-loading="loadingResult" class="ai-match-result">
-          <el-empty v-if="!selectedMatch" description="暂无 AI 匹配结果" :image-size="88" />
+          <el-empty v-if="!selectedMatch" description="暂无匹配分析结果" :image-size="88" />
 
           <template v-else>
             <div class="ai-match-summary">
@@ -686,7 +686,7 @@ onMounted(() => {
             <el-alert
               v-if="selectedMatch.matchStatus === 'FAILED'"
               class="ai-match-alert"
-              :title="selectedMatch.errorMessage || 'AI 岗位匹配失败'"
+              :title="selectedMatch.errorMessage || '匹配分析失败'"
               type="error"
               :closable="false"
               show-icon
@@ -695,7 +695,7 @@ onMounted(() => {
             <section class="ai-match-suggestion-panel">
               <div class="ai-match-suggestion-header">
                 <div>
-                  <h2 class="ai-match-section-title">简历优化建议</h2>
+                  <h2 class="ai-match-section-title">岗位优化建议</h2>
                   <p class="ai-match-suggestion-note">AI 建议需用户确认，不应直接伪造经历、技能、证书、奖项或量化指标。</p>
                 </div>
                 <el-space>
@@ -705,7 +705,7 @@ onMounted(() => {
                     :disabled="!canGenerateSuggestion"
                     @click="handleGenerateSuggestion"
                   >
-                    生成优化建议
+                    生成岗位优化建议
                   </el-button>
                   <el-button
                     :loading="loadingSuggestion"
@@ -720,7 +720,7 @@ onMounted(() => {
               <el-alert
                 v-if="selectedMatch.matchStatus !== 'SUCCESS'"
                 class="ai-match-alert"
-                title="请先完成成功的 AI 岗位匹配，再生成优化建议。"
+                title="请先完成成功的匹配分析，再生成岗位优化建议。"
                 type="warning"
                 :closable="false"
                 show-icon
@@ -729,7 +729,7 @@ onMounted(() => {
               <section v-loading="loadingSuggestion" class="ai-match-suggestion-body">
                 <el-empty
                   v-if="!selectedSuggestion"
-                  description="暂无优化建议"
+                  description="暂无岗位优化建议"
                   :image-size="72"
                 />
 
@@ -748,7 +748,7 @@ onMounted(() => {
                   <el-alert
                     v-if="selectedSuggestion.suggestionStatus === 'FAILED'"
                     class="ai-match-alert"
-                    :title="selectedSuggestion.errorMessage || 'AI 优化建议生成失败'"
+                    :title="selectedSuggestion.errorMessage || '岗位优化建议生成失败'"
                     type="error"
                     :closable="false"
                     show-icon
@@ -881,11 +881,11 @@ onMounted(() => {
             <section class="ai-match-rewrite-panel">
               <div class="ai-match-suggestion-header">
                 <div>
-                  <h2 class="ai-match-section-title">局部改写建议</h2>
+                  <h2 class="ai-match-section-title">AI 局部改写</h2>
                   <p class="ai-match-suggestion-note">AI 改写建议需用户确认，只能作为表达优化参考，不应直接写入未发生的经历或指标。</p>
                 </div>
                 <el-space>
-                  <el-button type="primary" :disabled="!selectedResumeId" @click="openRewriteDialog()">局部改写</el-button>
+                  <el-button type="primary" :disabled="!selectedResumeId" @click="openRewriteDialog()">进行局部改写</el-button>
                   <el-button :loading="loadingRewriteSuggestions" :disabled="!selectedResumeId" @click="loadRewriteSuggestions">
                     刷新改写
                   </el-button>
@@ -895,7 +895,7 @@ onMounted(() => {
               <section v-loading="loadingRewriteSuggestions" class="ai-match-rewrite-body">
                 <el-empty
                   v-if="!selectedRewriteSuggestion"
-                  description="暂无局部改写建议"
+                  description="暂无 AI 局部改写建议"
                   :image-size="72"
                 />
 
@@ -1065,7 +1065,7 @@ onMounted(() => {
 
     <el-dialog
       v-model="rewriteDialogVisible"
-      title="局部改写"
+      title="AI 局部改写"
       width="720px"
       destroy-on-close
     >
@@ -1102,9 +1102,9 @@ onMounted(() => {
           />
         </el-form-item>
         <el-descriptions :column="1" border class="ai-match-descriptions">
-          <el-descriptions-item label="关联岗位描述">{{ selectedJobDescription?.title || '未关联' }}</el-descriptions-item>
-          <el-descriptions-item label="关联 AI 匹配">{{ selectedMatch?.matchId ? `#${selectedMatch.matchId}` : '未关联' }}</el-descriptions-item>
-          <el-descriptions-item label="关联优化建议">{{ selectedSuggestion?.suggestionId ? `#${selectedSuggestion.suggestionId}` : '未关联' }}</el-descriptions-item>
+          <el-descriptions-item label="关联目标岗位">{{ selectedJobDescription?.title || '未关联' }}</el-descriptions-item>
+          <el-descriptions-item label="关联匹配分析">{{ selectedMatch?.matchId ? `#${selectedMatch.matchId}` : '未关联' }}</el-descriptions-item>
+          <el-descriptions-item label="关联岗位优化建议">{{ selectedSuggestion?.suggestionId ? `#${selectedSuggestion.suggestionId}` : '未关联' }}</el-descriptions-item>
         </el-descriptions>
       </el-form>
 

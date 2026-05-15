@@ -41,7 +41,7 @@ onMounted(() => {
       <header class="home-header">
         <div>
           <h1 class="home-title">AI 简历优化匹配系统</h1>
-          <p class="home-subtitle">当前处于 v0.1 前端认证页面搭建阶段。</p>
+          <p class="home-subtitle">工作台用于串联简历、目标岗位、匹配与优化、AI 历史回看。</p>
         </div>
         <el-space v-if="!authStore.isAuthenticated">
           <el-button @click="router.push('/login')">登录</el-button>
@@ -49,30 +49,29 @@ onMounted(() => {
         </el-space>
         <el-space v-else>
           <el-button @click="router.push('/resumes')">我的简历</el-button>
-          <el-button @click="router.push('/jobs')">岗位列表</el-button>
-          <el-button @click="router.push('/job-descriptions')">岗位解析</el-button>
-          <el-button @click="router.push('/ai-job-matches')">AI 匹配</el-button>
-          <el-button type="primary" @click="router.push('/history')">历史记录</el-button>
+          <el-button @click="router.push('/job-descriptions')">目标岗位</el-button>
+          <el-button @click="router.push('/ai-job-matches')">匹配与优化</el-button>
+          <el-button @click="router.push('/jobs')">岗位库</el-button>
+          <el-button type="primary" @click="router.push('/history')">AI 历史</el-button>
           <el-button :loading="authStore.loading" @click="handleFetchMe">刷新用户</el-button>
           <el-button type="danger" plain @click="handleLogout">退出</el-button>
         </el-space>
       </header>
 
       <el-card class="home-card" shadow="never">
-        <h2 class="home-title">基础首页</h2>
+        <h2 class="home-title">工作台</h2>
         <template v-if="authStore.isAuthenticated">
           <p class="home-subtitle">当前登录用户：{{ displayName }}</p>
           <ul class="home-list">
-            <li>Token 已保存到 localStorage，刷新页面后仍可恢复。</li>
-            <li>点击“刷新用户”会使用当前 Token 请求 /api/users/me。</li>
-            <li>点击“退出”会清除 Token 和当前用户信息。</li>
+            <li>先上传并解析简历，再补充目标岗位。</li>
+            <li>目标岗位解析完成后，进入匹配与优化生成岗位优化建议。</li>
+            <li>已生成的分析、匹配、建议和改写结果后续统一从 AI 历史回看。</li>
           </ul>
         </template>
         <template v-else>
           <ul class="home-list">
-            <li>本页用于确认登录后的基础入口页面。</li>
+            <li>登录后进入工作台，按流程完成简历优化。</li>
             <li>当前没有检测到 Token，请先登录。</li>
-            <li>后续小闭环会继续接入 Axios 和路由守卫。</li>
           </ul>
         </template>
       </el-card>
