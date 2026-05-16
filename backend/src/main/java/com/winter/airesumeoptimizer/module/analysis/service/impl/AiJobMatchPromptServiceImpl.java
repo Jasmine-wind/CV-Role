@@ -11,12 +11,14 @@ public class AiJobMatchPromptServiceImpl implements AiJobMatchPromptService {
     private static final int MAX_RESUME_STRUCTURED_LENGTH = 3500;
     private static final int MAX_JOB_STRUCTURED_LENGTH = 2500;
     private static final int MAX_RESUME_SUMMARY_LENGTH = 800;
+    private static final int MAX_RAG_CONTEXT_LENGTH = 1800;
 
     @Override
     public AiJobMatchPromptDTO buildPrompt(
             String resumeStructuredContent,
             String jobStructuredContent,
-            String resumeRawTextSummary) {
+            String resumeRawTextSummary,
+            String ragContext) {
         if (resumeStructuredContent == null || resumeStructuredContent.isBlank()) {
             throw new BusinessException(400, "简历结构化解析结果不能为空");
         }
@@ -50,10 +52,19 @@ public class AiJobMatchPromptServiceImpl implements AiJobMatchPromptService {
 
                         简历原文摘要：
                         %s
+
+                        语义检索辅助上下文（可选）：
+                        %s
+
+                        使用语义检索上下文时必须遵守：
+                        1. 该上下文只用于辅助定位相似片段，不得替代原始简历和岗位描述。
+                        2. 如果上下文与原始输入冲突，以原始输入为准。
+                        3. 不得把岗位片段直接写成用户已具备能力。
                         """.formatted(
                         normalize(resumeStructuredContent, MAX_RESUME_STRUCTURED_LENGTH),
                         normalize(jobStructuredContent, MAX_JOB_STRUCTURED_LENGTH),
-                        normalizeOptional(resumeRawTextSummary, MAX_RESUME_SUMMARY_LENGTH)))
+                        normalizeOptional(resumeRawTextSummary, MAX_RESUME_SUMMARY_LENGTH),
+                        normalizeOptional(ragContext, MAX_RAG_CONTEXT_LENGTH)))
                 .build();
     }
 

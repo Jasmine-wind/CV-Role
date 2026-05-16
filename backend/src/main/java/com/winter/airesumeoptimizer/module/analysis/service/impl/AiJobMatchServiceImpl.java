@@ -13,6 +13,8 @@ import com.winter.airesumeoptimizer.module.analysis.mapper.AiJobMatchResultMappe
 import com.winter.airesumeoptimizer.module.analysis.service.AiJobMatchOutputParser;
 import com.winter.airesumeoptimizer.module.analysis.service.AiJobMatchPromptService;
 import com.winter.airesumeoptimizer.module.analysis.service.AiJobMatchService;
+import com.winter.airesumeoptimizer.module.embedding.dto.RagContextDTO;
+import com.winter.airesumeoptimizer.module.embedding.service.ResumeRagService;
 import com.winter.airesumeoptimizer.module.job.entity.JobDescription;
 import com.winter.airesumeoptimizer.module.job.mapper.JobDescriptionMapper;
 import com.winter.airesumeoptimizer.module.resume.entity.Resume;
@@ -35,6 +37,7 @@ public class AiJobMatchServiceImpl implements AiJobMatchService {
     private static final String MATCH_STATUS_SUCCESS = "SUCCESS";
     private static final String MATCH_STATUS_FAILED = "FAILED";
     private static final int MAX_ERROR_MESSAGE_LENGTH = 1000;
+    private static final int RAG_TOP_K = 3;
 
     private final ResumeMapper resumeMapper;
     private final ResumeParseResultMapper resumeParseResultMapper;
@@ -44,6 +47,7 @@ public class AiJobMatchServiceImpl implements AiJobMatchService {
     private final AiJobMatchOutputParser aiJobMatchOutputParser;
     private final AiClientService aiClientService;
     private final ObjectMapper objectMapper;
+    private final ResumeRagService resumeRagService;
 
     public AiJobMatchServiceImpl(
             ResumeMapper resumeMapper,
@@ -53,7 +57,8 @@ public class AiJobMatchServiceImpl implements AiJobMatchService {
             AiJobMatchPromptService aiJobMatchPromptService,
             AiJobMatchOutputParser aiJobMatchOutputParser,
             AiClientService aiClientService,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            ResumeRagService resumeRagService) {
         this.resumeMapper = resumeMapper;
         this.resumeParseResultMapper = resumeParseResultMapper;
         this.jobDescriptionMapper = jobDescriptionMapper;
@@ -62,6 +67,7 @@ public class AiJobMatchServiceImpl implements AiJobMatchService {
         this.aiJobMatchOutputParser = aiJobMatchOutputParser;
         this.aiClientService = aiClientService;
         this.objectMapper = objectMapper;
+        this.resumeRagService = resumeRagService;
     }
 
     @Override
@@ -70,16 +76,20 @@ public class AiJobMatchServiceImpl implements AiJobMatchService {
         Resume resume = getOwnedResume(userId, resumeId);
         ResumeParseResult parseResult = getSuccessfulResumeParseResult(resume.getId());
         JobDescription jobDescription = getOwnedSuccessfulJobDescription(userId, jobDescriptionId);
+        RagContextDTO ragContext = resumeRagService.buildContext(userId, resume.getId(), jobDescription.getId(), RAG_TOP_K);
         AiJobMatchPromptDTO prompt = aiJobMatchPromptService.buildPrompt(
                 parseResult.getStructuredJson(),
                 jobDescription.getStructuredContent(),
-                parseResult.getExtractedText());
+                parseResult.getExtractedText(),
+                ragContext.getContextText());
 
-        log.info("AI job match started: userId={}, resumeId={}, jobDescriptionId={}, model={}",
+        log.info("AI job match started: userId={}, resumeId={}, jobDescriptionId={}, model={}, ragUsed={}, ragMatchCount={}",
                 userId,
                 resume.getId(),
                 jobDescription.getId(),
-                aiClientService.modelName());
+                aiClientService.modelName(),
+                ragContext.isUsed(),
+                ragContext.getMatchCount());
 
         try {
             String aiOutput = aiClientService.complete(prompt.getPrompt());

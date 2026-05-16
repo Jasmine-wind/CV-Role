@@ -123,6 +123,12 @@ OPENAI_MODEL=deepseek-v4-flash
 OPENAI_TEMPERATURE=0.2
 OPENAI_TIMEOUT_SECONDS=90
 OPENAI_MAX_TOKENS=4000
+EMBEDDING_BASE_URL=
+EMBEDDING_API_KEY=
+EMBEDDING_MODEL=Qwen3-Embedding-0.6B
+EMBEDDING_DIMENSION=1024
+EMBEDDING_TIMEOUT=30
+EMBEDDING_MAX_INPUT_LENGTH=8192
 LOCAL_STORAGE_BASE_DIR=uploads
 MINIO_ROOT_USER=minioadmin
 MINIO_ROOT_PASSWORD=minioadmin
@@ -136,6 +142,10 @@ MINIO_CONSOLE_PORT=9001
 - `.env.example` 只保留占位符，可以提交。
 - `DASHSCOPE_API_KEY` 当前被用作 AI 客户端 API Key 环境变量名。
 - AI base URL 可通过 `OPENAI_BASE_URL` 覆盖，默认是 `https://api.deepseek.com`。
+- Embedding 使用独立的 `EMBEDDING_*` 配置；当前默认模型为 `Qwen3-Embedding-0.6B`，默认向量维度为 `1024`。
+- `EMBEDDING_BASE_URL` 不绑定具体服务商，需要按实际 OpenAI-compatible Embedding 服务地址配置，例如本地服务 `http://localhost:8000/v1` 或第三方平台提供的 base-url。
+- `EMBEDDING_API_KEY` 需要用户在本地 `.env` 中自行配置，不要提交真实密钥。
+- 后续如果切换到 Qwen3-Embedding-4B 或 Qwen3-Embedding-8B，需要同步确认向量维度、历史向量数据兼容性和相似度查询策略。
 - `JWT_SECRET` 请使用足够长的随机字符串。
 - 当前 Phase 1 / Phase 2 仍使用本地文件存储，`LOCAL_STORAGE_BASE_DIR` 默认是 `uploads`。
 - `MINIO_*` 当前用于本地依赖服务编排预留，现有上传链路仍走本地文件存储。
@@ -224,6 +234,37 @@ backend/src/main/resources/db/migration/
 当前迁移会创建 Phase 1 所需表，并预置 Phase 1 岗位数据。`backend/src/main/resources/db/init/` 下的 SQL 保留为历史初始化脚本，不再作为推荐初始化方式。
 
 已有本地数据库如果已经手动建过表，当前配置会通过 `baseline-on-migrate` 接管，并继续执行后续迁移。
+
+## pgvector 本地环境结论
+
+v2.8.1 检查时，Compose 中的 PostgreSQL 镜像为：
+
+```text
+postgres:16-alpine
+```
+
+本地检查结果：
+
+- PostgreSQL 版本：16.13。
+- 当前镜像未安装 `vector` 扩展。
+- `CREATE EXTENSION IF NOT EXISTS vector;` 会失败，错误原因是缺少 `vector.control`。
+- 因此当前本地数据库不能直接使用 pgvector。
+
+v2.8.2 已将 Compose PostgreSQL 镜像调整为：
+
+```text
+pgvector/pgvector:pg16
+```
+
+本地如果已经创建过旧容器，需要重新创建 PostgreSQL 容器后，Flyway 才能执行扩展初始化和向量表迁移。
+
+后续迁移由 Flyway 执行扩展初始化：
+
+```sql
+CREATE EXTENSION IF NOT EXISTS vector;
+```
+
+当前默认 Embedding 模型为 `Qwen3-Embedding-0.6B`，默认向量维度为 `1024`。`EMBEDDING_BASE_URL` 仍由实际 OpenAI-compatible Embedding 服务决定，不在项目中写死；`EMBEDDING_API_KEY` 需要用户在本地 `.env` 中配置。当前 v2.8.3 只完成 Embedding 客户端和环境配置，不生成向量。当前向量表使用不固定维度的 `vector` 字段，并用 `embedding_dimension` 记录实际维度；pgvector 不可用时，只能作为开发过渡临时保存 Embedding JSON 字符串，不能作为最终方案。
 
 停止本地依赖服务：
 

@@ -17,7 +17,8 @@ class AiJobMatchPromptServiceImplTest {
         AiJobMatchPromptDTO result = service.buildPrompt(
                 "{\"skills\":[\"Java\",\"Spring Boot\"]}",
                 "{\"requiredSkills\":[\"Java\"],\"bonusSkills\":[\"Redis\"]}",
-                "Java 后端项目经历");
+                "Java 后端项目经历",
+                "RAG 片段");
 
         assertThat(result.getPromptVersion()).isEqualTo(AiJobMatchPromptService.PROMPT_VERSION);
         assertThat(result.getPrompt()).contains("ai_job_match_v1");
@@ -28,6 +29,8 @@ class AiJobMatchPromptServiceImplTest {
         assertThat(result.getPrompt()).contains("每个数组最多 3 条");
         assertThat(result.getPrompt()).contains("\"skills\":[\"Java\",\"Spring Boot\"]");
         assertThat(result.getPrompt()).contains("\"requiredSkills\":[\"Java\"]");
+        assertThat(result.getPrompt()).contains("语义检索辅助上下文");
+        assertThat(result.getPrompt()).contains("RAG 片段");
     }
 
     @Test
@@ -46,7 +49,8 @@ class AiJobMatchPromptServiceImplTest {
         AiJobMatchPromptDTO result = service.buildPrompt(
                 "简历内容".repeat(1000),
                 "岗位内容".repeat(1000),
-                "摘要".repeat(1500));
+                "摘要".repeat(1500),
+                "RAG".repeat(1000));
 
         assertThat(result.getPrompt()).contains("[内容过长，已截断]");
     }

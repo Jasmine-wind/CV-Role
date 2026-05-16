@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.winter.airesumeoptimizer.common.exception.BusinessException;
 import com.winter.airesumeoptimizer.module.analysis.entity.AiJobMatchResult;
 import com.winter.airesumeoptimizer.module.analysis.mapper.AiJobMatchResultMapper;
+import com.winter.airesumeoptimizer.module.embedding.mapper.JobDescriptionEmbeddingMapper;
 import com.winter.airesumeoptimizer.module.job.dto.JobDescriptionSubmitDTO;
 import com.winter.airesumeoptimizer.module.job.entity.JobDescription;
 import com.winter.airesumeoptimizer.module.job.mapper.JobDescriptionMapper;
@@ -21,12 +22,15 @@ public class JobDescriptionServiceImpl implements JobDescriptionService {
 
     private final JobDescriptionMapper jobDescriptionMapper;
     private final AiJobMatchResultMapper aiJobMatchResultMapper;
+    private final JobDescriptionEmbeddingMapper jobDescriptionEmbeddingMapper;
 
     public JobDescriptionServiceImpl(
             JobDescriptionMapper jobDescriptionMapper,
-            AiJobMatchResultMapper aiJobMatchResultMapper) {
+            AiJobMatchResultMapper aiJobMatchResultMapper,
+            JobDescriptionEmbeddingMapper jobDescriptionEmbeddingMapper) {
         this.jobDescriptionMapper = jobDescriptionMapper;
         this.aiJobMatchResultMapper = aiJobMatchResultMapper;
+        this.jobDescriptionEmbeddingMapper = jobDescriptionEmbeddingMapper;
     }
 
     @Override
@@ -76,6 +80,7 @@ public class JobDescriptionServiceImpl implements JobDescriptionService {
     @Transactional
     public void delete(Long userId, Long jobDescriptionId) {
         JobDescription jobDescription = getOwnedJobDescription(userId, jobDescriptionId);
+        jobDescriptionEmbeddingMapper.deleteByJobDescriptionId(jobDescription.getId());
         aiJobMatchResultMapper.delete(new LambdaQueryWrapper<AiJobMatchResult>()
                 .eq(AiJobMatchResult::getJobDescriptionId, jobDescription.getId()));
         jobDescriptionMapper.deleteById(jobDescription.getId());

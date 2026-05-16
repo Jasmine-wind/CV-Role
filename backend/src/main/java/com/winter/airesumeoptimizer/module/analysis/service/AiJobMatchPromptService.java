@@ -6,5 +6,16 @@ public interface AiJobMatchPromptService {
 
     String PROMPT_VERSION = "ai_job_match_v1";
 
-    AiJobMatchPromptDTO buildPrompt(String resumeStructuredContent, String jobStructuredContent, String resumeRawTextSummary);
+    default AiJobMatchPromptDTO buildPrompt(
+            String resumeStructuredContent,
+            String jobStructuredContent,
+            String resumeRawTextSummary) {
+        return buildPrompt(resumeStructuredContent, jobStructuredContent, resumeRawTextSummary, null);
+    }
+
+    AiJobMatchPromptDTO buildPrompt(
+            String resumeStructuredContent,
+            String jobStructuredContent,
+            String resumeRawTextSummary,
+            String ragContext);
 }

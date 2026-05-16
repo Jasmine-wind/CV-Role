@@ -19,6 +19,8 @@ import com.winter.airesumeoptimizer.module.analysis.entity.AiJobMatchResult;
 import com.winter.airesumeoptimizer.module.analysis.mapper.AiJobMatchResultMapper;
 import com.winter.airesumeoptimizer.module.analysis.service.AiJobMatchOutputParser;
 import com.winter.airesumeoptimizer.module.analysis.service.AiJobMatchPromptService;
+import com.winter.airesumeoptimizer.module.embedding.dto.RagContextDTO;
+import com.winter.airesumeoptimizer.module.embedding.service.ResumeRagService;
 import com.winter.airesumeoptimizer.module.job.entity.JobDescription;
 import com.winter.airesumeoptimizer.module.job.mapper.JobDescriptionMapper;
 import com.winter.airesumeoptimizer.module.resume.entity.Resume;
@@ -38,6 +40,7 @@ class AiJobMatchServiceImplTest {
     private final AiJobMatchPromptService aiJobMatchPromptService = mock(AiJobMatchPromptService.class);
     private final AiJobMatchOutputParser aiJobMatchOutputParser = mock(AiJobMatchOutputParser.class);
     private final AiClientService aiClientService = mock(AiClientService.class);
+    private final ResumeRagService resumeRagService = mock(ResumeRagService.class);
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final AiJobMatchServiceImpl service = new AiJobMatchServiceImpl(
             resumeMapper,
@@ -47,7 +50,8 @@ class AiJobMatchServiceImplTest {
             aiJobMatchPromptService,
             aiJobMatchOutputParser,
             aiClientService,
-            objectMapper);
+            objectMapper,
+            resumeRagService);
 
     @Test
     void matchShouldSaveSuccessResult() {
@@ -55,7 +59,12 @@ class AiJobMatchServiceImplTest {
         when(resumeParseResultMapper.selectOne(any(Wrapper.class))).thenReturn(buildParseResult("SUCCESS"));
         when(jobDescriptionMapper.selectOne(any(Wrapper.class))).thenReturn(buildJobDescription("SUCCESS"));
         when(aiJobMatchResultMapper.selectOne(any(Wrapper.class))).thenReturn(null);
-        when(aiJobMatchPromptService.buildPrompt("{\"skills\":[\"Java\"]}", "{\"requiredSkills\":[\"Java\"]}", "Java 项目"))
+        when(resumeRagService.buildContext(1L, 10L, 20L, 3)).thenReturn(buildRagContext(true));
+        when(aiJobMatchPromptService.buildPrompt(
+                "{\"skills\":[\"Java\"]}",
+                "{\"requiredSkills\":[\"Java\"]}",
+                "Java 项目",
+                "RAG 上下文"))
                 .thenReturn(AiJobMatchPromptDTO.builder()
                         .promptVersion("ai_job_match_v1")
                         .prompt("prompt")
@@ -97,7 +106,8 @@ class AiJobMatchServiceImplTest {
         when(resumeParseResultMapper.selectOne(any(Wrapper.class))).thenReturn(buildParseResult("SUCCESS"));
         when(jobDescriptionMapper.selectOne(any(Wrapper.class))).thenReturn(buildJobDescription("SUCCESS"));
         when(aiJobMatchResultMapper.selectOne(any(Wrapper.class))).thenReturn(existing);
-        when(aiJobMatchPromptService.buildPrompt(any(String.class), any(String.class), any(String.class)))
+        when(resumeRagService.buildContext(1L, 10L, 20L, 3)).thenReturn(buildRagContext(false));
+        when(aiJobMatchPromptService.buildPrompt(any(String.class), any(String.class), any(String.class), any(String.class)))
                 .thenReturn(AiJobMatchPromptDTO.builder()
                         .promptVersion("ai_job_match_v1")
                         .prompt("prompt")
@@ -125,7 +135,8 @@ class AiJobMatchServiceImplTest {
         when(resumeParseResultMapper.selectOne(any(Wrapper.class))).thenReturn(buildParseResult("SUCCESS"));
         when(jobDescriptionMapper.selectOne(any(Wrapper.class))).thenReturn(buildJobDescription("SUCCESS"));
         when(aiJobMatchResultMapper.selectOne(any(Wrapper.class))).thenReturn(null);
-        when(aiJobMatchPromptService.buildPrompt(any(String.class), any(String.class), any(String.class)))
+        when(resumeRagService.buildContext(1L, 10L, 20L, 3)).thenReturn(buildRagContext(false));
+        when(aiJobMatchPromptService.buildPrompt(any(String.class), any(String.class), any(String.class), any(String.class)))
                 .thenReturn(AiJobMatchPromptDTO.builder()
                         .promptVersion("ai_job_match_v1")
                         .prompt("prompt")
@@ -242,5 +253,14 @@ class AiJobMatchServiceImplTest {
         matchResult.setMatchStatus("SUCCESS");
         matchResult.setOverallScore(82);
         return matchResult;
+    }
+
+    private RagContextDTO buildRagContext(boolean used) {
+        return RagContextDTO.builder()
+                .used(used)
+                .matchCount(used ? 1 : 0)
+                .contextText(used ? "RAG 上下文" : "未使用 RAG 上下文：没有可用语义相似片段")
+                .note(used ? "已使用" : "没有可用语义相似片段")
+                .build();
     }
 }

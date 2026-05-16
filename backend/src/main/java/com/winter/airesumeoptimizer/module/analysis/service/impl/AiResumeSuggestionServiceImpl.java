@@ -16,6 +16,8 @@ import com.winter.airesumeoptimizer.module.analysis.mapper.AiResumeSuggestionMap
 import com.winter.airesumeoptimizer.module.analysis.service.AiResumeSuggestionOutputParser;
 import com.winter.airesumeoptimizer.module.analysis.service.AiResumeSuggestionPromptService;
 import com.winter.airesumeoptimizer.module.analysis.service.AiResumeSuggestionService;
+import com.winter.airesumeoptimizer.module.embedding.dto.RagContextDTO;
+import com.winter.airesumeoptimizer.module.embedding.service.ResumeRagService;
 import com.winter.airesumeoptimizer.module.job.entity.JobDescription;
 import com.winter.airesumeoptimizer.module.job.mapper.JobDescriptionMapper;
 import com.winter.airesumeoptimizer.module.resume.entity.Resume;
@@ -39,6 +41,7 @@ public class AiResumeSuggestionServiceImpl implements AiResumeSuggestionService 
     private static final String SUGGESTION_STATUS_SUCCESS = "SUCCESS";
     private static final String SUGGESTION_STATUS_FAILED = "FAILED";
     private static final int MAX_ERROR_MESSAGE_LENGTH = 1000;
+    private static final int RAG_TOP_K = 3;
 
     private final ResumeMapper resumeMapper;
     private final ResumeParseResultMapper resumeParseResultMapper;
@@ -49,6 +52,7 @@ public class AiResumeSuggestionServiceImpl implements AiResumeSuggestionService 
     private final AiResumeSuggestionOutputParser aiResumeSuggestionOutputParser;
     private final AiClientService aiClientService;
     private final ObjectMapper objectMapper;
+    private final ResumeRagService resumeRagService;
 
     public AiResumeSuggestionServiceImpl(
             ResumeMapper resumeMapper,
@@ -59,7 +63,8 @@ public class AiResumeSuggestionServiceImpl implements AiResumeSuggestionService 
             AiResumeSuggestionPromptService aiResumeSuggestionPromptService,
             AiResumeSuggestionOutputParser aiResumeSuggestionOutputParser,
             AiClientService aiClientService,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            ResumeRagService resumeRagService) {
         this.resumeMapper = resumeMapper;
         this.resumeParseResultMapper = resumeParseResultMapper;
         this.jobDescriptionMapper = jobDescriptionMapper;
@@ -69,6 +74,7 @@ public class AiResumeSuggestionServiceImpl implements AiResumeSuggestionService 
         this.aiResumeSuggestionOutputParser = aiResumeSuggestionOutputParser;
         this.aiClientService = aiClientService;
         this.objectMapper = objectMapper;
+        this.resumeRagService = resumeRagService;
     }
 
     @Override
@@ -81,17 +87,21 @@ public class AiResumeSuggestionServiceImpl implements AiResumeSuggestionService 
                 resume.getId(),
                 jobDescription.getId(),
                 aiJobMatchResultId);
+        RagContextDTO ragContext = resumeRagService.buildContext(userId, resume.getId(), jobDescription.getId(), RAG_TOP_K);
         AiResumeSuggestionPromptDTO prompt = aiResumeSuggestionPromptService.buildPrompt(
                 parseResult.getStructuredJson(),
                 jobDescription.getStructuredContent(),
-                buildMatchResultPromptInput(matchResult));
+                buildMatchResultPromptInput(matchResult),
+                ragContext.getContextText());
 
-        log.info("AI resume suggestion started: userId={}, resumeId={}, jobDescriptionId={}, aiJobMatchResultId={}, model={}",
+        log.info("AI resume suggestion started: userId={}, resumeId={}, jobDescriptionId={}, aiJobMatchResultId={}, model={}, ragUsed={}, ragMatchCount={}",
                 userId,
                 resume.getId(),
                 jobDescription.getId(),
                 matchResult.getId(),
-                aiClientService.modelName());
+                aiClientService.modelName(),
+                ragContext.isUsed(),
+                ragContext.getMatchCount());
 
         try {
             String aiOutput = aiClientService.complete(prompt.getPrompt());

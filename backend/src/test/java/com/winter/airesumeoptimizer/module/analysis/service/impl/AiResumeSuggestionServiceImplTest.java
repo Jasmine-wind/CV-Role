@@ -21,6 +21,8 @@ import com.winter.airesumeoptimizer.module.analysis.mapper.AiJobMatchResultMappe
 import com.winter.airesumeoptimizer.module.analysis.mapper.AiResumeSuggestionMapper;
 import com.winter.airesumeoptimizer.module.analysis.service.AiResumeSuggestionOutputParser;
 import com.winter.airesumeoptimizer.module.analysis.service.AiResumeSuggestionPromptService;
+import com.winter.airesumeoptimizer.module.embedding.dto.RagContextDTO;
+import com.winter.airesumeoptimizer.module.embedding.service.ResumeRagService;
 import com.winter.airesumeoptimizer.module.job.entity.JobDescription;
 import com.winter.airesumeoptimizer.module.job.mapper.JobDescriptionMapper;
 import com.winter.airesumeoptimizer.module.resume.entity.Resume;
@@ -41,6 +43,7 @@ class AiResumeSuggestionServiceImplTest {
     private final AiResumeSuggestionPromptService aiResumeSuggestionPromptService = mock(AiResumeSuggestionPromptService.class);
     private final AiResumeSuggestionOutputParser aiResumeSuggestionOutputParser = mock(AiResumeSuggestionOutputParser.class);
     private final AiClientService aiClientService = mock(AiClientService.class);
+    private final ResumeRagService resumeRagService = mock(ResumeRagService.class);
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final AiResumeSuggestionServiceImpl service = new AiResumeSuggestionServiceImpl(
             resumeMapper,
@@ -51,13 +54,14 @@ class AiResumeSuggestionServiceImplTest {
             aiResumeSuggestionPromptService,
             aiResumeSuggestionOutputParser,
             aiClientService,
-            objectMapper);
+            objectMapper,
+            resumeRagService);
 
     @Test
     void generateShouldSaveSuccessSuggestion() {
         mockValidInputs();
         when(aiResumeSuggestionMapper.selectOne(any(Wrapper.class))).thenReturn(null);
-        when(aiResumeSuggestionPromptService.buildPrompt(any(String.class), any(String.class), any(String.class)))
+        when(aiResumeSuggestionPromptService.buildPrompt(any(String.class), any(String.class), any(String.class), any(String.class)))
                 .thenReturn(AiResumeSuggestionPromptDTO.builder()
                         .promptVersion("resume_suggestion_v1")
                         .prompt("prompt")
@@ -99,7 +103,7 @@ class AiResumeSuggestionServiceImplTest {
         existing.setSuggestionStatus("FAILED");
         mockValidInputs();
         when(aiResumeSuggestionMapper.selectOne(any(Wrapper.class))).thenReturn(existing);
-        when(aiResumeSuggestionPromptService.buildPrompt(any(String.class), any(String.class), any(String.class)))
+        when(aiResumeSuggestionPromptService.buildPrompt(any(String.class), any(String.class), any(String.class), any(String.class)))
                 .thenReturn(AiResumeSuggestionPromptDTO.builder()
                         .promptVersion("resume_suggestion_v1")
                         .prompt("prompt")
@@ -119,7 +123,7 @@ class AiResumeSuggestionServiceImplTest {
     void generateShouldSaveFailedSuggestionWhenAiOutputInvalid() {
         mockValidInputs();
         when(aiResumeSuggestionMapper.selectOne(any(Wrapper.class))).thenReturn(null);
-        when(aiResumeSuggestionPromptService.buildPrompt(any(String.class), any(String.class), any(String.class)))
+        when(aiResumeSuggestionPromptService.buildPrompt(any(String.class), any(String.class), any(String.class), any(String.class)))
                 .thenReturn(AiResumeSuggestionPromptDTO.builder()
                         .promptVersion("resume_suggestion_v1")
                         .prompt("prompt")
@@ -212,6 +216,12 @@ class AiResumeSuggestionServiceImplTest {
         when(resumeParseResultMapper.selectOne(any(Wrapper.class))).thenReturn(buildParseResult("SUCCESS"));
         when(jobDescriptionMapper.selectOne(any(Wrapper.class))).thenReturn(buildJobDescription("SUCCESS"));
         when(aiJobMatchResultMapper.selectOne(any(Wrapper.class))).thenReturn(buildMatchResult("SUCCESS"));
+        when(resumeRagService.buildContext(1L, 10L, 20L, 3)).thenReturn(RagContextDTO.builder()
+                .used(true)
+                .matchCount(1)
+                .contextText("RAG 上下文")
+                .note("已使用")
+                .build());
     }
 
     private Resume buildResume() {
