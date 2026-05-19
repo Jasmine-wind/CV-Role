@@ -23,7 +23,7 @@ class JobDescriptionPromptServiceImplTest {
         assertThat(result.getPrompt()).contains("不得编造原文中不存在");
         assertThat(result.getPrompt()).contains("requiredSkills 只放原文明确要求");
         assertThat(result.getPrompt()).contains("bonusSkills 只放原文明确描述为加分");
-        assertThat(result.getPrompt()).contains("如果岗位描述过短或信息不完整");
+        assertThat(result.getPrompt()).contains("如果目标岗位 JD 过短或信息不完整");
         assertThat(result.getPrompt()).contains("招聘 Java 后端开发工程师");
     }
 
@@ -31,7 +31,7 @@ class JobDescriptionPromptServiceImplTest {
     void buildPromptShouldRejectBlankRawText() {
         assertThatThrownBy(() -> service.buildPrompt(" "))
                 .isInstanceOf(BusinessException.class)
-                .hasMessage("岗位描述原文不能为空");
+                .hasMessage("目标岗位 JD 原文不能为空");
     }
 
     @Test

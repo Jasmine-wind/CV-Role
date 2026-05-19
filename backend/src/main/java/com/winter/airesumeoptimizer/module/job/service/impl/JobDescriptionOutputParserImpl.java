@@ -27,7 +27,7 @@ public class JobDescriptionOutputParserImpl implements JobDescriptionOutputParse
     public JobDescriptionParseResultDTO parse(String aiOutput) {
         JsonNode root = readJson(aiOutput);
         if (!root.isObject()) {
-            throw invalidOutput("岗位描述解析结果必须是 JSON 对象");
+            throw invalidOutput("目标岗位解析结果必须是 JSON 对象");
         }
 
         return JobDescriptionParseResultDTO.builder()
@@ -43,12 +43,12 @@ public class JobDescriptionOutputParserImpl implements JobDescriptionOutputParse
 
     private JsonNode readJson(String aiOutput) {
         if (aiOutput == null || aiOutput.isBlank()) {
-            throw invalidOutput("岗位描述解析结果不能为空");
+            throw invalidOutput("目标岗位解析结果不能为空");
         }
         try {
             return objectMapper.readTree(stripJsonCodeFence(aiOutput.strip()));
         } catch (JsonProcessingException exception) {
-            throw invalidOutput("岗位描述解析结果不是合法 JSON");
+            throw invalidOutput("目标岗位解析结果不是合法 JSON");
         }
     }
 

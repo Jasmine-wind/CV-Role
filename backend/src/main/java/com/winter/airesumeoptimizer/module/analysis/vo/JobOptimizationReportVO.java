@@ -20,31 +20,31 @@ public class JobOptimizationReportVO {
     @Schema(description = "简历文件名或展示名称", example = "Java后端实习简历.pdf")
     private String resumeName;
 
-    @Schema(description = "岗位描述 ID", example = "2")
+    @Schema(description = "目标岗位 ID", example = "2")
     private Long jobDescriptionId;
 
     @Schema(description = "目标岗位标题", example = "Java后端开发实习生")
     private String jobTitle;
 
-    @Schema(description = "岗位匹配分数，来自已有 AI 匹配结果", example = "82")
+    @Schema(description = "匹配分数，来自已有匹配分析结果", example = "82")
     private Integer matchScore;
 
     @Schema(description = "匹配等级，仅在有匹配分数时返回 HIGH、MEDIUM 或 LOW", example = "HIGH")
     private String matchLevel;
 
-    @Schema(description = "强匹配项，来自已有 AI 岗位匹配结果")
+    @Schema(description = "强匹配项，来自已有匹配分析结果")
     private List<AiJobMatchItemDTO> strongMatches;
 
-    @Schema(description = "弱匹配项，来自已有 AI 岗位匹配结果")
+    @Schema(description = "弱匹配项，来自已有匹配分析结果")
     private List<AiJobMatchItemDTO> weakMatches;
 
-    @Schema(description = "缺失技能，来自已有 AI 岗位匹配结果")
+    @Schema(description = "缺失技能，来自已有匹配分析结果")
     private List<AiJobMatchItemDTO> missingSkills;
 
-    @Schema(description = "风险提示，来自已有 AI 岗位匹配结果")
+    @Schema(description = "风险提示，来自已有匹配分析结果")
     private List<String> riskTips;
 
-    @Schema(description = "匹配依据，来自已有 AI 岗位匹配结果")
+    @Schema(description = "匹配依据，来自已有匹配分析结果")
     private List<AiJobMatchEvidenceDTO> matchEvidence;
 
     @Schema(description = "优化建议数量摘要")

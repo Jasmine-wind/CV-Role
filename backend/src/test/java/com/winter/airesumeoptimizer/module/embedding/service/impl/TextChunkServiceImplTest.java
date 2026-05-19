@@ -33,7 +33,7 @@ class TextChunkServiceImplTest {
                 "岗位职责\n负责后端接口开发。\n\n任职要求\n熟悉 Spring Boot。");
 
         assertThat(chunks).hasSize(2);
-        assertThat(chunks.get(0)).contains("岗位描述结构化解析").contains("Java");
+        assertThat(chunks.get(0)).contains("目标岗位结构化解析").contains("Java");
         assertThat(chunks.get(1)).contains("岗位职责").contains("任职要求");
     }
 }

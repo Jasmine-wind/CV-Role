@@ -30,10 +30,10 @@ public class JobOptimizationReportController {
     }
 
     @GetMapping("/{resumeId}/job-optimization-report")
-    @Operation(summary = "查询岗位优化报告", description = "基于已有 AI 岗位匹配、优化建议和局部改写结果聚合岗位优化报告")
+    @Operation(summary = "查询岗位优化报告", description = "基于已有匹配分析、岗位优化建议和局部改写结果聚合岗位优化报告")
     public Result<JobOptimizationReportVO> report(
             @PathVariable @Positive(message = "简历 ID 必须大于 0") Long resumeId,
-            @RequestParam @Positive(message = "岗位描述 ID 必须大于 0") Long jobDescriptionId,
+            @RequestParam @Positive(message = "目标岗位 ID 必须大于 0") Long jobDescriptionId,
             Authentication authentication) {
         AuthenticatedUser authenticatedUser = (AuthenticatedUser) authentication.getPrincipal();
         return Result.success(jobOptimizationReportService.getReport(

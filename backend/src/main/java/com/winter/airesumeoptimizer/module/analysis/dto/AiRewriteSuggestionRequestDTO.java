@@ -27,8 +27,8 @@ public class AiRewriteSuggestionRequestDTO {
     @Size(max = 3000, message = "原文片段长度不能超过 3000")
     private String originalText;
 
-    @Schema(description = "岗位描述 ID，可选", example = "1")
-    @Positive(message = "岗位描述 ID 必须大于 0")
+    @Schema(description = "目标岗位 ID，可选", example = "1")
+    @Positive(message = "目标岗位 ID 必须大于 0")
     private Long jobDescriptionId;
 
     @Schema(description = "AI 匹配结果 ID，可选", example = "1")

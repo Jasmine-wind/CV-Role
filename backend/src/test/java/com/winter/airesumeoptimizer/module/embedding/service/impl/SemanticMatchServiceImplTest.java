@@ -91,7 +91,7 @@ class SemanticMatchServiceImplTest {
 
         assertThatThrownBy(() -> service.match(1L, 10L, 20L, 5))
                 .isInstanceOf(BusinessException.class)
-                .hasMessage("简历向量和岗位描述向量维度不一致，不能进行语义相似度查询");
+                .hasMessage("简历向量和目标岗位向量维度不一致，不能进行语义相似度查询");
     }
 
     private Resume buildResume() {

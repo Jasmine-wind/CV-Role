@@ -19,6 +19,8 @@ public class JobDescription {
 
     private String title;
 
+    private String sourceType;
+
     private String rawText;
 
     private String parseStatus;

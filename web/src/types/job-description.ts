@@ -3,9 +3,12 @@ export interface JobDescriptionSubmitRequest {
   rawText: string
 }
 
+export type JobDescriptionSourceType = 'USER_INPUT' | 'PRESET' | 'CRAWLED' | string
+
 export interface JobDescriptionDetail {
   id: number
   title: string
+  sourceType: JobDescriptionSourceType | null
   rawText: string
   parseStatus: 'PENDING' | 'SUCCESS' | 'FAILED' | string
   structuredContent: string | null

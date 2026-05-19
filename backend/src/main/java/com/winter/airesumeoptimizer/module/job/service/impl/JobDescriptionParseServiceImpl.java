@@ -27,6 +27,7 @@ public class JobDescriptionParseServiceImpl implements JobDescriptionParseServic
 
     private static final String PARSE_STATUS_SUCCESS = "SUCCESS";
     private static final String PARSE_STATUS_FAILED = "FAILED";
+    private static final String SOURCE_TYPE_USER_INPUT = "USER_INPUT";
     private static final int MAX_ERROR_MESSAGE_LENGTH = 1000;
 
     private final JobDescriptionMapper jobDescriptionMapper;
@@ -84,17 +85,17 @@ public class JobDescriptionParseServiceImpl implements JobDescriptionParseServic
             throw new BusinessException(401, "请先登录");
         }
         if (jobDescriptionId == null) {
-            throw new BusinessException(400, "岗位描述 ID 不能为空");
+            throw new BusinessException(400, "目标岗位 ID 不能为空");
         }
 
         JobDescription jobDescription = jobDescriptionMapper.selectOne(new LambdaQueryWrapper<JobDescription>()
                 .eq(JobDescription::getId, jobDescriptionId)
                 .eq(JobDescription::getUserId, userId));
         if (jobDescription == null) {
-            throw new BusinessException(404, "岗位描述不存在");
+            throw new BusinessException(404, "目标岗位不存在");
         }
         if (jobDescription.getRawText() == null || jobDescription.getRawText().isBlank()) {
-            throw new BusinessException(400, "岗位描述原文不能为空");
+            throw new BusinessException(400, "目标岗位 JD 原文不能为空");
         }
         return jobDescription;
     }
@@ -111,7 +112,7 @@ public class JobDescriptionParseServiceImpl implements JobDescriptionParseServic
             jobDescription.setErrorMessage(null);
             save(jobDescription);
         } catch (JsonProcessingException exception) {
-            saveFailed(jobDescription, promptVersion, "岗位描述解析结果序列化失败");
+            saveFailed(jobDescription, promptVersion, "目标岗位解析结果序列化失败");
         }
     }
 
@@ -131,7 +132,7 @@ public class JobDescriptionParseServiceImpl implements JobDescriptionParseServic
 
     private String normalizeErrorMessage(RuntimeException exception) {
         if (exception.getMessage() == null || exception.getMessage().isBlank()) {
-            return "岗位描述 AI 解析失败";
+            return "目标岗位解析失败";
         }
         return exception.getMessage();
     }
@@ -147,6 +148,7 @@ public class JobDescriptionParseServiceImpl implements JobDescriptionParseServic
         return JobDescriptionVO.builder()
                 .id(jobDescription.getId())
                 .title(jobDescription.getTitle())
+                .sourceType(resolveSourceType(jobDescription.getSourceType()))
                 .rawText(jobDescription.getRawText())
                 .parseStatus(jobDescription.getParseStatus())
                 .structuredContent(jobDescription.getStructuredContent())
@@ -156,5 +158,12 @@ public class JobDescriptionParseServiceImpl implements JobDescriptionParseServic
                 .createdAt(jobDescription.getCreatedAt())
                 .updatedAt(jobDescription.getUpdatedAt())
                 .build();
+    }
+
+    private String resolveSourceType(String sourceType) {
+        if (sourceType == null || sourceType.isBlank()) {
+            return SOURCE_TYPE_USER_INPUT;
+        }
+        return sourceType;
     }
 }

@@ -50,6 +50,16 @@ const statusText = (status: string) => {
   return '未解析'
 }
 
+const sourceTypeText = (sourceType: string | null) => {
+  if (sourceType === 'PRESET') {
+    return '系统预置'
+  }
+  if (sourceType === 'CRAWLED') {
+    return '外部采集'
+  }
+  return '用户粘贴 JD'
+}
+
 const handleDelete = async (record: JobDescriptionDetail) => {
   try {
     await ElMessageBox.confirm(`确认删除「${record.title}」吗？关联的匹配分析结果也会一起删除。`, '删除目标岗位', {
@@ -96,6 +106,11 @@ onMounted(() => {
 
       <el-table v-loading="loading" :data="records" class="job-description-table" empty-text="暂无目标岗位">
         <el-table-column prop="title" label="标题" min-width="220" />
+        <el-table-column label="来源" width="130">
+          <template #default="{ row }: { row: JobDescriptionDetail }">
+            <el-tag type="info">{{ sourceTypeText(row.sourceType) }}</el-tag>
+          </template>
+        </el-table-column>
         <el-table-column label="解析状态" width="120">
           <template #default="{ row }: { row: JobDescriptionDetail }">
             <el-tag :type="statusType(row.parseStatus)">{{ statusText(row.parseStatus) }}</el-tag>

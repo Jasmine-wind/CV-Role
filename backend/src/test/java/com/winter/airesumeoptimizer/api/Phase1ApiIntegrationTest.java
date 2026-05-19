@@ -327,7 +327,7 @@ class Phase1ApiIntegrationTest {
                         .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(400))
-                .andExpect(jsonPath("$.message").value("岗位描述 ID 必须大于 0"));
+                .andExpect(jsonPath("$.message").value("目标岗位 ID 必须大于 0"));
     }
 
     @Test
@@ -342,14 +342,14 @@ class Phase1ApiIntegrationTest {
     @Test
     void jobOptimizationReportEndpointShouldReturnBusinessError() throws Exception {
         when(jobOptimizationReportService.getReport(eq(1L), eq(100L), eq(99L)))
-                .thenThrow(new BusinessException(404, "AI 岗位匹配结果不存在，请先生成岗位匹配结果"));
+                .thenThrow(new BusinessException(404, "匹配分析结果不存在，请先生成匹配分析结果"));
 
         mockMvc.perform(get("/api/resumes/100/job-optimization-report")
                         .param("jobDescriptionId", "99")
                         .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(404))
-                .andExpect(jsonPath("$.message").value("AI 岗位匹配结果不存在，请先生成岗位匹配结果"));
+                .andExpect(jsonPath("$.message").value("匹配分析结果不存在，请先生成匹配分析结果"));
     }
 
     @Test
@@ -485,15 +485,15 @@ class Phase1ApiIntegrationTest {
         when(aiJobMatchService.getByResumeAndJobDescription(1L, 100L, 11L))
                 .thenReturn(buildFailedAiJobMatchResult());
         when(aiJobMatchService.getByResumeAndJobDescription(1L, 100L, 99L))
-                .thenThrow(new BusinessException(404, "AI 岗位匹配结果不存在"));
+                .thenThrow(new BusinessException(404, "匹配分析结果不存在"));
         when(aiJobMatchService.match(1L, 101L, 10L))
-                .thenThrow(new BusinessException(400, "简历解析未成功，不能进行 AI 匹配"));
+                .thenThrow(new BusinessException(400, "简历解析未成功，不能进行匹配分析"));
         when(aiResumeSuggestionService.generate(1L, 100L, 10L, 400L))
                 .thenReturn(buildAiResumeSuggestion("SUCCESS"));
         when(aiResumeSuggestionService.generate(1L, 100L, 11L, 401L))
                 .thenReturn(buildFailedAiResumeSuggestion());
         when(aiResumeSuggestionService.generate(1L, 100L, 12L, 402L))
-                .thenThrow(new BusinessException(400, "AI 岗位匹配未成功，不能生成优化建议"));
+                .thenThrow(new BusinessException(400, "匹配分析未成功，不能生成岗位优化建议"));
         when(aiResumeSuggestionService.listByResume(1L, 100L)).thenReturn(List.of(
                 buildAiResumeSuggestion("SUCCESS"),
                 buildFailedAiResumeSuggestion()));
@@ -606,7 +606,7 @@ class Phase1ApiIntegrationTest {
         mockMvc.perform(post("/api/resumes/100/ai-analysis")
                         .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.message").value("AI 分析完成"))
+                .andExpect(jsonPath("$.message").value("简历诊断完成"))
                 .andExpect(jsonPath("$.data.score").value(88));
 
         mockMvc.perform(get("/api/resumes/100/ai-analysis")
@@ -621,7 +621,7 @@ class Phase1ApiIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(aiJobMatchRequest)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.message").value("AI 岗位匹配完成"))
+                .andExpect(jsonPath("$.message").value("匹配分析完成"))
                 .andExpect(jsonPath("$.data.matchId").value(400))
                 .andExpect(jsonPath("$.data.resumeId").value(100))
                 .andExpect(jsonPath("$.data.jobDescriptionId").value(10))
@@ -634,7 +634,7 @@ class Phase1ApiIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(aiJobMatchRequest)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.message").value("AI 岗位匹配失败"))
+                .andExpect(jsonPath("$.message").value("匹配分析失败"))
                 .andExpect(jsonPath("$.data.matchStatus").value("FAILED"))
                 .andExpect(jsonPath("$.data.errorMessage").value("AI 匹配结果不是合法 JSON"));
 
@@ -645,7 +645,7 @@ class Phase1ApiIntegrationTest {
                         .content(objectMapper.writeValueAsString(aiJobMatchRequest)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(400))
-                .andExpect(jsonPath("$.message").value("简历解析未成功，不能进行 AI 匹配"));
+                .andExpect(jsonPath("$.message").value("简历解析未成功，不能进行匹配分析"));
 
         aiJobMatchRequest.setJobDescriptionId(null);
         mockMvc.perform(post("/api/resumes/100/ai-job-matches")
@@ -654,7 +654,7 @@ class Phase1ApiIntegrationTest {
                         .content(objectMapper.writeValueAsString(aiJobMatchRequest)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(400))
-                .andExpect(jsonPath("$.message").value("岗位描述 ID 不能为空"));
+                .andExpect(jsonPath("$.message").value("目标岗位 ID 不能为空"));
 
         mockMvc.perform(get("/api/resumes/100/ai-job-matches")
                         .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
@@ -680,7 +680,7 @@ class Phase1ApiIntegrationTest {
                         .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(404))
-                .andExpect(jsonPath("$.message").value("AI 岗位匹配结果不存在"));
+                .andExpect(jsonPath("$.message").value("匹配分析结果不存在"));
 
         AiResumeSuggestionRequestDTO suggestionRequest = new AiResumeSuggestionRequestDTO();
         suggestionRequest.setJobDescriptionId(10L);
@@ -718,7 +718,7 @@ class Phase1ApiIntegrationTest {
                         .content(objectMapper.writeValueAsString(suggestionRequest)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(400))
-                .andExpect(jsonPath("$.message").value("AI 岗位匹配未成功，不能生成优化建议"));
+                .andExpect(jsonPath("$.message").value("匹配分析未成功，不能生成岗位优化建议"));
 
         suggestionRequest.setJobDescriptionId(null);
         suggestionRequest.setAiJobMatchResultId(400L);
@@ -728,7 +728,7 @@ class Phase1ApiIntegrationTest {
                         .content(objectMapper.writeValueAsString(suggestionRequest)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(400))
-                .andExpect(jsonPath("$.message").value("岗位描述 ID 不能为空"));
+                .andExpect(jsonPath("$.message").value("目标岗位 ID 不能为空"));
 
         mockMvc.perform(get("/api/resumes/100/ai-suggestions")
                         .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
@@ -970,7 +970,7 @@ class Phase1ApiIntegrationTest {
                 .title("Java 后端开发工程师")
                 .rawText("负责 Java 后端开发")
                 .parseStatus("FAILED")
-                .errorMessage("岗位描述解析结果不是合法 JSON")
+                .errorMessage("目标岗位解析结果不是合法 JSON")
                 .createdAt(LocalDateTime.now())
                 .updatedAt(LocalDateTime.now())
                 .build();
@@ -986,7 +986,7 @@ class Phase1ApiIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.message").value("岗位描述提交成功"))
+                .andExpect(jsonPath("$.message").value("目标岗位提交成功"))
                 .andExpect(jsonPath("$.data.id").value(10))
                 .andExpect(jsonPath("$.data.parseStatus").value("PENDING"));
 
@@ -1006,20 +1006,20 @@ class Phase1ApiIntegrationTest {
         mockMvc.perform(post("/api/job-descriptions/10/parse")
                         .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.message").value("岗位描述解析完成"))
+                .andExpect(jsonPath("$.message").value("目标岗位解析完成"))
                 .andExpect(jsonPath("$.data.parseStatus").value("SUCCESS"));
 
         mockMvc.perform(post("/api/job-descriptions/11/parse")
                         .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.message").value("岗位描述解析失败"))
+                .andExpect(jsonPath("$.message").value("目标岗位解析失败"))
                 .andExpect(jsonPath("$.data.parseStatus").value("FAILED"))
-                .andExpect(jsonPath("$.data.errorMessage").value("岗位描述解析结果不是合法 JSON"));
+                .andExpect(jsonPath("$.data.errorMessage").value("目标岗位解析结果不是合法 JSON"));
 
         mockMvc.perform(delete("/api/job-descriptions/10")
                         .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.message").value("岗位描述删除成功"));
+                .andExpect(jsonPath("$.message").value("目标岗位删除成功"));
     }
 
     @Test

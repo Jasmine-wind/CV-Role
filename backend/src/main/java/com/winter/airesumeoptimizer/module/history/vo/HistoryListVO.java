@@ -43,7 +43,7 @@ public class HistoryListVO {
     @Schema(description = "最近匹配岗位 ID", example = "1")
     private Long latestJobId;
 
-    @Schema(description = "最近匹配岗位描述 ID", example = "1")
+    @Schema(description = "最近匹配目标岗位 ID", example = "1")
     private Long latestJobDescriptionId;
 
     @Schema(description = "最近匹配来源", example = "AI_JOB_DESCRIPTION")

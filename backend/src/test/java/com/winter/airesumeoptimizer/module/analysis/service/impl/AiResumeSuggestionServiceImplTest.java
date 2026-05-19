@@ -152,7 +152,7 @@ class AiResumeSuggestionServiceImplTest {
 
         assertThatThrownBy(() -> service.generate(1L, 10L, 20L, 30L))
                 .isInstanceOf(BusinessException.class)
-                .hasMessage("AI 岗位匹配未成功，不能生成优化建议");
+                .hasMessage("匹配分析未成功，不能生成岗位优化建议");
         verify(aiClientService, never()).complete(any(String.class));
     }
 

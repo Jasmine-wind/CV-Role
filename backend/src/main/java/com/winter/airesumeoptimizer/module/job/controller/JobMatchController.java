@@ -23,7 +23,7 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequestMapping("/api/resumes/{resumeId}/job-matches")
 @Validated
-@Tag(name = "Job Match", description = "简历与岗位匹配接口")
+@Tag(name = "Preset Job Match", description = "简历与系统预置岗位的基础匹配接口")
 @SecurityRequirement(name = "bearerAuth")
 public class JobMatchController {
 
@@ -34,7 +34,7 @@ public class JobMatchController {
     }
 
     @PostMapping
-    @Operation(summary = "触发岗位匹配", description = "将指定简历与目标岗位进行匹配并生成建议")
+    @Operation(summary = "触发基础岗位库匹配", description = "将指定简历与系统预置岗位进行基础匹配；真实目标 JD 主流程请使用匹配与优化")
     public Result<JobMatchResultVO> match(
             @PathVariable @Positive(message = "简历 ID 必须大于 0") Long resumeId,
             @Valid @RequestBody JobMatchRequestDTO requestDTO,
@@ -48,7 +48,7 @@ public class JobMatchController {
     }
 
     @GetMapping
-    @Operation(summary = "岗位匹配结果列表", description = "查询指定简历的岗位匹配结果")
+    @Operation(summary = "基础岗位库匹配结果列表", description = "查询指定简历与系统预置岗位的基础匹配结果")
     public Result<List<JobMatchResultVO>> list(
             @PathVariable @Positive(message = "简历 ID 必须大于 0") Long resumeId,
             Authentication authentication) {

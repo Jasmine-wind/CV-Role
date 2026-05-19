@@ -203,6 +203,7 @@ public class AiHistoryServiceImpl implements AiHistoryService {
                 .title("目标岗位解析 - " + safeJobTitle(jobDescription))
                 .status(jobDescription.getParseStatus())
                 .content(contentMap(
+                        "sourceType", nullableValue(jobDescription.getSourceType()),
                         "rawTextPreview", nullableValue(preview(jobDescription.getRawText())),
                         "structuredContent", readJsonValue(jobDescription.getStructuredContent())))
                 .jobDescriptionId(jobDescription.getId())

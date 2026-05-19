@@ -8,10 +8,10 @@ import lombok.Setter;
 
 @Getter
 @Setter
-@Schema(description = "岗位匹配请求")
+@Schema(description = "系统预置岗位基础匹配请求")
 public class JobMatchRequestDTO {
 
-    @Schema(description = "岗位 ID", example = "1")
+    @Schema(description = "系统预置岗位 ID", example = "1")
     @NotNull(message = "岗位 ID 不能为空")
     @Positive(message = "岗位 ID 必须大于 0")
     private Long jobId;

@@ -33,7 +33,7 @@ class ResumeRagServiceImplTest {
 
         assertThat(result.isUsed()).isTrue();
         assertThat(result.getMatchCount()).isEqualTo(1);
-        assertThat(result.getContextText()).contains("当前用户自己的简历和目标岗位描述");
+        assertThat(result.getContextText()).contains("当前用户自己的简历和目标岗位");
         assertThat(result.getContextText()).contains("Java 项目经验");
         assertThat(result.getContextText()).contains("Java 后端职责");
     }

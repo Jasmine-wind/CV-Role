@@ -30,10 +30,10 @@ public class SemanticMatchController {
     }
 
     @GetMapping("/{resumeId}/semantic-matches")
-    @Operation(summary = "查询简历与岗位描述语义相似片段", description = "基于已生成向量返回 Top-K 语义相似片段")
+    @Operation(summary = "查询简历与目标岗位语义相似片段", description = "基于已生成向量返回 Top-K 语义相似片段")
     public Result<SemanticMatchResultVO> match(
             @PathVariable @Positive(message = "简历 ID 必须大于 0") Long resumeId,
-            @RequestParam @Positive(message = "岗位描述 ID 必须大于 0") Long jobDescriptionId,
+            @RequestParam @Positive(message = "目标岗位 ID 必须大于 0") Long jobDescriptionId,
             @RequestParam(required = false) @Positive(message = "topK 必须大于 0") Integer topK,
             Authentication authentication) {
         AuthenticatedUser authenticatedUser = (AuthenticatedUser) authentication.getPrincipal();

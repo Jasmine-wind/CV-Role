@@ -262,6 +262,14 @@ onMounted(() => {
         </el-space>
       </header>
 
+      <el-alert
+        class="history-boundary-alert"
+        title="AI 历史只回看已保存结果，不会触发新的 AI 生成。"
+        type="info"
+        :closable="false"
+        show-icon
+      />
+
       <section class="history-filter-panel">
         <el-form class="history-filter-form" label-position="top">
           <el-form-item label="结果类型">
@@ -371,7 +379,7 @@ onMounted(() => {
         </el-table>
 
         <el-empty v-if="!loading && !hasRecords" description="暂无 AI 历史" :image-size="96">
-          <el-button type="primary" @click="router.push('/resumes')">去生成 AI 结果</el-button>
+          <el-button type="primary" @click="router.push('/resumes')">去我的简历</el-button>
         </el-empty>
 
         <div v-if="total > 0" class="history-pagination">
@@ -480,6 +488,10 @@ onMounted(() => {
   color: #667085;
   font-size: 15px;
   line-height: 1.7;
+}
+
+.history-boundary-alert {
+  margin-bottom: 16px;
 }
 
 .history-filter-panel,

@@ -210,24 +210,24 @@ public class AiResumeSuggestionServiceImpl implements AiResumeSuggestionService 
     private JobDescription getOwnedSuccessfulJobDescription(Long userId, Long jobDescriptionId) {
         JobDescription jobDescription = getOwnedJobDescription(userId, jobDescriptionId);
         if (!PARSE_STATUS_SUCCESS.equals(jobDescription.getParseStatus())) {
-            throw new BusinessException(400, "岗位描述解析未成功，不能生成优化建议");
+            throw new BusinessException(400, "目标岗位解析未成功，不能生成岗位优化建议");
         }
         if (jobDescription.getStructuredContent() == null || jobDescription.getStructuredContent().isBlank()) {
-            throw new BusinessException(400, "岗位描述结构化解析结果为空，不能生成优化建议");
+            throw new BusinessException(400, "目标岗位结构化解析结果为空，不能生成岗位优化建议");
         }
         return jobDescription;
     }
 
     private JobDescription getOwnedJobDescription(Long userId, Long jobDescriptionId) {
         if (jobDescriptionId == null) {
-            throw new BusinessException(400, "岗位描述 ID 不能为空");
+            throw new BusinessException(400, "目标岗位 ID 不能为空");
         }
 
         JobDescription jobDescription = jobDescriptionMapper.selectOne(new LambdaQueryWrapper<JobDescription>()
                 .eq(JobDescription::getId, jobDescriptionId)
                 .eq(JobDescription::getUserId, userId));
         if (jobDescription == null) {
-            throw new BusinessException(404, "岗位描述不存在");
+            throw new BusinessException(404, "目标岗位不存在");
         }
         return jobDescription;
     }
@@ -242,10 +242,10 @@ public class AiResumeSuggestionServiceImpl implements AiResumeSuggestionService 
 
         AiJobMatchResult matchResult = aiJobMatchResultMapper.selectOne(query);
         if (matchResult == null) {
-            throw new BusinessException(404, "AI 岗位匹配结果不存在");
+            throw new BusinessException(404, "匹配分析结果不存在");
         }
         if (!MATCH_STATUS_SUCCESS.equals(matchResult.getMatchStatus())) {
-            throw new BusinessException(400, "AI 岗位匹配未成功，不能生成优化建议");
+            throw new BusinessException(400, "匹配分析未成功，不能生成岗位优化建议");
         }
         return matchResult;
     }

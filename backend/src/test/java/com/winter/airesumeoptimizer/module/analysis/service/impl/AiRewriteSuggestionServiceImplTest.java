@@ -165,7 +165,7 @@ class AiRewriteSuggestionServiceImplTest {
 
         assertThatThrownBy(() -> service.generate(1L, 10L, "PROJECT", "项目经历", "负责接口开发", null, 30L, null))
                 .isInstanceOf(BusinessException.class)
-                .hasMessage("AI 岗位匹配未成功，不能用于局部改写");
+                .hasMessage("匹配分析未成功，不能用于局部改写");
         verify(aiClientService, never()).complete(any(String.class));
     }
 

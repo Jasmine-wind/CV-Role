@@ -440,7 +440,7 @@ const loadCurrentMatch = async () => {
     selectedRewriteSuggestion.value = null
     optimizationReport.value = null
     rewriteSuggestions.value = []
-    if (error instanceof Error && error.message !== 'AI 岗位匹配结果不存在') {
+    if (error instanceof Error && error.message !== '匹配分析结果不存在') {
       ElMessage.warning(error.message)
     }
   } finally {
@@ -805,7 +805,7 @@ onMounted(() => {
               <div class="ai-match-suggestion-header">
                 <div>
                   <h2 class="ai-match-section-title">岗位优化报告</h2>
-                  <p class="ai-match-suggestion-note">聚合匹配分析、岗位优化建议和局部改写结果，作为当前岗位的修改清单。</p>
+                  <p class="ai-match-suggestion-note">聚合匹配分析、岗位优化建议和局部改写结果，不重新调用 AI。</p>
                 </div>
                 <el-button
                   :loading="loadingOptimizationReport"

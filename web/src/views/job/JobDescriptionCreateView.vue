@@ -55,6 +55,14 @@ const handleSubmit = async () => {
       </header>
 
       <section class="job-description-panel">
+        <el-alert
+          class="job-description-alert"
+          title="目标岗位来源固定为用户粘贴 JD，不进入系统预置岗位库，也不依赖岗位爬取。"
+          type="info"
+          :closable="false"
+          show-icon
+        />
+
         <el-form label-position="top">
           <el-form-item label="标题">
             <el-input
@@ -125,6 +133,10 @@ const handleSubmit = async () => {
   border: 1px solid #dde5f0;
   border-radius: 8px;
   background: #ffffff;
+}
+
+.job-description-alert {
+  margin-bottom: 20px;
 }
 
 .job-description-actions {

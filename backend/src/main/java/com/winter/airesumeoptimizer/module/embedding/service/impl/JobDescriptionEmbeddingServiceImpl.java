@@ -55,7 +55,7 @@ public class JobDescriptionEmbeddingServiceImpl implements JobDescriptionEmbeddi
                 jobDescription.getStructuredContent(),
                 jobDescription.getRawText());
         if (chunks.isEmpty()) {
-            throw new BusinessException(400, "岗位描述文本为空，无法生成向量");
+            throw new BusinessException(400, "目标岗位文本为空，无法生成向量");
         }
 
         jobDescriptionEmbeddingMapper.deleteByJobDescriptionId(jobDescription.getId());
@@ -113,21 +113,21 @@ public class JobDescriptionEmbeddingServiceImpl implements JobDescriptionEmbeddi
             throw new BusinessException(401, "请先登录");
         }
         if (jobDescriptionId == null) {
-            throw new BusinessException(400, "岗位描述 ID 不能为空");
+            throw new BusinessException(400, "目标岗位 ID 不能为空");
         }
 
         JobDescription jobDescription = jobDescriptionMapper.selectOne(new LambdaQueryWrapper<JobDescription>()
                 .eq(JobDescription::getId, jobDescriptionId)
                 .eq(JobDescription::getUserId, userId));
         if (jobDescription == null) {
-            throw new BusinessException(404, "岗位描述不存在");
+            throw new BusinessException(404, "目标岗位不存在");
         }
         return jobDescription;
     }
 
     private void validateParseSuccess(JobDescription jobDescription) {
         if (!STATUS_SUCCESS.equals(jobDescription.getParseStatus())) {
-            throw new BusinessException(400, "岗位描述解析未成功，不能生成向量");
+            throw new BusinessException(400, "目标岗位解析未成功，不能生成向量");
         }
     }
 

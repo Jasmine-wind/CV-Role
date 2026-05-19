@@ -25,7 +25,7 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequestMapping("/api/job-descriptions")
 @Validated
-@Tag(name = "JobDescription", description = "岗位描述提交和查询接口")
+@Tag(name = "Target Job", description = "目标岗位提交、查询和解析接口")
 @SecurityRequirement(name = "bearerAuth")
 public class JobDescriptionController {
 
@@ -40,49 +40,49 @@ public class JobDescriptionController {
     }
 
     @PostMapping
-    @Operation(summary = "提交岗位描述", description = "保存当前用户提交的岗位描述原文")
+    @Operation(summary = "新增目标岗位", description = "保存当前用户粘贴的真实目标岗位 JD，来源固定为 USER_INPUT")
     public Result<JobDescriptionVO> submit(
             @Valid @RequestBody JobDescriptionSubmitDTO request,
             Authentication authentication) {
         AuthenticatedUser authenticatedUser = (AuthenticatedUser) authentication.getPrincipal();
-        return Result.success("岗位描述提交成功",
+        return Result.success("目标岗位提交成功",
                 jobDescriptionService.submit(authenticatedUser.getUserId(), request));
     }
 
     @GetMapping
-    @Operation(summary = "岗位描述列表", description = "查询当前用户提交过的岗位描述")
+    @Operation(summary = "目标岗位列表", description = "查询当前用户提交过的目标岗位 JD")
     public Result<List<JobDescriptionVO>> list(Authentication authentication) {
         AuthenticatedUser authenticatedUser = (AuthenticatedUser) authentication.getPrincipal();
         return Result.success(jobDescriptionService.listByUser(authenticatedUser.getUserId()));
     }
 
     @GetMapping("/{id}")
-    @Operation(summary = "岗位描述详情", description = "查询当前用户提交的岗位描述")
+    @Operation(summary = "目标岗位详情", description = "查询当前用户提交的目标岗位 JD")
     public Result<JobDescriptionVO> detail(
-            @PathVariable @Positive(message = "岗位描述 ID 必须大于 0") Long id,
+            @PathVariable @Positive(message = "目标岗位 ID 必须大于 0") Long id,
             Authentication authentication) {
         AuthenticatedUser authenticatedUser = (AuthenticatedUser) authentication.getPrincipal();
         return Result.success(jobDescriptionService.getDetail(authenticatedUser.getUserId(), id));
     }
 
     @DeleteMapping("/{id}")
-    @Operation(summary = "删除岗位描述", description = "删除当前用户提交的岗位描述及关联 AI 匹配结果")
+    @Operation(summary = "删除目标岗位", description = "删除当前用户提交的目标岗位及关联 AI 匹配结果")
     public Result<Void> delete(
-            @PathVariable @Positive(message = "岗位描述 ID 必须大于 0") Long id,
+            @PathVariable @Positive(message = "目标岗位 ID 必须大于 0") Long id,
             Authentication authentication) {
         AuthenticatedUser authenticatedUser = (AuthenticatedUser) authentication.getPrincipal();
         jobDescriptionService.delete(authenticatedUser.getUserId(), id);
-        return Result.success("岗位描述删除成功", null);
+        return Result.success("目标岗位删除成功", null);
     }
 
     @PostMapping("/{id}/parse")
-    @Operation(summary = "解析岗位描述", description = "触发当前用户岗位描述的 AI 结构化解析")
+    @Operation(summary = "解析目标岗位", description = "触发当前用户目标岗位 JD 的 AI 结构化解析，不生成简历建议")
     public Result<JobDescriptionVO> parse(
-            @PathVariable @Positive(message = "岗位描述 ID 必须大于 0") Long id,
+            @PathVariable @Positive(message = "目标岗位 ID 必须大于 0") Long id,
             Authentication authentication) {
         AuthenticatedUser authenticatedUser = (AuthenticatedUser) authentication.getPrincipal();
         JobDescriptionVO result = jobDescriptionParseService.parse(authenticatedUser.getUserId(), id);
-        String message = "FAILED".equals(result.getParseStatus()) ? "岗位描述解析失败" : "岗位描述解析完成";
+        String message = "FAILED".equals(result.getParseStatus()) ? "目标岗位解析失败" : "目标岗位解析完成";
         return Result.success(message, result);
     }
 }

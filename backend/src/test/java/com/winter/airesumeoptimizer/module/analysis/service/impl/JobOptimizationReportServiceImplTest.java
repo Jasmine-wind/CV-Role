@@ -162,7 +162,7 @@ class JobOptimizationReportServiceImplTest {
 
         assertThatThrownBy(() -> service.getReport(1L, 10L, 20L))
                 .isInstanceOf(BusinessException.class)
-                .hasMessage("AI 岗位匹配结果不存在，请先生成岗位匹配结果");
+                .hasMessage("匹配分析结果不存在，请先生成匹配分析结果");
     }
 
     @Test
@@ -173,7 +173,7 @@ class JobOptimizationReportServiceImplTest {
 
         assertThatThrownBy(() -> service.getReport(1L, 10L, 20L))
                 .isInstanceOf(BusinessException.class)
-                .hasMessage("AI 岗位匹配未成功，不能生成岗位优化报告");
+                .hasMessage("匹配分析未成功，不能生成岗位优化报告");
     }
 
     @Test

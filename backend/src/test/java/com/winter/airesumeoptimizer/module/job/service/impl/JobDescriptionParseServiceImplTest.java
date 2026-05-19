@@ -95,7 +95,7 @@ class JobDescriptionParseServiceImplTest {
         when(aiClientService.modelName()).thenReturn("qwen-plus");
         when(aiClientService.complete("prompt")).thenReturn("not json");
         when(jobDescriptionOutputParser.parse("not json"))
-                .thenThrow(new BusinessException(502, "岗位描述解析结果不是合法 JSON"));
+                .thenThrow(new BusinessException(502, "目标岗位解析结果不是合法 JSON"));
 
         service.parse(1L, 10L);
 
@@ -103,7 +103,7 @@ class JobDescriptionParseServiceImplTest {
         verify(jobDescriptionMapper).updateById(captor.capture());
         assertThat(captor.getValue().getParseStatus()).isEqualTo("FAILED");
         assertThat(captor.getValue().getStructuredContent()).isNull();
-        assertThat(captor.getValue().getErrorMessage()).isEqualTo("岗位描述解析结果不是合法 JSON");
+        assertThat(captor.getValue().getErrorMessage()).isEqualTo("目标岗位解析结果不是合法 JSON");
     }
 
     @Test
@@ -112,7 +112,7 @@ class JobDescriptionParseServiceImplTest {
 
         assertThatThrownBy(() -> service.parse(1L, 10L))
                 .isInstanceOf(BusinessException.class)
-                .hasMessage("岗位描述不存在");
+                .hasMessage("目标岗位不存在");
         verify(aiClientService, never()).complete(any(String.class));
     }
 

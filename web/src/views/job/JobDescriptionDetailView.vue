@@ -64,6 +64,16 @@ const statusText = computed(() => {
   return '未解析'
 })
 
+const sourceTypeText = computed(() => {
+  if (detail.value?.sourceType === 'PRESET') {
+    return '系统预置'
+  }
+  if (detail.value?.sourceType === 'CRAWLED') {
+    return '外部采集'
+  }
+  return '用户粘贴 JD'
+})
+
 const loadDetail = async () => {
   if (!Number.isFinite(jobDescriptionId.value)) {
     loadFailed.value = true
@@ -182,6 +192,7 @@ onMounted(() => {
 
           <el-descriptions :column="2" border>
             <el-descriptions-item label="标题">{{ detail.title }}</el-descriptions-item>
+            <el-descriptions-item label="来源">{{ sourceTypeText }}</el-descriptions-item>
             <el-descriptions-item label="解析状态">{{ detail.parseStatus }}</el-descriptions-item>
             <el-descriptions-item label="模型">{{ detail.modelName || '-' }}</el-descriptions-item>
             <el-descriptions-item label="Prompt 版本">{{ detail.promptVersion || '-' }}</el-descriptions-item>

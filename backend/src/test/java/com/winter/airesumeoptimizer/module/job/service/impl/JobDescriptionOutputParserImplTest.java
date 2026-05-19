@@ -39,14 +39,14 @@ class JobDescriptionOutputParserImplTest {
     void parseShouldRejectInvalidJson() {
         assertThatThrownBy(() -> parser.parse("不是 JSON"))
                 .isInstanceOf(BusinessException.class)
-                .hasMessage("岗位描述解析结果不是合法 JSON");
+                .hasMessage("目标岗位解析结果不是合法 JSON");
     }
 
     @Test
     void parseShouldRejectNonObjectJson() {
         assertThatThrownBy(() -> parser.parse("[\"Java\"]"))
                 .isInstanceOf(BusinessException.class)
-                .hasMessage("岗位描述解析结果必须是 JSON 对象");
+                .hasMessage("目标岗位解析结果必须是 JSON 对象");
     }
 
     @Test

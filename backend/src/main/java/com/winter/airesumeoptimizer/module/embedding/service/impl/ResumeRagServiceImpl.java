@@ -44,8 +44,8 @@ public class ResumeRagServiceImpl implements ResumeRagService {
         }
 
         StringBuilder context = new StringBuilder();
-        context.append("RAG 检索增强上下文：以下片段只来自当前用户自己的简历和目标岗位描述。")
-                .append("这些片段只能作为辅助定位依据，不得替代原始简历、岗位描述或 AI 匹配结果。\n");
+        context.append("RAG 检索增强上下文：以下片段只来自当前用户自己的简历和目标岗位。")
+                .append("这些片段只能作为辅助定位依据，不得替代原始简历、目标岗位或匹配分析结果。\n");
         for (int index = 0; index < matches.size(); index++) {
             SemanticMatchItemVO item = matches.get(index);
             context.append("\n片段 ").append(index + 1)
@@ -60,7 +60,7 @@ public class ResumeRagServiceImpl implements ResumeRagService {
                 .used(true)
                 .matchCount(matches.size())
                 .contextText(truncate(context.toString()))
-                .note("已使用当前用户自己的简历和岗位描述向量片段")
+                .note("已使用当前用户自己的简历和目标岗位向量片段")
                 .build();
     }
 

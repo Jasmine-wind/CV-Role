@@ -66,7 +66,7 @@ class JobDescriptionEmbeddingServiceImplTest {
 
         assertThatThrownBy(() -> service.generate(1L, 10L))
                 .isInstanceOf(BusinessException.class)
-                .hasMessage("岗位描述解析未成功，不能生成向量");
+                .hasMessage("目标岗位解析未成功，不能生成向量");
     }
 
     private JobDescription buildJobDescription(String status) {

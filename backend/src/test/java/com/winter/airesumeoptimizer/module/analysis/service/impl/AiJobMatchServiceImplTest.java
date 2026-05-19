@@ -163,7 +163,7 @@ class AiJobMatchServiceImplTest {
 
         assertThatThrownBy(() -> service.match(1L, 10L, 20L))
                 .isInstanceOf(BusinessException.class)
-                .hasMessage("简历解析未成功，不能进行 AI 匹配");
+                .hasMessage("简历解析未成功，不能进行匹配分析");
         verify(aiClientService, never()).complete(any(String.class));
 
         when(resumeParseResultMapper.selectOne(any(Wrapper.class))).thenReturn(buildParseResult("SUCCESS"));
@@ -171,7 +171,7 @@ class AiJobMatchServiceImplTest {
 
         assertThatThrownBy(() -> service.match(1L, 10L, 20L))
                 .isInstanceOf(BusinessException.class)
-                .hasMessage("岗位描述解析未成功，不能进行 AI 匹配");
+                .hasMessage("目标岗位解析未成功，不能进行匹配分析");
         verify(aiClientService, never()).complete(any(String.class));
     }
 
@@ -216,7 +216,7 @@ class AiJobMatchServiceImplTest {
 
         assertThatThrownBy(() -> service.getByResumeAndJobDescription(1L, 10L, 20L))
                 .isInstanceOf(BusinessException.class)
-                .hasMessage("AI 岗位匹配结果不存在");
+                .hasMessage("匹配分析结果不存在");
     }
 
     private Resume buildResume() {

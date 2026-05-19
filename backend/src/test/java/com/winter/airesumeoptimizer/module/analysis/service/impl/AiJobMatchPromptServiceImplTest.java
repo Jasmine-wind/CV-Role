@@ -41,7 +41,7 @@ class AiJobMatchPromptServiceImplTest {
 
         assertThatThrownBy(() -> service.buildPrompt("{\"skills\":[\"Java\"]}", " ", null))
                 .isInstanceOf(BusinessException.class)
-                .hasMessage("岗位描述结构化解析结果不能为空");
+                .hasMessage("目标岗位结构化解析结果不能为空");
     }
 
     @Test

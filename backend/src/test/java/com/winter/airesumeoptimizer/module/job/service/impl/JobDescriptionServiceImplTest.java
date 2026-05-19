@@ -92,7 +92,7 @@ class JobDescriptionServiceImplTest {
 
         assertThatThrownBy(() -> service.getDetail(1L, 10L))
                 .isInstanceOf(BusinessException.class)
-                .hasMessage("岗位描述不存在");
+                .hasMessage("目标岗位不存在");
     }
 
     @Test

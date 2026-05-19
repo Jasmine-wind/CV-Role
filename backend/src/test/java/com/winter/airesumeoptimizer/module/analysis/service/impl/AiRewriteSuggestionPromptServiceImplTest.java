@@ -46,9 +46,9 @@ class AiRewriteSuggestionPromptServiceImplTest {
                 "",
                 "   ");
 
-        assertThat(result.getPrompt()).contains("岗位描述结构化结果：\n未提供");
-        assertThat(result.getPrompt()).contains("AI 匹配结果：\n未提供");
-        assertThat(result.getPrompt()).contains("AI 优化建议：\n未提供");
+        assertThat(result.getPrompt()).contains("目标岗位结构化结果：\n未提供");
+        assertThat(result.getPrompt()).contains("匹配分析结果：\n未提供");
+        assertThat(result.getPrompt()).contains("岗位优化建议：\n未提供");
     }
 
     @Test

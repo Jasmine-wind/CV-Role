@@ -140,7 +140,7 @@ public class AiJobMatchServiceImpl implements AiJobMatchService {
                 .eq(AiJobMatchResult::getResumeId, resume.getId())
                 .eq(AiJobMatchResult::getJobDescriptionId, jobDescription.getId()));
         if (matchResult == null) {
-            throw new BusinessException(404, "AI 岗位匹配结果不存在");
+            throw new BusinessException(404, "匹配分析结果不存在");
         }
         return matchResult;
     }
@@ -169,10 +169,10 @@ public class AiJobMatchServiceImpl implements AiJobMatchService {
             throw new BusinessException(400, "请先完成简历解析");
         }
         if (!PARSE_STATUS_SUCCESS.equals(parseResult.getParseStatus())) {
-            throw new BusinessException(400, "简历解析未成功，不能进行 AI 匹配");
+            throw new BusinessException(400, "简历解析未成功，不能进行匹配分析");
         }
         if (parseResult.getStructuredJson() == null || parseResult.getStructuredJson().isBlank()) {
-            throw new BusinessException(400, "简历结构化解析结果为空，不能进行 AI 匹配");
+            throw new BusinessException(400, "简历结构化解析结果为空，不能进行匹配分析");
         }
         return parseResult;
     }
@@ -180,24 +180,24 @@ public class AiJobMatchServiceImpl implements AiJobMatchService {
     private JobDescription getOwnedSuccessfulJobDescription(Long userId, Long jobDescriptionId) {
         JobDescription jobDescription = getOwnedJobDescription(userId, jobDescriptionId);
         if (!PARSE_STATUS_SUCCESS.equals(jobDescription.getParseStatus())) {
-            throw new BusinessException(400, "岗位描述解析未成功，不能进行 AI 匹配");
+            throw new BusinessException(400, "目标岗位解析未成功，不能进行匹配分析");
         }
         if (jobDescription.getStructuredContent() == null || jobDescription.getStructuredContent().isBlank()) {
-            throw new BusinessException(400, "岗位描述结构化解析结果为空，不能进行 AI 匹配");
+            throw new BusinessException(400, "目标岗位结构化解析结果为空，不能进行匹配分析");
         }
         return jobDescription;
     }
 
     private JobDescription getOwnedJobDescription(Long userId, Long jobDescriptionId) {
         if (jobDescriptionId == null) {
-            throw new BusinessException(400, "岗位描述 ID 不能为空");
+            throw new BusinessException(400, "目标岗位 ID 不能为空");
         }
 
         JobDescription jobDescription = jobDescriptionMapper.selectOne(new LambdaQueryWrapper<JobDescription>()
                 .eq(JobDescription::getId, jobDescriptionId)
                 .eq(JobDescription::getUserId, userId));
         if (jobDescription == null) {
-            throw new BusinessException(404, "岗位描述不存在");
+            throw new BusinessException(404, "目标岗位不存在");
         }
         return jobDescription;
     }
@@ -274,7 +274,7 @@ public class AiJobMatchServiceImpl implements AiJobMatchService {
 
     private String normalizeErrorMessage(RuntimeException exception) {
         if (exception.getMessage() == null || exception.getMessage().isBlank()) {
-            return "AI 岗位匹配失败";
+            return "匹配分析失败";
         }
         return exception.getMessage();
     }

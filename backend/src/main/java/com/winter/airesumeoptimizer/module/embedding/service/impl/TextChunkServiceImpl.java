@@ -33,7 +33,7 @@ public class TextChunkServiceImpl implements TextChunkService {
 
         String normalizedStructuredContent = normalize(structuredContent);
         if (!normalizedStructuredContent.isBlank()) {
-            addChunk(chunks, "岗位描述结构化解析\n" + normalizedStructuredContent);
+            addChunk(chunks, "目标岗位结构化解析\n" + normalizedStructuredContent);
         }
         splitParagraphs(chunks, rawText);
 

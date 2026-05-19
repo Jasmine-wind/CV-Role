@@ -193,13 +193,13 @@ public class JobOptimizationReportServiceImpl implements JobOptimizationReportSe
 
     private JobDescription getOwnedJobDescription(Long userId, Long jobDescriptionId) {
         if (jobDescriptionId == null) {
-            throw new BusinessException(400, "岗位描述 ID 不能为空");
+            throw new BusinessException(400, "目标岗位 ID 不能为空");
         }
         JobDescription jobDescription = jobDescriptionMapper.selectOne(new LambdaQueryWrapper<JobDescription>()
                 .eq(JobDescription::getId, jobDescriptionId)
                 .eq(JobDescription::getUserId, userId));
         if (jobDescription == null) {
-            throw new BusinessException(404, "岗位描述不存在");
+            throw new BusinessException(404, "目标岗位不存在");
         }
         return jobDescription;
     }
@@ -209,10 +209,10 @@ public class JobOptimizationReportServiceImpl implements JobOptimizationReportSe
                 .eq(AiJobMatchResult::getResumeId, resumeId)
                 .eq(AiJobMatchResult::getJobDescriptionId, jobDescriptionId));
         if (matchResult == null) {
-            throw new BusinessException(404, "AI 岗位匹配结果不存在，请先生成岗位匹配结果");
+            throw new BusinessException(404, "匹配分析结果不存在，请先生成匹配分析结果");
         }
         if (!MATCH_STATUS_SUCCESS.equals(matchResult.getMatchStatus())) {
-            throw new BusinessException(400, "AI 岗位匹配未成功，不能生成岗位优化报告");
+            throw new BusinessException(400, "匹配分析未成功，不能生成岗位优化报告");
         }
         return matchResult;
     }

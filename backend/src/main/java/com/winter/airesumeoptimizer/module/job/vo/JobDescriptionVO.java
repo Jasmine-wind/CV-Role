@@ -7,16 +7,19 @@ import lombok.Getter;
 
 @Getter
 @Builder
-@Schema(description = "岗位描述详情")
+@Schema(description = "目标岗位详情")
 public class JobDescriptionVO {
 
-    @Schema(description = "岗位描述 ID", example = "1")
+    @Schema(description = "目标岗位 ID", example = "1")
     private Long id;
 
-    @Schema(description = "岗位描述标题", example = "Java 后端开发工程师")
+    @Schema(description = "目标岗位标题", example = "Java 后端开发工程师")
     private String title;
 
-    @Schema(description = "岗位描述原文")
+    @Schema(description = "岗位来源类型", example = "USER_INPUT")
+    private String sourceType;
+
+    @Schema(description = "目标岗位 JD 原文")
     private String rawText;
 
     @Schema(description = "解析状态", example = "PENDING")

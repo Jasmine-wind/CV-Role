@@ -842,6 +842,9 @@ final class ResumeStructuredResultAssembler {
 
     private static ProjectNameAndDescription splitProjectLine(String line) {
         String cleaned = line == null ? "" : line.strip();
+        if (looksLikeJsonObject(cleaned)) {
+            return new ProjectNameAndDescription("", cleaned);
+        }
         Matcher matcher = PROJECT_NAME_PATTERN.matcher(cleaned);
         if (matcher.find()) {
             String name = matcher.group("name") != null ? matcher.group("name").strip() : matcher.group("research").strip();
@@ -853,6 +856,10 @@ final class ResumeStructuredResultAssembler {
             return new ProjectNameAndDescription(cleaned.substring(0, separatorIndex).strip(), cleaned);
         }
         return new ProjectNameAndDescription(cleaned, cleaned);
+    }
+
+    private static boolean looksLikeJsonObject(String value) {
+        return hasText(value) && value.startsWith("{") && value.endsWith("}");
     }
 
     private static int firstSeparatorIndex(String text) {

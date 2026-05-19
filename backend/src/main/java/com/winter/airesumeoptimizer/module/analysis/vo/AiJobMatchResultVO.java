@@ -11,16 +11,16 @@ import lombok.Getter;
 
 @Getter
 @Builder
-@Schema(description = "AI 岗位匹配结果")
+@Schema(description = "匹配分析结果")
 public class AiJobMatchResultVO {
 
-    @Schema(description = "AI 匹配结果 ID", example = "1")
+    @Schema(description = "匹配分析结果 ID", example = "1")
     private Long matchId;
 
     @Schema(description = "简历 ID", example = "1")
     private Long resumeId;
 
-    @Schema(description = "岗位描述 ID", example = "1")
+    @Schema(description = "目标岗位 ID", example = "1")
     private Long jobDescriptionId;
 
     @Schema(description = "总体匹配分数", example = "82")

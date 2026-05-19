@@ -215,7 +215,7 @@ public class HistoryServiceImpl implements HistoryService {
                 .jobDescriptionId(matchResult.getJobDescriptionId())
                 .matchSource(MATCH_SOURCE_AI_JOB_DESCRIPTION)
                 .jobTitle(jobDescription == null ? null : jobDescription.getTitle())
-                .companyName("岗位描述")
+                .companyName("目标岗位")
                 .jobCategory("AI 匹配")
                 .matchScore(matchResult.getOverallScore())
                 .matchReason(preview(matchResult.getStrongMatches()))

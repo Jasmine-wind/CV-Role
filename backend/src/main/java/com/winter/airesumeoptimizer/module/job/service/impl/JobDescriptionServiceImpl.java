@@ -19,6 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class JobDescriptionServiceImpl implements JobDescriptionService {
 
     private static final String PARSE_STATUS_PENDING = "PENDING";
+    private static final String SOURCE_TYPE_USER_INPUT = "USER_INPUT";
 
     private final JobDescriptionMapper jobDescriptionMapper;
     private final AiJobMatchResultMapper aiJobMatchResultMapper;
@@ -38,12 +39,13 @@ public class JobDescriptionServiceImpl implements JobDescriptionService {
     public JobDescriptionVO submit(Long userId, JobDescriptionSubmitDTO request) {
         validateUserId(userId);
         if (request == null) {
-            throw new BusinessException(400, "岗位描述不能为空");
+            throw new BusinessException(400, "目标岗位不能为空");
         }
 
         JobDescription jobDescription = new JobDescription();
         jobDescription.setUserId(userId);
         jobDescription.setTitle(request.getTitle().strip());
+        jobDescription.setSourceType(SOURCE_TYPE_USER_INPUT);
         jobDescription.setRawText(request.getRawText().strip());
         jobDescription.setParseStatus(PARSE_STATUS_PENDING);
         LocalDateTime now = LocalDateTime.now();
@@ -52,7 +54,7 @@ public class JobDescriptionServiceImpl implements JobDescriptionService {
 
         int rows = jobDescriptionMapper.insert(jobDescription);
         if (rows != 1 || jobDescription.getId() == null) {
-            throw new BusinessException(500, "岗位描述保存失败");
+            throw new BusinessException(500, "目标岗位保存失败");
         }
 
         return toVO(jobDescription);
@@ -89,14 +91,14 @@ public class JobDescriptionServiceImpl implements JobDescriptionService {
     private JobDescription getOwnedJobDescription(Long userId, Long jobDescriptionId) {
         validateUserId(userId);
         if (jobDescriptionId == null) {
-            throw new BusinessException(400, "岗位描述 ID 不能为空");
+            throw new BusinessException(400, "目标岗位 ID 不能为空");
         }
 
         JobDescription jobDescription = jobDescriptionMapper.selectOne(new LambdaQueryWrapper<JobDescription>()
                 .eq(JobDescription::getId, jobDescriptionId)
                 .eq(JobDescription::getUserId, userId));
         if (jobDescription == null) {
-            throw new BusinessException(404, "岗位描述不存在");
+            throw new BusinessException(404, "目标岗位不存在");
         }
 
         return jobDescription;
@@ -112,6 +114,7 @@ public class JobDescriptionServiceImpl implements JobDescriptionService {
         return JobDescriptionVO.builder()
                 .id(jobDescription.getId())
                 .title(jobDescription.getTitle())
+                .sourceType(resolveSourceType(jobDescription.getSourceType()))
                 .rawText(jobDescription.getRawText())
                 .parseStatus(jobDescription.getParseStatus())
                 .structuredContent(jobDescription.getStructuredContent())
@@ -121,5 +124,12 @@ public class JobDescriptionServiceImpl implements JobDescriptionService {
                 .createdAt(jobDescription.getCreatedAt())
                 .updatedAt(jobDescription.getUpdatedAt())
                 .build();
+    }
+
+    private String resolveSourceType(String sourceType) {
+        if (sourceType == null || sourceType.isBlank()) {
+            return SOURCE_TYPE_USER_INPUT;
+        }
+        return sourceType;
     }
 }
