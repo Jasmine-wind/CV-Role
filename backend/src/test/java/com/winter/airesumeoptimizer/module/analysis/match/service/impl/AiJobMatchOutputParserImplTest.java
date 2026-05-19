@@ -1,4 +1,4 @@
-package com.winter.airesumeoptimizer.module.analysis.service.impl;
+package com.winter.airesumeoptimizer.module.analysis.match.service.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;

@@ -1,4 +1,4 @@
-package com.winter.airesumeoptimizer.infra.ai;
+package com.winter.airesumeoptimizer.infra.embedding;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;

@@ -10,7 +10,7 @@ import static org.mockito.Mockito.when;
 
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.winter.airesumeoptimizer.common.exception.BusinessException;
-import com.winter.airesumeoptimizer.infra.ai.EmbeddingClientService;
+import com.winter.airesumeoptimizer.infra.embedding.EmbeddingClientService;
 import com.winter.airesumeoptimizer.module.embedding.entity.ResumeEmbedding;
 import com.winter.airesumeoptimizer.module.embedding.mapper.ResumeEmbeddingMapper;
 import com.winter.airesumeoptimizer.module.embedding.service.TextChunkService;

@@ -1,7 +1,8 @@
-package com.winter.airesumeoptimizer.infra.ai;
+package com.winter.airesumeoptimizer.infra.embedding;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.winter.airesumeoptimizer.infra.ai.AiClientException;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;

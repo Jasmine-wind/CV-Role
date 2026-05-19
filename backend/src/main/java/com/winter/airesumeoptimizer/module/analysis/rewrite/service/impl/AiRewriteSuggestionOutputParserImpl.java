@@ -1,4 +1,4 @@
-package com.winter.airesumeoptimizer.module.analysis.service.impl;
+package com.winter.airesumeoptimizer.module.analysis.rewrite.service.impl;
 
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.databind.JsonNode;

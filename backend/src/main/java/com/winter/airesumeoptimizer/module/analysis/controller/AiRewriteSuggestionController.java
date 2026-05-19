@@ -1,6 +1,7 @@
 package com.winter.airesumeoptimizer.module.analysis.controller;
 
 import com.winter.airesumeoptimizer.common.result.Result;
+import com.winter.airesumeoptimizer.module.analysis.assembler.AnalysisVoAssembler;
 import com.winter.airesumeoptimizer.module.analysis.dto.AiRewriteAcceptStatusUpdateDTO;
 import com.winter.airesumeoptimizer.module.analysis.entity.AiRewriteSuggestion;
 import com.winter.airesumeoptimizer.module.analysis.service.AiRewriteSuggestionService;
@@ -27,9 +28,13 @@ import org.springframework.web.bind.annotation.RestController;
 public class AiRewriteSuggestionController {
 
     private final AiRewriteSuggestionService aiRewriteSuggestionService;
+    private final AnalysisVoAssembler analysisVoAssembler;
 
-    public AiRewriteSuggestionController(AiRewriteSuggestionService aiRewriteSuggestionService) {
+    public AiRewriteSuggestionController(
+            AiRewriteSuggestionService aiRewriteSuggestionService,
+            AnalysisVoAssembler analysisVoAssembler) {
         this.aiRewriteSuggestionService = aiRewriteSuggestionService;
+        this.analysisVoAssembler = analysisVoAssembler;
     }
 
     @PatchMapping("/{rewriteId}/accept-status")
@@ -43,29 +48,6 @@ public class AiRewriteSuggestionController {
                 authenticatedUser.getUserId(),
                 rewriteId,
                 request.getAcceptStatus());
-        return Result.success("局部改写采纳状态已更新", toAiRewriteSuggestionVO(suggestion));
-    }
-
-    private AiRewriteSuggestionVO toAiRewriteSuggestionVO(AiRewriteSuggestion suggestion) {
-        return AiRewriteSuggestionVO.builder()
-                .rewriteId(suggestion.getId())
-                .resumeId(suggestion.getResumeId())
-                .jobDescriptionId(suggestion.getJobDescriptionId())
-                .aiJobMatchResultId(suggestion.getAiJobMatchResultId())
-                .aiResumeSuggestionId(suggestion.getAiResumeSuggestionId())
-                .rewriteType(suggestion.getRewriteType())
-                .targetSection(suggestion.getTargetSection())
-                .originalText(suggestion.getOriginalText())
-                .rewrittenText(suggestion.getRewrittenText())
-                .rewriteReason(suggestion.getRewriteReason())
-                .caution(suggestion.getCaution())
-                .acceptStatus(suggestion.getAcceptStatus())
-                .rewriteStatus(suggestion.getRewriteStatus())
-                .modelName(suggestion.getModelName())
-                .promptVersion(suggestion.getPromptVersion())
-                .errorMessage(suggestion.getErrorMessage())
-                .createdAt(suggestion.getCreatedAt())
-                .updatedAt(suggestion.getUpdatedAt())
-                .build();
+        return Result.success("局部改写采纳状态已更新", analysisVoAssembler.toAiRewriteSuggestionVO(suggestion));
     }
 }

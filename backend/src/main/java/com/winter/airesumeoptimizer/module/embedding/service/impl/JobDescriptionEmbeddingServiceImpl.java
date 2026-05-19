@@ -3,7 +3,7 @@ package com.winter.airesumeoptimizer.module.embedding.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.winter.airesumeoptimizer.common.exception.BusinessException;
 import com.winter.airesumeoptimizer.infra.ai.AiClientException;
-import com.winter.airesumeoptimizer.infra.ai.EmbeddingClientService;
+import com.winter.airesumeoptimizer.infra.embedding.EmbeddingClientService;
 import com.winter.airesumeoptimizer.module.embedding.entity.JobDescriptionEmbedding;
 import com.winter.airesumeoptimizer.module.embedding.mapper.JobDescriptionEmbeddingMapper;
 import com.winter.airesumeoptimizer.module.embedding.service.JobDescriptionEmbeddingService;

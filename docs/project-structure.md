@@ -221,8 +221,9 @@ security/UserDetailsServiceImpl.java
 
 ```text
 infra/
-├── storage/         # 文件存储适配，例如 MinIO
-└── ai/              # AI 模型调用适配，例如 Spring AI
+├── ai/              # AI Completion 调用、AI 配置和 Prompt 模板加载
+├── embedding/       # Embedding API 调用、Embedding 配置和向量维度校验
+└── storage/         # 文件存储适配，例如本地存储和后续 MinIO
 ```
 
 示例文件：
@@ -231,6 +232,7 @@ infra/
 infra/storage/FileStorageService.java
 infra/storage/MinioFileStorageService.java
 infra/ai/AiClientService.java
+infra/embedding/EmbeddingClientService.java
 ```
 
 #### 5.4.1 AI 相关分层
@@ -240,6 +242,7 @@ Phase 3 开始后，AI 能力按以下边界放置：
 | 层级 | 推荐位置 | 职责 |
 |---|---|---|
 | AI 调用适配 | `infra/ai/` | 调用外部模型服务、读取模型配置、处理 HTTP 和供应商兼容问题 |
+| Embedding 调用适配 | `infra/embedding/` | 调用外部 Embedding 服务、读取模型配置、校验输入长度和向量维度 |
 | Prompt 构建 | 当前业务模块 `service/` 或后续统一模板服务 | 根据业务输入生成 Prompt，并返回 Prompt 版本 |
 | AI 输出解析 | 当前业务模块 `service/` 或后续统一解析服务 | 将 AI 输出转换为受控 DTO，处理 JSON 格式和字段兜底 |
 | 业务编排 | `module/{module-name}/service/impl/` | 校验用户和资源、组织 Prompt 构建、AI 调用、解析和持久化 |
@@ -249,6 +252,7 @@ Phase 3 开始后，AI 能力按以下边界放置：
 约束：
 
 - `infra/ai/` 只放通用 AI 基础设施，不放简历、岗位、历史记录等业务流程。
+- `infra/embedding/` 只放通用 Embedding Client，不决定业务 chunk 如何切分，不直接操作业务表。
 - 业务 Service 不直接拼 HTTP 请求，不直接读取 API Key。
 - 每个 AI 业务结果应记录模型名称和 Prompt 版本。
 - 后续新增岗位描述解析、AI 匹配、优化建议、局部改写时，优先沿用该分层边界。

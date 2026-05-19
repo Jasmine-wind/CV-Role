@@ -1,4 +1,4 @@
-package com.winter.airesumeoptimizer.infra.ai;
+package com.winter.airesumeoptimizer.infra.embedding;
 
 import java.util.List;
 

@@ -289,7 +289,6 @@ v1.8 整理了本地开发环境、基础 CI 和 Phase 2 文档，使项目更�
 - 已更新 `.env.example`，补充服务端口、数据库、MinIO、后端运行和 AI 配置占位符。
 - 已新增 `.github/workflows/ci.yml`，CI 覆盖后端测试和前端构建。
 - 已更新 README，补充 Compose 启停、本地依赖服务端口、CI 和任务文档入口。
-- 已新增 `docs/codex-context.md`，将上下文切换到 Phase 2 已完成、下一步进入 Phase 3。
 - 已运行后端 `./mvnw test`、前端 `npm run build`，并检查 Compose 配置。
 - 迭代日志：`docs/iteration-log/v1.8-engineering-summary.md`。
 

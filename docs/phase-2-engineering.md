@@ -436,7 +436,6 @@ Phase 2 的重点是工程质量：
 - CI 中执行前端构建。
 - 检查敏感信息未进入仓库。
 - 更新 README。
-- 更新 `docs/codex-context.md`。
 - 更新 `docs/tasks/phase-2-task-list.md`。
 - 更新 `docs/iteration-log/v1.8-engineering-summary.md`。
 - 归档 Phase 2。
@@ -447,7 +446,6 @@ Phase 2 的重点是工程质量：
 - README 可以说明本地环境启动方式。
 - CI 可以执行基础构建和测试。
 - Phase 2 相关迭代日志完整。
-- Codex 上下文已切换到下一阶段或收尾状态。
 - 项目具备更强的工程化展示价值。
 - 本轮结果记录到 `docs/iteration-log/v1.8-engineering-summary.md`。
 
