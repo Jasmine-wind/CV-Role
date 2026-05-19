@@ -185,8 +185,8 @@
 | 接口 | 功能 | 问题标记 |
 |---|---|---|
 | `GET /api/history` | 查询历史记录分页 | 兼容基础历史聚合 |
-| `GET /api/ai-history` | 查询 AI 结果回看列表 | 聚合简历诊断、目标岗位解析、匹配分析、岗位优化建议和局部改写 |
-| `GET /api/ai-history/{resultType}/{recordId}` | 查询 AI 结果详情 | 只回看已有结果，不触发新的 AI 生成 |
+| `GET /api/ai-results` | 查询 AI 结果回看列表 | 聚合简历诊断、目标岗位解析、匹配分析、岗位优化建议和局部改写 |
+| `GET /api/ai-results/{resultType}/{recordId}` | 查询 AI 结果详情 | 只回看已有结果，不触发新的 AI 生成 |
 
 ---
 
