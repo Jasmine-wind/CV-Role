@@ -1,0 +1,182 @@
+{
+  "sampleId": "sample-004-javaee-developer-2y-docx",
+  "fileType": "DOCX",
+  "sourceFile": "private-inputs/sample-004-javaee-developer-2y.docx",
+  "originalFileName": "西施_JavaEE开发工程师_2年.docx",
+  "sampleType": "2年经验 JavaEE 开发工程师简历",
+  "basicInfo": {
+    "name": {
+      "expectedValue": "西施",
+      "allowEmpty": false,
+      "forbiddenValues": [
+        "本人",
+        "个人简历",
+        "参加项目描述",
+        "项目经历",
+        "专业技能",
+        "工作经历",
+        "教育经历",
+        "自我评价",
+        "基本资料",
+        "基本情况"
+      ]
+    },
+    "gender": {
+      "expectedValue": "女",
+      "optional": true
+    },
+    "age": {
+      "expectedValue": "24",
+      "optional": true
+    },
+    "phone": {
+      "expectedContains": [
+        "1856998"
+      ],
+      "allowEmpty": true,
+      "allowMasked": true,
+      "note": "该样本手机号为 1856998XXXX，属于脱敏/掩码手机号；如果系统只接受纯数字手机号，可以允许为空，但不能误填其他内容。"
+    },
+    "email": {
+      "expectedValue": "xianyulx@126.com"
+    },
+    "degree": {
+      "expectedContains": [
+        "本科"
+      ]
+    },
+    "school": {
+      "expectedContains": [
+        "郑州轻工业学院"
+      ]
+    },
+    "jobIntention": {
+      "expectedContains": [
+        "JAVA软件工程师",
+        "Java软件工程师"
+      ]
+    },
+    "location": {
+      "expectedContains": [
+        "郑州"
+      ],
+      "optional": true
+    },
+    "resumeType": {
+      "expectedValue": "EXPERIENCED"
+    }
+  },
+  "sections": {
+    "education": {
+      "mustContain": [
+        "郑州轻工业学院",
+        "信息工程",
+        "本科",
+        "2014.09",
+        "2018.06"
+      ],
+      "mustNotContain": [
+        "金石教育网",
+        "明基医院体检预约系统",
+        "杭州萧山驾校管理系统"
+      ]
+    },
+    "skills": {
+      "mustContain": [
+        "Java",
+        "反射",
+        "泛型",
+        "多线程",
+        "SpringBoot",
+        "SpringData",
+        "FreeMarker",
+        "FFmpeg",
+        "SpringMVC",
+        "Spring",
+        "MyBatis",
+        "MySQL",
+        "MongoDB",
+        "Redis",
+        "Eureka",
+        "Zookeeper",
+        "RabbitMQ",
+        "HTML",
+        "CSS",
+        "JavaScript",
+        "Lucene",
+        "ElasticSearch",
+        "IDEA",
+        "Git",
+        "Maven",
+        "Tomcat",
+        "Nginx"
+      ],
+      "mustNotContain": [
+        "金石教育网",
+        "明基医院体检预约系统",
+        "杭州萧山驾校管理系统",
+        "参与过多个项目的开发",
+        "工作压力"
+      ]
+    },
+    "workExperiences": {
+      "mustContain": [
+        "北京华来知识科技有限公司",
+        "JavaEE软件工程师",
+        "2017.10",
+        "2019.09"
+      ]
+    },
+    "projects": {
+      "mustContain": [
+        "金石教育网",
+        "明基医院体检预约系统",
+        "杭州萧山驾校管理系统",
+        "在线教育平台",
+        "体检预约系统",
+        "驾校管理系统"
+      ],
+      "mustNotContain": [
+        "郑州轻工业学院",
+        "姓名：西施"
+      ]
+    },
+    "summary": {
+      "mustContain": [
+        "参与过多个项目的开发",
+        "快速融入团队",
+        "承受较大的工作压力",
+        "热爱编程",
+        "团队精神"
+      ],
+      "optional": false
+    },
+    "others": {
+      "mustNotContain": [
+        "1.",
+        "2.",
+        "3.",
+        "4.",
+        "5.",
+        "6.",
+        "7.",
+        "8.",
+        "9.",
+        "vv",
+        "v"
+      ],
+      "maxCount": 8
+    }
+  },
+  "quality": {
+    "maxPureIndexLines": 0,
+    "maxDuplicateLines": 3,
+    "maxOthersCount": 8,
+    "maxTotalDurationMs": 60000,
+    "shouldNotFallbackWhenAiEnabled": false
+  },
+  "notes": [
+    "该样本手机号带 XXXX 掩码，不应强制识别为有效手机号。",
+    "技能段落以编号开头，编号应被清理但正文技能应保留。"
+  ]
+}

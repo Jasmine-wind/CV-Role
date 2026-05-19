@@ -1,6 +1,7 @@
 package com.winter.airesumeoptimizer.module.resume.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.winter.airesumeoptimizer.common.exception.BusinessException;
@@ -18,15 +19,47 @@ import com.winter.airesumeoptimizer.module.resume.entity.Resume;
 import com.winter.airesumeoptimizer.module.resume.entity.ResumeParseResult;
 import com.winter.airesumeoptimizer.module.resume.mapper.ResumeMapper;
 import com.winter.airesumeoptimizer.module.resume.mapper.ResumeParseResultMapper;
+import com.winter.airesumeoptimizer.module.resume.config.ResumeParseProperties;
+import com.winter.airesumeoptimizer.module.resume.dto.ResumeAiStructuredParseResultDTO;
+import com.winter.airesumeoptimizer.module.resume.dto.ResumeParseMetaDTO;
+import com.winter.airesumeoptimizer.module.resume.dto.ResumeParseMode;
+import com.winter.airesumeoptimizer.module.resume.dto.ResumeParseOptionsDTO;
+import com.winter.airesumeoptimizer.module.resume.dto.ResumeParseQualityResultDTO;
+import com.winter.airesumeoptimizer.module.resume.dto.ResumeBlockDTO;
+import com.winter.airesumeoptimizer.module.resume.dto.ResumeDisplayModelDTO;
+import com.winter.airesumeoptimizer.module.resume.dto.ResumeIndexedLineDTO;
+import com.winter.airesumeoptimizer.module.resume.dto.ResumeSectionClassificationDTO;
+import com.winter.airesumeoptimizer.module.resume.dto.ResumeSectionClassifyResultDTO;
+import com.winter.airesumeoptimizer.module.resume.dto.ResumeStructuredContentDTO;
+import com.winter.airesumeoptimizer.module.resume.dto.ResumeTextCleanResultDTO;
+import com.winter.airesumeoptimizer.module.resume.dto.ResumeTextQualityResultDTO;
+import com.winter.airesumeoptimizer.module.resume.dto.ResumeTextSectionDTO;
+import com.winter.airesumeoptimizer.module.resume.dto.SourceSectionConfidence;
+import com.winter.airesumeoptimizer.module.resume.service.ResumeAiSectionClassifier;
+import com.winter.airesumeoptimizer.module.resume.service.ResumeAiStructuredParser;
+import com.winter.airesumeoptimizer.module.resume.service.ResumeBlockBuilder;
+import com.winter.airesumeoptimizer.module.resume.service.ResumeBlockReorderService;
+import com.winter.airesumeoptimizer.module.resume.service.ResumeDisplayModelService;
+import com.winter.airesumeoptimizer.module.resume.service.ResumeLineIndexer;
+import com.winter.airesumeoptimizer.module.resume.service.ResumeParseQualityCheckService;
+import com.winter.airesumeoptimizer.module.resume.service.ResumePointerPostProcessor;
 import com.winter.airesumeoptimizer.module.resume.service.ResumeStructureParseService;
 import com.winter.airesumeoptimizer.module.resume.service.ResumeService;
+import com.winter.airesumeoptimizer.module.resume.service.ResumeTextCleanService;
 import com.winter.airesumeoptimizer.module.resume.service.ResumeTextExtractionService;
+import com.winter.airesumeoptimizer.module.resume.service.ResumeTextQualityCheckService;
 import com.winter.airesumeoptimizer.module.resume.vo.ResumeDetailVO;
 import com.winter.airesumeoptimizer.module.resume.vo.ResumeListVO;
 import com.winter.airesumeoptimizer.module.resume.vo.ResumeParseResultVO;
 import com.winter.airesumeoptimizer.module.resume.vo.ResumeUploadVO;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.ArrayList;
+import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
@@ -47,6 +80,11 @@ public class ResumeServiceImpl implements ResumeService {
     private static final String STORAGE_TYPE_LOCAL = "LOCAL";
     private static final String PARSE_STATUS_SUCCESS = "SUCCESS";
     private static final String PARSE_STATUS_FAILED = "FAILED";
+    private static final String AI_STATUS_USED = "USED";
+    private static final String AI_STATUS_SKIPPED = "SKIPPED";
+    private static final String AI_STATUS_FALLBACK = "FALLBACK";
+    private static final String AI_STATUS_DISABLED = "DISABLED";
+    private static final double MEDIUM_SOURCE_AI_OVERRIDE_THRESHOLD = 0.85;
     private static final Set<String> ALLOWED_EXTENSIONS = Set.of("pdf", "doc", "docx");
     private static final Set<String> PDF_CONTENT_TYPES = Set.of("application/pdf");
 
@@ -58,9 +96,21 @@ public class ResumeServiceImpl implements ResumeService {
     private final ResumeEmbeddingMapper resumeEmbeddingMapper;
     private final FileStorageService fileStorageService;
     private final ResumeTextExtractionService resumeTextExtractionService;
+    private final ResumeTextQualityCheckService resumeTextQualityCheckService;
+    private final ResumeTextCleanService resumeTextCleanService;
+    private final ResumeBlockBuilder resumeBlockBuilder;
+    private final ResumeBlockReorderService resumeBlockReorderService;
+    private final ResumeAiSectionClassifier resumeAiSectionClassifier;
+    private final ResumeAiStructuredParser resumeAiStructuredParser;
     private final ResumeStructureParseService resumeStructureParseService;
+    private final ResumeParseQualityCheckService resumeParseQualityCheckService;
+    private final ResumeDisplayModelService resumeDisplayModelService;
+    private final ResumeLineIndexer resumeLineIndexer;
+    private final ResumePointerPostProcessor resumePointerPostProcessor;
+    private final ResumeParseProperties resumeParseProperties;
     private final ObjectMapper objectMapper;
     private final long maxFileSize;
+    private final boolean defaultAiStructuredParseEnabled;
 
     public ResumeServiceImpl(
             ResumeMapper resumeMapper,
@@ -71,9 +121,21 @@ public class ResumeServiceImpl implements ResumeService {
             ResumeEmbeddingMapper resumeEmbeddingMapper,
             FileStorageService fileStorageService,
             ResumeTextExtractionService resumeTextExtractionService,
+            ResumeTextQualityCheckService resumeTextQualityCheckService,
+            ResumeTextCleanService resumeTextCleanService,
+            ResumeBlockBuilder resumeBlockBuilder,
+            ResumeBlockReorderService resumeBlockReorderService,
+            ResumeAiSectionClassifier resumeAiSectionClassifier,
+            ResumeAiStructuredParser resumeAiStructuredParser,
             ResumeStructureParseService resumeStructureParseService,
+            ResumeParseQualityCheckService resumeParseQualityCheckService,
+            ResumeDisplayModelService resumeDisplayModelService,
+            ResumeLineIndexer resumeLineIndexer,
+            ResumePointerPostProcessor resumePointerPostProcessor,
+            ResumeParseProperties resumeParseProperties,
             ObjectMapper objectMapper,
-            @Value("${app.resume.upload.max-file-size-bytes:10485760}") long maxFileSize) {
+            @Value("${app.resume.upload.max-file-size-bytes:10485760}") long maxFileSize,
+            @Value("${app.resume.parse.ai-structured-parse-enabled:false}") boolean defaultAiStructuredParseEnabled) {
         this.resumeMapper = resumeMapper;
         this.resumeParseResultMapper = resumeParseResultMapper;
         this.resumeAiAnalysisMapper = resumeAiAnalysisMapper;
@@ -82,9 +144,21 @@ public class ResumeServiceImpl implements ResumeService {
         this.resumeEmbeddingMapper = resumeEmbeddingMapper;
         this.fileStorageService = fileStorageService;
         this.resumeTextExtractionService = resumeTextExtractionService;
+        this.resumeTextQualityCheckService = resumeTextQualityCheckService;
+        this.resumeTextCleanService = resumeTextCleanService;
+        this.resumeBlockBuilder = resumeBlockBuilder;
+        this.resumeBlockReorderService = resumeBlockReorderService;
+        this.resumeAiSectionClassifier = resumeAiSectionClassifier;
+        this.resumeAiStructuredParser = resumeAiStructuredParser;
         this.resumeStructureParseService = resumeStructureParseService;
+        this.resumeParseQualityCheckService = resumeParseQualityCheckService;
+        this.resumeDisplayModelService = resumeDisplayModelService;
+        this.resumeLineIndexer = resumeLineIndexer;
+        this.resumePointerPostProcessor = resumePointerPostProcessor;
+        this.resumeParseProperties = resumeParseProperties;
         this.objectMapper = objectMapper;
         this.maxFileSize = maxFileSize;
+        this.defaultAiStructuredParseEnabled = defaultAiStructuredParseEnabled;
     }
 
     @Override
@@ -161,6 +235,13 @@ public class ResumeServiceImpl implements ResumeService {
     @Override
     @Transactional
     public ResumeParseResultVO parse(Long userId, Long resumeId) {
+        return parse(userId, resumeId, null);
+    }
+
+    @Override
+    @Transactional
+    public ResumeParseResultVO parse(Long userId, Long resumeId, ResumeParseOptionsDTO options) {
+        long totalStartedAt = System.nanoTime();
         Resume resume = getOwnedResume(userId, resumeId);
         log.info("Resume parse started: userId={}, resumeId={}, fileType={}",
                 userId,
@@ -168,31 +249,141 @@ public class ResumeServiceImpl implements ResumeService {
                 resume.getFileType());
 
         String extractedText = null;
+        ResumeTextQualityResultDTO qualityResult = null;
+        ResumeTextCleanResultDTO cleanResult = null;
+        ResumeParseQualityResultDTO parseQualityResult = null;
+        long textExtractDurationMs = 0;
+        long ruleParseDurationMs = 0;
         try {
+            long textExtractStartedAt = System.nanoTime();
             extractedText = resumeTextExtractionService.extractText(resume.getObjectKey(), resume.getFileType());
-            String structuredJson = objectMapper.writeValueAsString(resumeStructureParseService.parse(extractedText));
-            ResumeParseResult parseResult = saveParseResult(
+            textExtractDurationMs = elapsedMs(textExtractStartedAt);
+            qualityResult = resumeTextQualityCheckService.check(extractedText, resume.getFileType());
+            if (qualityResult.failed()) {
+                ResumeParseResult parseResult = saveParseResult(
+                        resume.getId(),
+                        PARSE_STATUS_FAILED,
+                        extractedText,
+                        null,
+                        null,
+                        null,
+                        qualityResult.getMessage(),
+                        qualityResult,
+                        null);
+                log.warn("Resume parse stopped by text quality: userId={}, resumeId={}, qualityStatus={}, issues={}",
+                        userId,
+                        resume.getId(),
+                        qualityResult.getStatus(),
+                        qualityResult.getIssues());
+                return toParseResultVO(parseResult);
+            }
+            cleanResult = resumeTextCleanService.cleanAndSplitSections(extractedText);
+            List<ResumeBlockDTO> blocks = resumeBlockReorderService.reorder(resumeBlockBuilder.build(cleanResult));
+            ResumeParseMode parseMode = resolveParseMode(options);
+            applyBlockParseContext(blocks, parseMode.name(), null);
+            ResumeSectionClassifyResultDTO sectionClassifyResult = resumeAiSectionClassifier.classify(
                     resume.getId(),
-                    PARSE_STATUS_SUCCESS,
-                    extractedText,
-                    structuredJson,
-                    null);
-            log.info("Resume parse succeeded: userId={}, resumeId={}, extractedTextLength={}",
+                    blocks,
+                    resolveSectionClassifyEnabled(options, parseMode));
+            if (sectionClassifyResult == null) {
+                sectionClassifyResult = ResumeSectionClassifyResultDTO.builder()
+                        .aiEnabled(false)
+                        .applied(false)
+                        .aiInvoked(false)
+                        .aiStatus(AI_STATUS_FALLBACK)
+                        .fallbackOccurred(true)
+                        .fallbackReason("AI 章节归类未返回结果")
+                        .classifications(List.of())
+                        .build();
+            }
+            applySectionClassifyResult(cleanResult, blocks, sectionClassifyResult);
+            log.info("Resume AI section classify checked: userId={}, resumeId={}, enabled={}, applied={}, fallbackReason={}",
                     userId,
                     resume.getId(),
-                    extractedText == null ? 0 : extractedText.length());
+                    sectionClassifyResult.getAiEnabled(),
+                    sectionClassifyResult.getApplied(),
+                    LogSanitizer.sanitize(sectionClassifyResult.getFallbackReason()));
+            long ruleParseStartedAt = System.nanoTime();
+            ResumeStructuredContentDTO structuredContent = resumeStructureParseService.parse(cleanResult.getCleanedText(), cleanResult.getSections());
+            structuredContent.setParseMode(parseMode.name());
+            applyBlockParseContext(blocks, parseMode.name(), structuredContent.getResumeType());
+            ruleParseDurationMs = elapsedMs(ruleParseStartedAt);
+            Boolean structuredParseEnabled = resolveStructuredParseEnabled(options, parseMode, sectionClassifyResult);
+            ResumeAiStructuredParseResultDTO structuredParseResult = resumeAiStructuredParser.parse(
+                    blocks,
+                    structuredContent,
+                    List.of(),
+                    structuredParseEnabled);
+            if (structuredParseResult == null) {
+                structuredParseResult = ResumeAiStructuredParseResultDTO.builder()
+                        .aiEnabled(false)
+                        .applied(false)
+                        .aiInvoked(false)
+                        .aiStatus(AI_STATUS_FALLBACK)
+                        .fallbackOccurred(true)
+                        .fallbackReason("AI 结构化补全未返回结果")
+                        .structuredContent(structuredContent)
+                        .qualityWarnings(List.of())
+                        .build();
+            }
+            if (structuredParseResult.shouldApply()) {
+                structuredContent = structuredParseResult.getStructuredContent();
+            }
+            structuredContent.setParseMode(parseMode.name());
+            log.info("Resume AI structured parse checked: userId={}, resumeId={}, enabled={}, applied={}, fallbackReason={}",
+                    userId,
+                    resume.getId(),
+                    structuredParseResult.getAiEnabled(),
+                    structuredParseResult.getApplied(),
+                    LogSanitizer.sanitize(structuredParseResult.getFallbackReason()));
+            applyAiParseMetadata(structuredContent, sectionClassifyResult, structuredParseResult);
+            applyParseDurations(structuredContent, textExtractDurationMs, ruleParseDurationMs, elapsedMs(totalStartedAt));
+            ResumeStructuredResultAssembler.enrich(structuredContent);
+            List<ResumeIndexedLineDTO> indexedLines = resumeLineIndexer.index(structuredContent.getRawSections());
+            structuredContent.setIndexedLines(indexedLines);
+            resumePointerPostProcessor.attachSourceRefs(structuredContent, indexedLines);
+            parseQualityResult = resumeParseQualityCheckService.check(structuredContent, cleanResult, qualityResult);
+            mergeStructuredQualityWarnings(structuredContent, structuredParseResult.getQualityWarnings(), parseQualityResult.getWarnings());
+            applyDisplayModels(resume.getId(), parseMode, structuredContent);
+            String structuredJson = objectMapper.writeValueAsString(structuredContent);
+            String parseStatus = parseQualityResult.failed() ? PARSE_STATUS_FAILED : PARSE_STATUS_SUCCESS;
+            ResumeParseResult parseResult = saveParseResult(
+                    resume.getId(),
+                    parseStatus,
+                    extractedText,
+                    cleanResult.getCleanedText(),
+                    serializeSections(cleanResult),
+                    structuredJson,
+                    parseQualityResult.failed() ? parseQualityResult.getMessage() : null,
+                    qualityResult,
+                    parseQualityResult);
+            log.info("Resume parse finished: userId={}, resumeId={}, parseStatus={}, extractedTextLength={}, cleanedTextLength={}, sectionCount={}, textQualityStatus={}, parseQualityStatus={}, parseQualityWarnings={}",
+                    userId,
+                    resume.getId(),
+                    parseStatus,
+                    extractedText == null ? 0 : extractedText.length(),
+                    cleanResult.getCleanedText() == null ? 0 : cleanResult.getCleanedText().length(),
+                    cleanResult.getSections() == null ? 0 : cleanResult.getSections().size(),
+                    qualityResult.getStatus(),
+                    parseQualityResult.getStatus(),
+                    parseQualityResult.getWarnings());
             return toParseResultVO(parseResult);
         } catch (JsonProcessingException exception) {
             ResumeParseResult parseResult = saveParseResult(
                     resume.getId(),
                     PARSE_STATUS_FAILED,
                     extractedText,
+                    cleanResult == null ? null : cleanResult.getCleanedText(),
+                    serializeSections(cleanResult),
                     null,
-                    "结构化解析结果序列化失败");
+                    "结构化解析结果序列化失败",
+                    qualityResult,
+                    parseQualityResult);
             log.warn("Resume parse failed: userId={}, resumeId={}, reason={}",
                     userId,
                     resume.getId(),
-                    LogSanitizer.sanitize("结构化解析结果序列化失败"));
+                    LogSanitizer.sanitize("结构化解析结果序列化失败"),
+                    exception);
             return toParseResultVO(parseResult);
         } catch (RuntimeException exception) {
             String errorMessage = normalizeErrorMessage(exception);
@@ -200,12 +391,17 @@ public class ResumeServiceImpl implements ResumeService {
                     resume.getId(),
                     PARSE_STATUS_FAILED,
                     extractedText,
+                    cleanResult == null ? null : cleanResult.getCleanedText(),
+                    serializeSections(cleanResult),
                     null,
-                    errorMessage);
+                    errorMessage,
+                    qualityResult,
+                    parseQualityResult);
             log.warn("Resume parse failed: userId={}, resumeId={}, reason={}",
                     userId,
                     resume.getId(),
-                    LogSanitizer.sanitize(errorMessage));
+                    LogSanitizer.sanitize(errorMessage),
+                    exception);
             return toParseResultVO(parseResult);
         }
     }
@@ -281,8 +477,12 @@ public class ResumeServiceImpl implements ResumeService {
             Long resumeId,
             String parseStatus,
             String extractedText,
+            String cleanedText,
+            String sectionResult,
             String structuredJson,
-            String errorMessage) {
+            String errorMessage,
+            ResumeTextQualityResultDTO qualityResult,
+            ResumeParseQualityResultDTO parseQualityResult) {
         LocalDateTime now = LocalDateTime.now();
         ResumeParseResult parseResult = resumeParseResultMapper.selectOne(new LambdaQueryWrapper<ResumeParseResult>()
                 .eq(ResumeParseResult::getResumeId, resumeId));
@@ -295,16 +495,44 @@ public class ResumeServiceImpl implements ResumeService {
 
         parseResult.setParseStatus(parseStatus);
         parseResult.setExtractedText(extractedText);
+        parseResult.setCleanedText(cleanedText);
+        parseResult.setSectionResult(sectionResult);
         parseResult.setStructuredJson(structuredJson);
         parseResult.setErrorMessage(truncateErrorMessage(errorMessage));
+        parseResult.setTextQualityStatus(qualityResult == null ? null : qualityResult.getStatus());
+        parseResult.setTextQualityIssues(serializeQualityIssues(qualityResult));
+        parseResult.setTextQualityMessage(truncateErrorMessage(qualityResult == null ? null : qualityResult.getMessage()));
+        parseResult.setParseQualityStatus(parseQualityResult == null ? null : parseQualityResult.getStatus());
+        parseResult.setParseQualityWarnings(serializeParseQualityWarnings(parseQualityResult));
+        parseResult.setParseQualityMessage(truncateErrorMessage(parseQualityResult == null ? null : parseQualityResult.getMessage()));
+        parseResult.setParseQualityScore(parseQualityResult == null ? null : parseQualityResult.getScore());
         parseResult.setUpdatedAt(now);
 
         if (parseResult.getId() == null) {
             resumeParseResultMapper.insert(parseResult);
         } else {
-            resumeParseResultMapper.updateById(parseResult);
+            updateParseResultIncludingNulls(parseResult);
         }
         return parseResult;
+    }
+
+    private void updateParseResultIncludingNulls(ResumeParseResult parseResult) {
+        resumeParseResultMapper.update(null, new LambdaUpdateWrapper<ResumeParseResult>()
+                .eq(ResumeParseResult::getId, parseResult.getId())
+                .set(ResumeParseResult::getParseStatus, parseResult.getParseStatus())
+                .set(ResumeParseResult::getExtractedText, parseResult.getExtractedText())
+                .set(ResumeParseResult::getCleanedText, parseResult.getCleanedText())
+                .set(ResumeParseResult::getSectionResult, parseResult.getSectionResult())
+                .set(ResumeParseResult::getStructuredJson, parseResult.getStructuredJson())
+                .set(ResumeParseResult::getErrorMessage, parseResult.getErrorMessage())
+                .set(ResumeParseResult::getTextQualityStatus, parseResult.getTextQualityStatus())
+                .set(ResumeParseResult::getTextQualityIssues, parseResult.getTextQualityIssues())
+                .set(ResumeParseResult::getTextQualityMessage, parseResult.getTextQualityMessage())
+                .set(ResumeParseResult::getParseQualityStatus, parseResult.getParseQualityStatus())
+                .set(ResumeParseResult::getParseQualityWarnings, parseResult.getParseQualityWarnings())
+                .set(ResumeParseResult::getParseQualityMessage, parseResult.getParseQualityMessage())
+                .set(ResumeParseResult::getParseQualityScore, parseResult.getParseQualityScore())
+                .set(ResumeParseResult::getUpdatedAt, parseResult.getUpdatedAt()));
     }
 
     private boolean isAllowedPdfContentType(String contentType) {
@@ -360,10 +588,486 @@ public class ResumeServiceImpl implements ResumeService {
                 .resumeId(parseResult.getResumeId())
                 .parseStatus(parseResult.getParseStatus())
                 .extractedText(parseResult.getExtractedText())
+                .cleanedText(parseResult.getCleanedText())
+                .sectionResult(parseResult.getSectionResult())
                 .structuredJson(parseResult.getStructuredJson())
                 .errorMessage(parseResult.getErrorMessage())
+                .textQualityStatus(parseResult.getTextQualityStatus())
+                .textQualityIssues(parseResult.getTextQualityIssues())
+                .textQualityMessage(parseResult.getTextQualityMessage())
+                .parseQualityStatus(parseResult.getParseQualityStatus())
+                .parseQualityWarnings(parseResult.getParseQualityWarnings())
+                .parseQualityMessage(parseResult.getParseQualityMessage())
+                .parseQualityScore(parseResult.getParseQualityScore())
                 .updatedAt(parseResult.getUpdatedAt())
                 .build();
+    }
+
+    private String serializeQualityIssues(ResumeTextQualityResultDTO qualityResult) {
+        if (qualityResult == null || qualityResult.getIssues() == null) {
+            return null;
+        }
+        try {
+            return objectMapper.writeValueAsString(qualityResult.getIssues());
+        } catch (JsonProcessingException exception) {
+            return "[\"QUALITY_ISSUES_SERIALIZE_FAILED\"]";
+        }
+    }
+
+    private String serializeSections(ResumeTextCleanResultDTO cleanResult) {
+        if (cleanResult == null || cleanResult.getSections() == null) {
+            return null;
+        }
+        try {
+            return objectMapper.writeValueAsString(cleanResult.getSections());
+        } catch (JsonProcessingException exception) {
+            return "[{\"sectionType\":\"SECTION_RESULT_SERIALIZE_FAILED\",\"heading\":\"章节识别结果序列化失败\",\"lines\":[]}]";
+        }
+    }
+
+    private void applySectionClassifyResult(
+            ResumeTextCleanResultDTO cleanResult,
+            List<ResumeBlockDTO> blocks,
+            ResumeSectionClassifyResultDTO classifyResult) {
+        if (cleanResult == null || classifyResult == null) {
+            return;
+        }
+        cleanResult.setAiSectionClassifyEnabled(classifyResult.getAiEnabled());
+        cleanResult.setAiSectionClassifyApplied(classifyResult.getApplied());
+        cleanResult.setAiSectionClassifyFallbackReason(classifyResult.getFallbackReason());
+        cleanResult.setAiSectionClassifyDurationMs(classifyResult.getDurationMs());
+        cleanResult.setAiSectionClassifyCacheHit(classifyResult.getCacheHit());
+        cleanResult.setAiSectionClassifyCacheKey(classifyResult.getCacheKey());
+        if (!classifyResult.shouldApply()) {
+            return;
+        }
+        List<String> conflictWarnings = new ArrayList<>();
+        cleanResult.setSections(buildSectionsFromClassifications(blocks, classifyResult.getClassifications(), conflictWarnings));
+        cleanResult.setSectionConflictWarnings(conflictWarnings);
+    }
+
+    private List<ResumeTextSectionDTO> buildSectionsFromClassifications(
+            List<ResumeBlockDTO> blocks,
+            List<ResumeSectionClassificationDTO> classifications,
+            List<String> conflictWarnings) {
+        Map<Integer, ResumeSectionClassificationDTO> classificationByIndex = new LinkedHashMap<>();
+        if (classifications != null) {
+            for (ResumeSectionClassificationDTO classification : classifications) {
+                if (classification != null && classification.getIndex() != null) {
+                    classificationByIndex.put(classification.getIndex(), classification);
+                }
+            }
+        }
+
+        List<ResumeBlockDTO> classifiedBlocks = new ArrayList<>();
+        if (blocks != null) {
+            for (ResumeBlockDTO block : blocks) {
+                if (block == null || block.getText() == null || block.getText().isBlank()) {
+                    continue;
+                }
+                ResumeSectionClassificationDTO classification = classificationByIndex.get(block.getIndex());
+                String sourceSection = normalizeSection(block.getSourceSection());
+                String aiSection = classification == null ? null : normalizeSection(classification.getSection());
+                SourceSectionConfidence sourceConfidence = SourceSectionConfidence.from(block.getSourceSectionConfidence());
+                SectionDecision decision = decideFinalSection(sourceSection, sourceConfidence, classification);
+                boolean sectionLocked = sourceConfidence == SourceSectionConfidence.HIGH && !"OTHERS".equals(sourceSection);
+                if (aiSection != null && !sourceSection.equals(aiSection)) {
+                    conflictWarnings.add("AI_SECTION_CONFLICT:"
+                            + decision.finalSectionSource()
+                            + ":"
+                            + block.getIndex()
+                            + ":"
+                            + sourceSection
+                            + ">"
+                            + aiSection);
+                }
+                classifiedBlocks.add(ResumeBlockDTO.builder()
+                        .index(block.getIndex())
+                        .originalIndex(block.getOriginalIndex())
+                        .displayOrder(block.getDisplayOrder())
+                        .text(block.getText())
+                        .prevText(block.getPrevText())
+                        .nextText(block.getNextText())
+                        .sourceType(block.getSourceType())
+                        .sourceSection(decision.finalSection())
+                        .ruleSection(block.getRuleSection())
+                        .ruleConfidence(block.getRuleConfidence())
+                        .sourceSectionConfidence(sourceConfidence.name())
+                        .lockedLevel(sourceConfidence.name())
+                        .resumeTypeHint(block.getResumeTypeHint())
+                        .parseMode(block.getParseMode())
+                        .finalSectionSource(decision.finalSectionSource())
+                        .sectionLocked(sectionLocked)
+                        .build());
+            }
+        }
+
+        Map<String, List<ResumeBlockDTO>> blocksBySection = new LinkedHashMap<>();
+        for (ResumeBlockDTO block : resumeBlockReorderService.reorder(classifiedBlocks)) {
+            blocksBySection.computeIfAbsent(block.getSourceSection(), ignored -> new ArrayList<>()).add(block);
+        }
+
+        return blocksBySection.entrySet().stream()
+                .map(entry -> ResumeTextSectionDTO.builder()
+                        .sectionType(entry.getKey())
+                        .heading("AI 章节归类：" + entry.getKey())
+                        .lines(entry.getValue().stream()
+                                .map(ResumeBlockDTO::getText)
+                                .toList())
+                        .blocks(entry.getValue())
+                        .build())
+                .toList();
+    }
+
+    private String firstSection(String preferred, String fallback) {
+        if (preferred != null && !preferred.isBlank()) {
+            return preferred;
+        }
+        if (fallback != null && !fallback.isBlank()) {
+            return fallback;
+        }
+        return "OTHERS";
+    }
+
+    private SectionDecision decideFinalSection(
+            String sourceSection,
+            SourceSectionConfidence sourceConfidence,
+            ResumeSectionClassificationDTO classification) {
+        String aiSection = classification == null ? null : normalizeSection(classification.getSection());
+        double aiConfidence = classification == null || classification.getConfidence() == null
+                ? 0
+                : classification.getConfidence();
+        if (sourceConfidence == SourceSectionConfidence.HIGH && !"OTHERS".equals(sourceSection)) {
+            return new SectionDecision(sourceSection, "RULE_SOURCE_SECTION");
+        }
+        if (sourceConfidence == SourceSectionConfidence.MEDIUM
+                && aiSection != null
+                && !sourceSection.equals(aiSection)
+                && aiConfidence >= MEDIUM_SOURCE_AI_OVERRIDE_THRESHOLD) {
+            return new SectionDecision(aiSection, "AI_OVERRIDE");
+        }
+        if (sourceConfidence == SourceSectionConfidence.LOW && aiSection != null) {
+            return new SectionDecision(aiSection, "AI_OVERRIDE");
+        }
+        return new SectionDecision(firstSection(sourceSection, aiSection), "RULE_FALLBACK");
+    }
+
+    private String normalizeSection(String section) {
+        if (section == null || section.isBlank() || "GENERAL".equals(section)) {
+            return "OTHERS";
+        }
+        return section;
+    }
+
+    private record SectionDecision(String finalSection, String finalSectionSource) {
+    }
+
+    private void mergeStructuredQualityWarnings(
+            ResumeStructuredContentDTO structuredContent,
+            List<String> aiWarnings,
+            List<String> parseWarnings) {
+        if (structuredContent == null) {
+            return;
+        }
+        List<String> warnings = new ArrayList<>();
+        if (aiWarnings != null) {
+            warnings.addAll(aiWarnings);
+        }
+        if (parseWarnings != null) {
+            warnings.addAll(parseWarnings);
+        }
+        structuredContent.setQualityWarnings(warnings.stream()
+                .filter(StringUtils::hasText)
+                .distinct()
+                .toList());
+    }
+
+    private void applyDisplayModels(Long resumeId, ResumeParseMode parseMode, ResumeStructuredContentDTO structuredContent) {
+        if (structuredContent == null) {
+            return;
+        }
+        try {
+            ResumeDisplayModelDTO ruleDisplayModel = resumeDisplayModelService.buildRuleDisplayModel(resumeId, structuredContent);
+            structuredContent.setRuleDisplayModel(ruleDisplayModel);
+            if (parseMode == ResumeParseMode.FAST) {
+                structuredContent.setAiDisplayModel(null);
+                structuredContent.setDisplayModel(ruleDisplayModel);
+                return;
+            }
+            ResumeDisplayModelDTO cachedAiDisplayModel = resumeDisplayModelService.getCachedAiDisplayModel(resumeId, structuredContent);
+            structuredContent.setAiDisplayModel(cachedAiDisplayModel);
+            structuredContent.setDisplayModel(cachedAiDisplayModel == null ? ruleDisplayModel : cachedAiDisplayModel);
+        } catch (RuntimeException exception) {
+            structuredContent.setDisplayModel(structuredContent.getRuleDisplayModel());
+            addQualityWarning(structuredContent, "DISPLAY_MODEL_FAILED");
+            log.warn("Resume display model skipped: resumeId={}, reason={}",
+                    resumeId,
+                    LogSanitizer.sanitize(normalizeErrorMessage(exception)),
+                    exception);
+        }
+    }
+
+    private void addQualityWarning(ResumeStructuredContentDTO structuredContent, String warning) {
+        if (structuredContent == null || !StringUtils.hasText(warning)) {
+            return;
+        }
+        List<String> warnings = new ArrayList<>(structuredContent.getQualityWarnings() == null
+                ? List.of()
+                : structuredContent.getQualityWarnings());
+        if (!warnings.contains(warning)) {
+            warnings.add(warning);
+        }
+        structuredContent.setQualityWarnings(warnings);
+    }
+
+    private void applyAiParseMetadata(
+            ResumeStructuredContentDTO structuredContent,
+            ResumeSectionClassifyResultDTO sectionClassifyResult,
+            ResumeAiStructuredParseResultDTO structuredParseResult) {
+        if (structuredContent == null) {
+            return;
+        }
+        structuredContent.setParserVersion(ResumeParseVersions.PARSER_VERSION);
+        if (sectionClassifyResult != null) {
+            structuredContent.setAiSectionClassifyEnabled(sectionClassifyResult.getAiEnabled());
+            structuredContent.setAiSectionClassifyApplied(sectionClassifyResult.getApplied());
+            structuredContent.setAiSectionClassifyFallbackReason(sectionClassifyResult.getFallbackReason());
+            structuredContent.setAiSectionClassifyDurationMs(sectionClassifyResult.getDurationMs());
+            structuredContent.setAiSectionClassifyCacheHit(sectionClassifyResult.getCacheHit());
+            structuredContent.setAiSectionClassifyCacheKey(sectionClassifyResult.getCacheKey());
+        }
+        if (structuredParseResult != null) {
+            structuredContent.setAiStructuredParseEnabled(structuredParseResult.getAiEnabled());
+            structuredContent.setAiStructuredParseApplied(structuredParseResult.getApplied());
+            structuredContent.setAiStructuredParseFallbackReason(structuredParseResult.getFallbackReason());
+            structuredContent.setAiStructuredParseDurationMs(structuredParseResult.getDurationMs());
+            structuredContent.setAiStructuredParseCacheHit(structuredParseResult.getCacheHit());
+            structuredContent.setAiStructuredParseCacheKey(structuredParseResult.getCacheKey());
+        }
+        structuredContent.setParseMeta(buildParseMeta(structuredContent, sectionClassifyResult, structuredParseResult));
+    }
+
+    private ResumeParseMetaDTO buildParseMeta(
+            ResumeStructuredContentDTO structuredContent,
+            ResumeSectionClassifyResultDTO sectionClassifyResult,
+            ResumeAiStructuredParseResultDTO structuredParseResult) {
+        String aiStatus = resolveAiStatus(sectionClassifyResult, structuredParseResult);
+        boolean aiUsed = AI_STATUS_USED.equals(aiStatus) || AI_STATUS_FALLBACK.equals(aiStatus);
+        boolean fallbackOccurred = AI_STATUS_FALLBACK.equals(aiStatus);
+        boolean cacheRelevant = AI_STATUS_USED.equals(aiStatus) || AI_STATUS_FALLBACK.equals(aiStatus);
+        boolean cacheHit = cacheRelevant && (Boolean.TRUE.equals(sectionClassifyResult == null ? null : sectionClassifyResult.getCacheHit())
+                || Boolean.TRUE.equals(structuredParseResult == null ? null : structuredParseResult.getCacheHit()));
+        String cacheKey = firstNotBlank(
+                sectionClassifyResult == null ? null : sectionClassifyResult.getCacheKey(),
+                structuredParseResult == null ? null : structuredParseResult.getCacheKey());
+        return ResumeParseMetaDTO.builder()
+                .parseMode(structuredContent.getParseMode())
+                .parserVersion(ResumeParseVersions.PARSER_VERSION)
+                .aiStatus(aiStatus)
+                .aiUsed(aiUsed)
+                .aiSkippedReason(AI_STATUS_SKIPPED.equals(aiStatus)
+                        ? firstNotBlank(skippedReason(sectionClassifyResult), skippedReason(structuredParseResult))
+                        : null)
+                .aiFallbackOccurred(fallbackOccurred)
+                .aiFallbackReason(fallbackOccurred
+                        ? joinReasons(fallbackReason(sectionClassifyResult), fallbackReason(structuredParseResult))
+                        : null)
+                .aiCacheHit(cacheHit)
+                .aiCacheKeyDigest(cacheRelevant ? digest(cacheKey) : "")
+                .aiSectionClassifyDurationMs(sectionClassifyResult == null ? null : sectionClassifyResult.getDurationMs())
+                .aiStructuredParseDurationMs(structuredParseResult == null ? null : structuredParseResult.getDurationMs())
+                .build();
+    }
+
+    private String resolveAiStatus(
+            ResumeSectionClassifyResultDTO sectionClassifyResult,
+            ResumeAiStructuredParseResultDTO structuredParseResult) {
+        if (AI_STATUS_FALLBACK.equals(status(sectionClassifyResult)) || AI_STATUS_FALLBACK.equals(status(structuredParseResult))
+                || Boolean.TRUE.equals(sectionClassifyResult == null ? null : sectionClassifyResult.getFallbackOccurred())
+                || Boolean.TRUE.equals(structuredParseResult == null ? null : structuredParseResult.getFallbackOccurred())
+                || fallbackLike(sectionClassifyResult == null ? null : sectionClassifyResult.getFallbackReason())
+                || fallbackLike(structuredParseResult == null ? null : structuredParseResult.getFallbackReason())) {
+            return AI_STATUS_FALLBACK;
+        }
+        if (AI_STATUS_USED.equals(status(sectionClassifyResult)) || AI_STATUS_USED.equals(status(structuredParseResult))
+                || Boolean.TRUE.equals(sectionClassifyResult == null ? null : sectionClassifyResult.getApplied())
+                || Boolean.TRUE.equals(structuredParseResult == null ? null : structuredParseResult.getApplied())) {
+            return AI_STATUS_USED;
+        }
+        if (AI_STATUS_SKIPPED.equals(status(sectionClassifyResult)) || AI_STATUS_SKIPPED.equals(status(structuredParseResult))) {
+            return AI_STATUS_SKIPPED;
+        }
+        return AI_STATUS_DISABLED;
+    }
+
+    private boolean fallbackLike(String reason) {
+        return StringUtils.hasText(reason)
+                && reason.matches(".*(?:失败|JSON|超时|timeout|未返回|结果为空|校验).*");
+    }
+
+    private String status(ResumeSectionClassifyResultDTO result) {
+        return result == null ? null : result.getAiStatus();
+    }
+
+    private String status(ResumeAiStructuredParseResultDTO result) {
+        return result == null ? null : result.getAiStatus();
+    }
+
+    private String skippedReason(ResumeSectionClassifyResultDTO result) {
+        return result == null ? null : result.getSkippedReason();
+    }
+
+    private String skippedReason(ResumeAiStructuredParseResultDTO result) {
+        return result == null ? null : result.getSkippedReason();
+    }
+
+    private String fallbackReason(ResumeSectionClassifyResultDTO result) {
+        if (result == null
+                || (!Boolean.TRUE.equals(result.getFallbackOccurred())
+                && !AI_STATUS_FALLBACK.equals(result.getAiStatus())
+                && !fallbackLike(result.getFallbackReason()))) {
+            return null;
+        }
+        return result.getFallbackReason();
+    }
+
+    private String fallbackReason(ResumeAiStructuredParseResultDTO result) {
+        if (result == null
+                || (!Boolean.TRUE.equals(result.getFallbackOccurred())
+                && !AI_STATUS_FALLBACK.equals(result.getAiStatus())
+                && !fallbackLike(result.getFallbackReason()))) {
+            return null;
+        }
+        return result.getFallbackReason();
+    }
+
+    private String joinReasons(String first, String second) {
+        List<String> reasons = new ArrayList<>();
+        if (StringUtils.hasText(first)) {
+            reasons.add(first);
+        }
+        if (StringUtils.hasText(second) && !reasons.contains(second)) {
+            reasons.add(second);
+        }
+        return reasons.isEmpty() ? null : String.join("；", reasons);
+    }
+
+    private String firstNotBlank(String... values) {
+        if (values == null) {
+            return null;
+        }
+        for (String value : values) {
+            if (StringUtils.hasText(value)) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private void applyParseDurations(
+            ResumeStructuredContentDTO structuredContent,
+            long textExtractDurationMs,
+            long ruleParseDurationMs,
+            long totalParseDurationMs) {
+        if (structuredContent == null) {
+            return;
+        }
+        structuredContent.setTextExtractDurationMs(textExtractDurationMs);
+        structuredContent.setRuleParseDurationMs(ruleParseDurationMs);
+        structuredContent.setTotalParseDurationMs(totalParseDurationMs);
+        ResumeParseMetaDTO parseMeta = structuredContent.getParseMeta();
+        if (parseMeta == null) {
+            parseMeta = ResumeParseMetaDTO.builder().build();
+            structuredContent.setParseMeta(parseMeta);
+        }
+        parseMeta.setParseMode(structuredContent.getParseMode());
+        parseMeta.setParserVersion(ResumeParseVersions.PARSER_VERSION);
+        parseMeta.setRuleParseDurationMs(ruleParseDurationMs);
+        parseMeta.setTotalParseDurationMs(totalParseDurationMs);
+    }
+
+    private String digest(String value) {
+        if (!StringUtils.hasText(value)) {
+            return "";
+        }
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            String hex = HexFormat.of().formatHex(digest.digest(value.getBytes(StandardCharsets.UTF_8)));
+            return hex.substring(0, Math.min(16, hex.length()));
+        } catch (NoSuchAlgorithmException exception) {
+            return "";
+        }
+    }
+
+    private Boolean resolveStructuredParseEnabled(
+            ResumeParseOptionsDTO options,
+            ResumeParseMode parseMode,
+            ResumeSectionClassifyResultDTO sectionClassifyResult) {
+        if (parseMode == ResumeParseMode.FAST) {
+            return false;
+        }
+        boolean requested = options == null
+                ? parseMode == ResumeParseMode.ACCURATE || defaultAiStructuredParseEnabled
+                : options.getAiStructuredParseEnabled() == null
+                        ? parseMode == ResumeParseMode.ACCURATE || defaultAiStructuredParseEnabled
+                        : Boolean.TRUE.equals(options.getAiStructuredParseEnabled());
+        if (!requested) {
+            return false;
+        }
+        if (sectionClassifyResult == null || !sectionClassifyResult.shouldApply()) {
+            return false;
+        }
+        return true;
+    }
+
+    private void applyBlockParseContext(List<ResumeBlockDTO> blocks, String parseMode, String resumeTypeHint) {
+        if (blocks == null) {
+            return;
+        }
+        for (ResumeBlockDTO block : blocks) {
+            if (block == null) {
+                continue;
+            }
+            block.setParseMode(parseMode);
+            if (StringUtils.hasText(resumeTypeHint)) {
+                block.setResumeTypeHint(resumeTypeHint);
+            }
+        }
+    }
+
+    private ResumeParseMode resolveParseMode(ResumeParseOptionsDTO options) {
+        if (options != null && StringUtils.hasText(options.getParseMode())) {
+            return ResumeParseMode.from(options.getParseMode());
+        }
+        return ResumeParseMode.from(resumeParseProperties == null ? null : resumeParseProperties.getMode());
+    }
+
+    private Boolean resolveSectionClassifyEnabled(ResumeParseOptionsDTO options, ResumeParseMode parseMode) {
+        if (parseMode == ResumeParseMode.FAST) {
+            return false;
+        }
+        if (options != null && options.getAiSectionClassifyEnabled() != null) {
+            return Boolean.TRUE.equals(options.getAiSectionClassifyEnabled());
+        }
+        if (parseMode == ResumeParseMode.ACCURATE) {
+            return true;
+        }
+        return null;
+    }
+
+    private long elapsedMs(long startedAt) {
+        return java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
+    }
+
+    private String serializeParseQualityWarnings(ResumeParseQualityResultDTO parseQualityResult) {
+        if (parseQualityResult == null || parseQualityResult.getWarnings() == null) {
+            return null;
+        }
+        try {
+            return objectMapper.writeValueAsString(parseQualityResult.getWarnings());
+        } catch (JsonProcessingException exception) {
+            return "[\"PARSE_QUALITY_WARNINGS_SERIALIZE_FAILED\"]";
+        }
     }
 
     private String normalizeErrorMessage(RuntimeException exception) {

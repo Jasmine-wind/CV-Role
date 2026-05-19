@@ -1,0 +1,53 @@
+{
+  "sampleId": "sample-001-java-intern-docx",
+  "fileType": "DOCX",
+  "basicInfo": {
+    "name": {
+      "expectedValue": "四叶草",
+      "allowEmpty": true,
+      "forbiddenValues": ["本人", "个人简历", "参加项目描述"]
+    },
+    "phone": {
+      "expectedValue": "15000032333"
+    },
+    "email": {
+      "expectedValue": "Docer@qq.com"
+    },
+    "degree": {
+      "expectedContains": ["本科", "大学本科"]
+    },
+    "jobIntention": {
+      "expectedContains": ["Java", "实习"]
+    },
+    "resumeType": {
+      "expectedValue": "INTERN"
+    }
+  },
+  "sections": {
+    "education": {
+      "mustContain": ["重庆理工大学", "JAVA 开发"]
+    },
+    "skills": {
+      "mustContain": ["Java", "Vue", "JavaScript", "MySQL", "MyBatis", "Nginx"],
+      "mustNotContain": ["本人", "项目描述", "学习能力强", "工作认真"]
+    },
+    "campusExperiences": {
+      "mustContain": ["在校经历"]
+    },
+    "projects": {
+      "allowEmpty": true
+    },
+    "summary": {
+      "optional": true
+    },
+    "others": {
+      "mustNotContain": ["1、", "2、", "3、"]
+    }
+  },
+  "quality": {
+    "maxPureIndexLines": 0,
+    "maxDuplicateLines": 3,
+    "maxOthersCount": 8,
+    "maxTotalDurationMs": 60000
+  }
+}

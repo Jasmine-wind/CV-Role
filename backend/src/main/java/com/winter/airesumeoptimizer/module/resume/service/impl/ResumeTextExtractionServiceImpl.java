@@ -6,7 +6,11 @@ import com.winter.airesumeoptimizer.infra.storage.FileStorageService;
 import com.winter.airesumeoptimizer.module.resume.service.ResumeTextExtractionService;
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.text.PDFTextStripper;
@@ -14,6 +18,15 @@ import org.apache.poi.hwpf.HWPFDocument;
 import org.apache.poi.hwpf.extractor.WordExtractor;
 import org.apache.poi.xwpf.extractor.XWPFWordExtractor;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
+import org.apache.poi.xwpf.usermodel.XWPFHeader;
+import org.apache.poi.xwpf.usermodel.XWPFHeaderFooter;
+import org.apache.poi.xwpf.usermodel.XWPFFooter;
+import org.apache.poi.xwpf.usermodel.XWPFParagraph;
+import org.apache.poi.xwpf.usermodel.XWPFTable;
+import org.apache.poi.xwpf.usermodel.XWPFTableCell;
+import org.apache.poi.xwpf.usermodel.XWPFTableRow;
+import org.apache.xmlbeans.XmlCursor;
+import org.apache.xmlbeans.XmlObject;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -60,8 +73,74 @@ public class ResumeTextExtractionServiceImpl implements ResumeTextExtractionServ
     private String extractDocxText(InputStream inputStream) throws IOException {
         try (XWPFDocument document = new XWPFDocument(inputStream);
                 XWPFWordExtractor extractor = new XWPFWordExtractor(document)) {
-            return normalizeExtractedText(extractor.getText());
+            List<String> textParts = collectDocxTextBlocks(document).stream()
+                    .map(ExtractedTextBlock::text)
+                    .toList();
+            if (textParts.isEmpty()) {
+                textParts = List.of(extractor.getText());
+            }
+            return normalizeExtractedText(String.join("\n", textParts));
         }
+    }
+
+    List<ExtractedTextBlock> collectDocxTextBlocks(XWPFDocument document) {
+        List<ExtractedTextBlock> blocks = new ArrayList<>();
+        for (XWPFParagraph paragraph : document.getParagraphs()) {
+            addTextBlock(blocks, "paragraph", paragraph.getText());
+        }
+        for (XWPFTable table : document.getTables()) {
+            collectTableTextBlocks(table, blocks);
+        }
+        for (XWPFHeader header : document.getHeaderList()) {
+            collectHeaderFooterTextBlocks(header, "header", blocks);
+        }
+        for (XWPFFooter footer : document.getFooterList()) {
+            collectHeaderFooterTextBlocks(footer, "footer", blocks);
+        }
+        extractDocxTextBoxText(document).forEach(text -> addTextBlock(blocks, "textbox", text));
+        return blocks;
+    }
+
+    private void collectTableTextBlocks(XWPFTable table, List<ExtractedTextBlock> blocks) {
+        for (XWPFTableRow row : table.getRows()) {
+            for (XWPFTableCell cell : row.getTableCells()) {
+                for (XWPFParagraph paragraph : cell.getParagraphs()) {
+                    addTextBlock(blocks, "table", paragraph.getText());
+                }
+            }
+        }
+    }
+
+    private void collectHeaderFooterTextBlocks(XWPFHeaderFooter headerFooter, String sourceType, List<ExtractedTextBlock> blocks) {
+        for (XWPFParagraph paragraph : headerFooter.getParagraphs()) {
+            addTextBlock(blocks, sourceType, paragraph.getText());
+        }
+        for (XWPFTable table : headerFooter.getTables()) {
+            collectTableTextBlocks(table, blocks);
+        }
+    }
+
+    private void addTextBlock(List<ExtractedTextBlock> blocks, String sourceType, String text) {
+        if (text != null && !text.isBlank()) {
+            blocks.add(new ExtractedTextBlock(sourceType, text.strip()));
+        }
+    }
+
+    List<String> extractDocxTextBoxText(XWPFDocument document) {
+        XmlObject[] textObjects = document.getDocument().selectPath("""
+                declare namespace w='http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+                .//w:txbxContent//w:t
+                """);
+        List<String> result = new ArrayList<>();
+        for (XmlObject textObject : textObjects) {
+            try (XmlCursor cursor = textObject.newCursor()) {
+                String text = cursor.getTextValue();
+                if (text != null && !text.isBlank()) {
+                    result.add(text.strip());
+                }
+            }
+        }
+        return result;
     }
 
     private String normalizeFileType(String fileType) {
@@ -73,8 +152,17 @@ public class ResumeTextExtractionServiceImpl implements ResumeTextExtractionServ
 
     private String normalizeExtractedText(String text) {
         if (text == null || text.isBlank()) {
-            throw new BusinessException(400, "未提取到简历文本");
+            return "";
         }
-        return text.strip();
+        Set<String> seen = new LinkedHashSet<>();
+        List<String> lines = text.lines()
+                .map(String::strip)
+                .filter(line -> !line.isBlank())
+                .filter(line -> seen.add(line.replaceAll("\\s+", " ").toLowerCase(Locale.ROOT)))
+                .toList();
+        return String.join("\n", lines).strip();
+    }
+
+    record ExtractedTextBlock(String sourceType, String text) {
     }
 }

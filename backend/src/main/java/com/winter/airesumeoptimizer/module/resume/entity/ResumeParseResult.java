@@ -21,9 +21,27 @@ public class ResumeParseResult {
 
     private String extractedText;
 
+    private String cleanedText;
+
+    private String sectionResult;
+
     private String structuredJson;
 
     private String errorMessage;
+
+    private String textQualityStatus;
+
+    private String textQualityIssues;
+
+    private String textQualityMessage;
+
+    private String parseQualityStatus;
+
+    private String parseQualityWarnings;
+
+    private String parseQualityMessage;
+
+    private Integer parseQualityScore;
 
     private LocalDateTime createdAt;
 

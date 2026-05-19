@@ -1,0 +1,186 @@
+{
+  "sampleId": "sample-005-javaee-engineer-2y-pdf",
+  "fileType": "PDF",
+  "sourceFile": "private-inputs/sample-005-javaee-engineer-2y.pdf",
+  "originalFileName": "老夫子_JavaEE软件工程师_2年.pdf",
+  "sampleType": "2年经验 JavaEE 软件工程师简历",
+  "basicInfo": {
+    "name": {
+      "expectedValue": "王路",
+      "allowEmpty": false,
+      "forbiddenValues": [
+        "本人",
+        "个人简历",
+        "参加项目描述",
+        "项目经历",
+        "专业技能",
+        "工作经历",
+        "教育经历",
+        "自我评价",
+        "基本资料",
+        "基本情况"
+      ]
+    },
+    "gender": {
+      "expectedValue": "男",
+      "optional": true
+    },
+    "age": {
+      "expectedValue": "26",
+      "optional": true
+    },
+    "phone": {
+      "expectedValue": "16638800828"
+    },
+    "email": {
+      "expectedValue": "luke56@aliyun.com"
+    },
+    "degree": {
+      "expectedContains": [
+        "本科"
+      ]
+    },
+    "school": {
+      "expectedContains": [
+        "黄淮学院"
+      ]
+    },
+    "location": {
+      "expectedContains": [
+        "河南南阳"
+      ],
+      "optional": true
+    },
+    "jobIntention": {
+      "expectedContains": [
+        "JavaEE开发工程师"
+      ]
+    },
+    "workYears": {
+      "expectedContains": [
+        "2年"
+      ]
+    },
+    "resumeType": {
+      "expectedValue": "EXPERIENCED"
+    }
+  },
+  "sections": {
+    "education": {
+      "mustContain": [
+        "黄淮学院",
+        "电子信息工程",
+        "2013年9月",
+        "2017年7月"
+      ],
+      "mustNotContain": [
+        "优士达教育平台",
+        "仁记体检院管理系统",
+        "郑州金融财讯综合管理系统"
+      ]
+    },
+    "skills": {
+      "mustContain": [
+        "JavaSE",
+        "多线程",
+        "设计模式",
+        "JVM",
+        "JavaWeb",
+        "HTTP",
+        "Servlet",
+        "Tomcat",
+        "JSP",
+        "JavaScript",
+        "jQuery",
+        "Bootstrap",
+        "Vue",
+        "ElementUI",
+        "MySQL",
+        "Redis",
+        "MongoDB",
+        "PowerDesigner",
+        "Spring",
+        "SpringMVC",
+        "MyBatis",
+        "Dubbo",
+        "SpringBoot",
+        "SpringCloud",
+        "RabbitMQ",
+        "FastDFS",
+        "FreeMarker",
+        "ElasticSearch",
+        "Linux",
+        "Nginx",
+        "Maven",
+        "Git",
+        "Docker"
+      ],
+      "mustNotContain": [
+        "郑州简铭软件开发有限公司",
+        "优士达教育平台",
+        "仁记体检院管理系统",
+        "郑州金融财讯综合管理系统",
+        "热爱编程"
+      ]
+    },
+    "workExperiences": {
+      "mustContain": [
+        "郑州简铭软件开发有限公司",
+        "2017.07",
+        "2019.12",
+        "JavaWeb项目的开发"
+      ]
+    },
+    "projects": {
+      "mustContain": [
+        "优士达教育平台",
+        "仁记体检院管理系统",
+        "郑州金融财讯综合管理系统",
+        "CMS系统",
+        "课程信息管理模块",
+        "报表模块",
+        "个人工作管理模块"
+      ],
+      "mustNotContain": [
+        "黄淮学院",
+        "王路/男/26"
+      ]
+    },
+    "summary": {
+      "mustContain": [
+        "热爱编程",
+        "学习能力强",
+        "自律守时",
+        "工作认真仔细",
+        "独立解决问题能力",
+        "团队协作精神"
+      ],
+      "optional": false
+    },
+    "others": {
+      "mustNotContain": [
+        "①",
+        "②",
+        "③",
+        "④",
+        "1.",
+        "2.",
+        "3.",
+        "个人信息",
+        "感谢您花时间阅读我的简历"
+      ],
+      "maxCount": 8
+    }
+  },
+  "quality": {
+    "maxPureIndexLines": 0,
+    "maxDuplicateLines": 3,
+    "maxOthersCount": 8,
+    "maxTotalDurationMs": 60000,
+    "shouldNotFallbackWhenAiEnabled": false
+  },
+  "notes": [
+    "PDF 中包含多页项目经历，需验证分页后内容不丢失。",
+    "项目条目使用 ①②③④ 编号，应清理编号但保留正文。"
+  ]
+}

@@ -4,11 +4,13 @@ import type {
   ResumeAiAnalysisTrigger,
   ResumeDetail,
   ResumeListItem,
+  ResumeParseOptions,
   ResumeParseResult,
   ResumeUploadResult,
 } from '@/types/resume'
 
 const AI_ANALYSIS_TIMEOUT_MS = 120000
+const RESUME_PARSE_TIMEOUT_MS = 180000
 
 export const uploadResume = (file: File) => {
   const formData = new FormData()
@@ -25,8 +27,10 @@ export const getResumeDetail = (id: number) => {
   return request.get<ResumeDetail>(`/api/resumes/${id}`)
 }
 
-export const parseResume = (id: number) => {
-  return request.post<ResumeParseResult>(`/api/resumes/${id}/parse`)
+export const parseResume = (id: number, options?: ResumeParseOptions) => {
+  return request.post<ResumeParseResult>(`/api/resumes/${id}/parse`, options ?? {}, {
+    timeout: RESUME_PARSE_TIMEOUT_MS,
+  })
 }
 
 export const getResumeParseResult = (id: number) => {

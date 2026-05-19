@@ -1,0 +1,39 @@
+### ISSUE-解析-001：文本框类 DOCX 简历普通解析为空
+
+- 发现版本：v2.9
+- 问题类型：DOCX 复杂模板解析
+- 严重程度：High
+- 样例文件：HH-876校招JAVA实习生单页简历.docx
+- 现象：
+  - 普通段落解析结果为空。
+  - 表格解析数量为 0。
+  - 实际内容存储在 Word 文本框 / 绘图对象中。
+- 影响：
+  - 个人信息、求职意向、教育背景、个人技能、自我评价等无法被常规解析器识别。
+  - 后续简历诊断、岗位匹配、优化建议、向量生成都会受到影响。
+- 初步原因：
+  - 当前 DOCX 解析逻辑只处理普通段落和表格，未处理文本框和 shape。
+- 处理决策：
+  - 纳入 v2.9 DOCX 复杂模板文本提取增强。
+- 计划：
+  - 增加文本框 / shape 文本提取。
+  - 增加去重。
+  - 增加章节别名库。
+  - 增加简历类型识别。
+- 当前处理：
+  - 已在 v2.9 中增强 DOCX 提取，额外扫描 `w:txbxContent/w:t`，覆盖 Word 文本框 / drawing shape 中的文本。
+  - 已对提取结果做行级去重，降低正文和文本框重复导致的重复解析。
+  - 已扩展章节别名库，覆盖 `核心能力`、`个人技能`、`Technique`、`工作经验`、`职业经历`、`About me`、`证书`、`其他说明` 等。
+  - 已扩展结构化字段：`basicInfo`、`workExperiences`、`campusExperiences`、`certificates`、`others`、`resumeType`。
+  - 已补充求职意向、最高学历、社招/实习简历类型识别。
+  - 已补充解析质量提示：个人联系信息不完整、简历类型未识别、工作经历缺失、实习 / 校园经历缺失和未归类内容提示。
+  - 前端解析结果页已补充对应 warning 文案，避免直接暴露后端 warning code。
+- 验证：
+  - `ResumeTextExtractionServiceImplTest` 已覆盖 DOCX 文本框内容提取和重复文本去重。
+  - `ResumeTextCleanServiceImplTest` 已覆盖社招别名章节识别。
+  - `ResumeStructureParseServiceImplTest` 已覆盖有工作经验简历结构化解析。
+  - `ResumeParseQualityCheckServiceImplTest` 已覆盖解析质量新增提示场景。
+- 剩余边界：
+  - 当前不做复杂 OCR。
+  - 当前不做完整 Word 视觉排版还原。
+  - DOCX 表格行列语义、复杂浮动布局顺序恢复仍属于后续优化。

@@ -1,6 +1,7 @@
 package com.winter.airesumeoptimizer.module.resume.controller;
 
 import com.winter.airesumeoptimizer.common.result.Result;
+import com.winter.airesumeoptimizer.module.resume.dto.ResumeParseOptionsDTO;
 import com.winter.airesumeoptimizer.module.resume.service.ResumeService;
 import com.winter.airesumeoptimizer.module.resume.vo.ResumeDetailVO;
 import com.winter.airesumeoptimizer.module.resume.vo.ResumeListVO;
@@ -19,6 +20,7 @@ import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -66,9 +68,10 @@ public class ResumeController {
     @Operation(summary = "触发简历解析", description = "提取简历文本并生成结构化解析结果")
     public Result<ResumeParseResultVO> parse(
             @PathVariable @Positive(message = "简历 ID 必须大于 0") Long id,
+            @RequestBody(required = false) ResumeParseOptionsDTO options,
             Authentication authentication) {
         AuthenticatedUser authenticatedUser = (AuthenticatedUser) authentication.getPrincipal();
-        ResumeParseResultVO result = resumeService.parse(authenticatedUser.getUserId(), id);
+        ResumeParseResultVO result = resumeService.parse(authenticatedUser.getUserId(), id, options);
         String message = "FAILED".equals(result.getParseStatus()) ? "解析失败" : "解析完成";
         return Result.success(message, result);
     }

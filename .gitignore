@@ -110,3 +110,8 @@ temp/
 /storage/
 /minio-data/
 /postgres-data/
+
+# =========================
+# Resume parse regression private samples
+# =========================
+docs/evaluation/parse/regression/private-inputs/
