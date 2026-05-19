@@ -19,10 +19,13 @@ import com.winter.airesumeoptimizer.common.exception.GlobalExceptionHandler;
 import com.winter.airesumeoptimizer.common.logging.RequestIdFilter;
 import com.winter.airesumeoptimizer.config.OpenApiConfig;
 import com.winter.airesumeoptimizer.config.SecurityConfig;
+import com.winter.airesumeoptimizer.module.analysis.controller.JobOptimizationReportController;
 import com.winter.airesumeoptimizer.module.analysis.controller.ResumeAnalysisController;
 import com.winter.airesumeoptimizer.module.analysis.controller.AiRewriteSuggestionController;
+import com.winter.airesumeoptimizer.module.analysis.dto.AiJobMatchItemDTO;
 import com.winter.airesumeoptimizer.module.analysis.dto.AiJobMatchRequestDTO;
 import com.winter.airesumeoptimizer.module.analysis.dto.AiRewriteAcceptStatusUpdateDTO;
+import com.winter.airesumeoptimizer.module.analysis.dto.AiResumeSuggestionItemDTO;
 import com.winter.airesumeoptimizer.module.analysis.dto.AiResumeSuggestionRequestDTO;
 import com.winter.airesumeoptimizer.module.analysis.dto.AiRewriteSuggestionRequestDTO;
 import com.winter.airesumeoptimizer.module.analysis.entity.AiJobMatchResult;
@@ -32,7 +35,9 @@ import com.winter.airesumeoptimizer.module.analysis.entity.ResumeAiAnalysis;
 import com.winter.airesumeoptimizer.module.analysis.service.AiJobMatchService;
 import com.winter.airesumeoptimizer.module.analysis.service.AiResumeSuggestionService;
 import com.winter.airesumeoptimizer.module.analysis.service.AiRewriteSuggestionService;
+import com.winter.airesumeoptimizer.module.analysis.service.JobOptimizationReportService;
 import com.winter.airesumeoptimizer.module.analysis.service.ResumeAnalysisService;
+import com.winter.airesumeoptimizer.module.analysis.vo.JobOptimizationReportVO;
 import com.winter.airesumeoptimizer.module.auth.controller.AuthController;
 import com.winter.airesumeoptimizer.module.auth.dto.LoginRequestDTO;
 import com.winter.airesumeoptimizer.module.auth.dto.RegisterRequestDTO;
@@ -96,6 +101,7 @@ import org.springframework.web.multipart.MultipartFile;
         UserController.class,
         ResumeController.class,
         ResumeAnalysisController.class,
+        JobOptimizationReportController.class,
         AiRewriteSuggestionController.class,
         JobController.class,
         JobDescriptionController.class,
@@ -147,6 +153,9 @@ class Phase1ApiIntegrationTest {
 
     @MockitoBean
     private AiRewriteSuggestionService aiRewriteSuggestionService;
+
+    @MockitoBean
+    private JobOptimizationReportService jobOptimizationReportService;
 
     @MockitoBean
     private JobService jobService;
@@ -227,6 +236,123 @@ class Phase1ApiIntegrationTest {
     }
 
     @Test
+    void jobOptimizationReportEndpointShouldReturnReportAndRejectInvalidRequests() throws Exception {
+        when(jobOptimizationReportService.getReport(eq(1L), eq(100L), eq(10L)))
+                .thenReturn(JobOptimizationReportVO.builder()
+                        .resumeId(100L)
+                        .resumeName("resume.pdf")
+                        .jobDescriptionId(10L)
+                        .jobTitle("Java后端开发")
+                        .matchScore(82)
+                        .matchLevel("HIGH")
+                        .strongMatches(List.of(AiJobMatchItemDTO.builder()
+                                .item("Java")
+                                .reason("岗位和简历均包含 Java")
+                                .build()))
+                        .weakMatches(List.of())
+                        .missingSkills(List.of(AiJobMatchItemDTO.builder()
+                                .item("Docker")
+                                .reason("岗位要求 Docker")
+                                .build()))
+                        .riskTips(List.of("不要虚构 Docker 经验"))
+                        .suggestionSummary(JobOptimizationReportVO.SuggestionSummaryVO.builder()
+                                .totalCount(1)
+                                .highPriorityCount(1)
+                                .mediumPriorityCount(0)
+                                .lowPriorityCount(0)
+                                .build())
+                        .highPrioritySuggestions(List.of(AiResumeSuggestionItemDTO.builder()
+                                .type("SKILL_GAP")
+                                .priority("HIGH")
+                                .targetSection("技能")
+                                .issue("缺少 Docker")
+                                .suggestion("真实掌握再补充 Docker")
+                                .evidence(List.of("岗位要求 Docker"))
+                                .caution("不要虚构技能")
+                                .relatedItems(List.of("Docker"))
+                                .build()))
+                        .mediumPrioritySuggestions(List.of())
+                        .lowPrioritySuggestions(List.of())
+                        .rewriteSuggestions(List.of())
+                        .acceptedRewriteSuggestions(List.of())
+                        .pendingRewriteSuggestions(List.of())
+                        .rejectedRewriteSuggestions(List.of())
+                        .nextStepChecklist(List.of(JobOptimizationReportVO.NextStepItemVO.builder()
+                                .key("REVIEW_HIGH_PRIORITY_SUGGESTIONS")
+                                .text("优先处理高优先级岗位优化建议")
+                                .source("SUGGESTION")
+                                .status("PENDING")
+                                .build()))
+                        .modelInfo(List.of(JobOptimizationReportVO.ModelInfoVO.builder()
+                                .sourceType("MATCH")
+                                .sourceId(400L)
+                                .modelName("deepseek-v4-flash")
+                                .promptVersion("ai_job_match_v1")
+                                .status("SUCCESS")
+                                .updatedAt(LocalDateTime.now())
+                                .build()))
+                        .warnings(List.of())
+                        .generatedAt(LocalDateTime.now())
+                        .build());
+
+        mockMvc.perform(get("/api/resumes/100/job-optimization-report")
+                        .param("jobDescriptionId", "10")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data.resumeId").value(100))
+                .andExpect(jsonPath("$.data.jobDescriptionId").value(10))
+                .andExpect(jsonPath("$.data.matchScore").value(82))
+                .andExpect(jsonPath("$.data.matchLevel").value("HIGH"))
+                .andExpect(jsonPath("$.data.strongMatches[0].item").value("Java"))
+                .andExpect(jsonPath("$.data.missingSkills[0].item").value("Docker"))
+                .andExpect(jsonPath("$.data.highPrioritySuggestions[0].priority").value("HIGH"))
+                .andExpect(jsonPath("$.data.nextStepChecklist[0].key").value("REVIEW_HIGH_PRIORITY_SUGGESTIONS"))
+                .andExpect(jsonPath("$.data.modelInfo[0].promptVersion").value("ai_job_match_v1"));
+
+        mockMvc.perform(get("/api/resumes/100/job-optimization-report")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(400));
+
+        mockMvc.perform(get("/api/resumes/0/job-optimization-report")
+                        .param("jobDescriptionId", "10")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(400))
+                .andExpect(jsonPath("$.message").value("简历 ID 必须大于 0"));
+
+        mockMvc.perform(get("/api/resumes/100/job-optimization-report")
+                        .param("jobDescriptionId", "0")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(400))
+                .andExpect(jsonPath("$.message").value("岗位描述 ID 必须大于 0"));
+    }
+
+    @Test
+    void jobOptimizationReportEndpointShouldRejectAnonymousUser() throws Exception {
+        mockMvc.perform(get("/api/resumes/100/job-optimization-report")
+                        .param("jobDescriptionId", "10"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value(401))
+                .andExpect(jsonPath("$.path").value("/api/resumes/100/job-optimization-report"));
+    }
+
+    @Test
+    void jobOptimizationReportEndpointShouldReturnBusinessError() throws Exception {
+        when(jobOptimizationReportService.getReport(eq(1L), eq(100L), eq(99L)))
+                .thenThrow(new BusinessException(404, "AI 岗位匹配结果不存在，请先生成岗位匹配结果"));
+
+        mockMvc.perform(get("/api/resumes/100/job-optimization-report")
+                        .param("jobDescriptionId", "99")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(404))
+                .andExpect(jsonPath("$.message").value("AI 岗位匹配结果不存在，请先生成岗位匹配结果"));
+    }
+
+    @Test
     void currentUserEndpointShouldReturnAuthenticatedProfile() throws Exception {
         when(userService.getCurrentUserProfile(1L)).thenReturn(UserProfileVO.builder()
                 .id(1L)
@@ -278,7 +404,7 @@ class Phase1ApiIntegrationTest {
                 .updatedAt(LocalDateTime.now())
                 .build());
         when(resumeService.getDetail(1L, 999L)).thenThrow(new BusinessException(404, "简历不存在"));
-        when(resumeService.parse(1L, 100L)).thenReturn(ResumeParseResultVO.builder()
+        when(resumeService.parse(eq(1L), eq(100L), any())).thenReturn(ResumeParseResultVO.builder()
                 .resumeId(100L)
                 .parseStatus("SUCCESS")
                 .extractedText("Java Spring Boot")

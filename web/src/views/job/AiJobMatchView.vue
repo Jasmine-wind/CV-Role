@@ -5,11 +5,13 @@ import { useRoute, useRouter } from 'vue-router'
 import { getAiJobMatch, getAiJobMatches, triggerAiJobMatch } from '@/api/ai-job-match'
 import { getAiResumeSuggestionByMatchResult, triggerAiResumeSuggestion } from '@/api/ai-resume-suggestion'
 import { getAiRewriteSuggestions, triggerAiRewriteSuggestion, updateAiRewriteAcceptStatus } from '@/api/ai-rewrite-suggestion'
+import { getJobOptimizationReport } from '@/api/job-optimization-report'
 import { getJobDescriptionList } from '@/api/job-description'
 import { getResumeList, getResumeParseResult } from '@/api/resume'
 import type { AiJobMatchResult } from '@/types/ai-job-match'
 import type { AiResumeSuggestionItem, AiResumeSuggestionResult } from '@/types/ai-resume-suggestion'
 import type { AiRewriteSuggestionResult } from '@/types/ai-rewrite-suggestion'
+import type { JobOptimizationReport, JobOptimizationRewriteSuggestion } from '@/types/job-optimization-report'
 import type { JobDescriptionDetail } from '@/types/job-description'
 import type { ResumeListItem, ResumeParseResult } from '@/types/resume'
 
@@ -24,6 +26,7 @@ const selectedResumeParseResult = ref<ResumeParseResult | null>(null)
 const selectedMatch = ref<AiJobMatchResult | null>(null)
 const selectedSuggestion = ref<AiResumeSuggestionResult | null>(null)
 const selectedRewriteSuggestion = ref<AiRewriteSuggestionResult | null>(null)
+const optimizationReport = ref<JobOptimizationReport | null>(null)
 const matchResults = ref<AiJobMatchResult[]>([])
 const rewriteSuggestions = ref<AiRewriteSuggestionResult[]>([])
 const loading = ref(false)
@@ -32,6 +35,7 @@ const matching = ref(false)
 const loadingResult = ref(false)
 const generatingSuggestion = ref(false)
 const loadingSuggestion = ref(false)
+const loadingOptimizationReport = ref(false)
 const rewriteDialogVisible = ref(false)
 const generatingRewrite = ref(false)
 const loadingRewriteSuggestions = ref(false)
@@ -107,6 +111,28 @@ const generalSuggestions = computed(() => {
 
 const strengthAndGeneralSuggestions = computed(() => {
   return [...strengthSuggestions.value, ...generalSuggestions.value]
+})
+
+const reportHasSuggestions = computed(() => {
+  const report = optimizationReport.value
+  if (!report) {
+    return false
+  }
+
+  return Boolean(
+    report.highPrioritySuggestions.length
+    || report.mediumPrioritySuggestions.length
+    || report.lowPrioritySuggestions.length,
+  )
+})
+
+const reportHasRewriteSuggestions = computed(() => {
+  const report = optimizationReport.value
+  if (!report) {
+    return false
+  }
+
+  return Boolean(report.acceptedRewriteSuggestions.length || report.pendingRewriteSuggestions.length)
 })
 
 const formatDateTime = (value: string | null) => {
@@ -236,6 +262,32 @@ const resolveRewriteStatusType = (status: string | null | undefined) => {
   return 'info'
 }
 
+const resolveMatchLevelText = (level: string | null | undefined) => {
+  if (level === 'HIGH') {
+    return '高匹配'
+  }
+  if (level === 'MEDIUM') {
+    return '中匹配'
+  }
+  if (level === 'LOW') {
+    return '低匹配'
+  }
+  return level || '-'
+}
+
+const resolveMatchLevelType = (level: string | null | undefined) => {
+  if (level === 'HIGH') {
+    return 'success'
+  }
+  if (level === 'MEDIUM') {
+    return 'warning'
+  }
+  if (level === 'LOW') {
+    return 'danger'
+  }
+  return 'info'
+}
+
 const resolveAcceptStatusText = (status: string | null | undefined) => {
   if (status === 'PENDING') {
     return '待确认'
@@ -247,6 +299,25 @@ const resolveAcceptStatusText = (status: string | null | undefined) => {
     return '已拒绝'
   }
   return status || '-'
+}
+
+const resolveAcceptStatusType = (status: string | null | undefined) => {
+  if (status === 'ACCEPTED') {
+    return 'success'
+  }
+  if (status === 'REJECTED') {
+    return 'danger'
+  }
+  return 'warning'
+}
+
+const resolveReportSourceText = (source: string | null | undefined) => {
+  const sourceMap: Record<string, string> = {
+    MATCH: '匹配分析',
+    SUGGESTION: '优化建议',
+    REWRITE: '局部改写',
+  }
+  return source ? sourceMap[source] || source : '-'
 }
 
 const rewriteNeedsSupplement = (suggestion: AiRewriteSuggestionResult | null) => {
@@ -277,6 +348,14 @@ const suggestionsByType = (type: string) => {
 
 const suggestionsByPriority = (priority: string) => {
   return selectedSuggestion.value?.suggestions.filter((item) => item.priority === priority) ?? []
+}
+
+const reportSuggestionKey = (suggestion: AiResumeSuggestionItem, index: number, priority: string) => {
+  return `${priority}-${suggestion.type}-${suggestion.targetSection}-${suggestion.issue}-${index}`
+}
+
+const reportRewriteKey = (suggestion: JobOptimizationRewriteSuggestion, index: number, group: string) => {
+  return `${group}-${suggestion.rewriteId}-${suggestion.rewriteType}-${index}`
 }
 
 const loadInitialData = async () => {
@@ -337,6 +416,7 @@ const loadCurrentMatch = async () => {
   selectedMatch.value = null
   selectedSuggestion.value = null
   selectedRewriteSuggestion.value = null
+  optimizationReport.value = null
   rewriteSuggestions.value = []
   matchResults.value = []
   if (!selectedResumeId.value) {
@@ -358,6 +438,7 @@ const loadCurrentMatch = async () => {
     selectedMatch.value = null
     selectedSuggestion.value = null
     selectedRewriteSuggestion.value = null
+    optimizationReport.value = null
     rewriteSuggestions.value = []
     if (error instanceof Error && error.message !== 'AI 岗位匹配结果不存在') {
       ElMessage.warning(error.message)
@@ -394,6 +475,24 @@ const handleResumeChange = async () => {
 
 const handleJobDescriptionChange = async () => {
   await loadCurrentMatch()
+}
+
+const handleLoadOptimizationReport = async () => {
+  if (!selectedResumeId.value || !selectedJobDescriptionId.value) {
+    ElMessage.warning('请先选择简历和目标岗位')
+    return
+  }
+
+  loadingOptimizationReport.value = true
+
+  try {
+    optimizationReport.value = await getJobOptimizationReport(selectedResumeId.value, selectedJobDescriptionId.value)
+  } catch (error) {
+    optimizationReport.value = null
+    ElMessage.error(error instanceof Error ? error.message : '获取岗位优化报告失败')
+  } finally {
+    loadingOptimizationReport.value = false
+  }
 }
 
 const handleMatch = async () => {
@@ -450,6 +549,7 @@ const handleGenerateSuggestion = async () => {
       ElMessage.success('岗位优化建议生成完成')
     }
     await loadCurrentSuggestion()
+    optimizationReport.value = null
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '岗位优化建议生成失败')
   } finally {
@@ -520,6 +620,7 @@ const handleGenerateRewrite = async () => {
       rewriteDialogVisible.value = false
     }
     await loadRewriteSuggestions()
+    optimizationReport.value = null
     if (result.rewriteId) {
       selectedRewriteSuggestion.value = rewriteSuggestions.value.find((item) => item.rewriteId === result.rewriteId) || result
     }
@@ -547,6 +648,7 @@ const handleUpdateRewriteAcceptStatus = async (acceptStatus: 'ACCEPTED' | 'REJEC
     if (index >= 0) {
       rewriteSuggestions.value[index] = result
     }
+    optimizationReport.value = null
     ElMessage.success(acceptStatus === 'ACCEPTED' ? '已采纳改写建议' : '已拒绝改写建议')
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '更新采纳状态失败')
@@ -660,6 +762,13 @@ onMounted(() => {
             开始匹配分析
           </el-button>
           <el-button :loading="loadingResult" :disabled="!selectedResumeId" @click="loadCurrentMatch">刷新结果</el-button>
+          <el-button
+            :loading="loadingOptimizationReport"
+            :disabled="!selectedResumeId || !selectedJobDescriptionId"
+            @click="handleLoadOptimizationReport"
+          >
+            查看优化报告
+          </el-button>
         </div>
 
         <section v-loading="loadingResult" class="ai-match-result">
@@ -691,6 +800,309 @@ onMounted(() => {
               :closable="false"
               show-icon
             />
+
+            <section class="ai-match-report-panel">
+              <div class="ai-match-suggestion-header">
+                <div>
+                  <h2 class="ai-match-section-title">岗位优化报告</h2>
+                  <p class="ai-match-suggestion-note">聚合匹配分析、岗位优化建议和局部改写结果，作为当前岗位的修改清单。</p>
+                </div>
+                <el-button
+                  :loading="loadingOptimizationReport"
+                  :disabled="!selectedResumeId || !selectedJobDescriptionId"
+                  @click="handleLoadOptimizationReport"
+                >
+                  刷新报告
+                </el-button>
+              </div>
+
+              <section v-loading="loadingOptimizationReport" class="ai-match-report-body">
+                <el-empty
+                  v-if="!optimizationReport"
+                  description="暂无岗位优化报告，请先完成匹配分析后点击查看优化报告"
+                  :image-size="72"
+                />
+
+                <template v-else>
+                  <div class="ai-match-report-overview">
+                    <div class="ai-match-report-score">
+                      <span>{{ optimizationReport.matchScore ?? '-' }}</span>
+                      <small>匹配分数</small>
+                    </div>
+                    <el-descriptions :column="2" border class="ai-match-descriptions">
+                      <el-descriptions-item label="简历名称">{{ optimizationReport.resumeName || selectedResume?.originalFilename || '-' }}</el-descriptions-item>
+                      <el-descriptions-item label="目标岗位">{{ optimizationReport.jobTitle || selectedJobDescription?.title || '-' }}</el-descriptions-item>
+                      <el-descriptions-item label="匹配等级">
+                        <el-tag :type="resolveMatchLevelType(optimizationReport.matchLevel)">
+                          {{ resolveMatchLevelText(optimizationReport.matchLevel) }}
+                        </el-tag>
+                      </el-descriptions-item>
+                      <el-descriptions-item label="生成时间">{{ formatDateTime(optimizationReport.generatedAt) }}</el-descriptions-item>
+                    </el-descriptions>
+                  </div>
+
+                  <div v-if="optimizationReport.warnings.length" class="ai-match-report-warning-list">
+                    <el-alert
+                      v-for="warning in optimizationReport.warnings"
+                      :key="`${warning.source}-${warning.code}`"
+                      :title="warning.message"
+                      type="warning"
+                      :closable="false"
+                      show-icon
+                    />
+                  </div>
+
+                  <section class="ai-match-report-section">
+                    <h3 class="ai-match-section-title">匹配结论</h3>
+                    <div class="ai-match-report-columns">
+                      <div class="ai-match-report-card">
+                        <h4>强匹配项</h4>
+                        <div v-if="optimizationReport.strongMatches.length" class="ai-match-list">
+                          <p v-for="item in optimizationReport.strongMatches" :key="`report-strong-${item.item}-${item.reason}`">
+                            <strong>{{ item.item || '-' }}</strong>
+                            <span>{{ item.reason || '-' }}</span>
+                          </p>
+                        </div>
+                        <el-empty v-else description="暂无强匹配项" :image-size="56" />
+                      </div>
+                      <div class="ai-match-report-card">
+                        <h4>弱匹配项</h4>
+                        <div v-if="optimizationReport.weakMatches.length" class="ai-match-list">
+                          <p v-for="item in optimizationReport.weakMatches" :key="`report-weak-${item.item}-${item.reason}`">
+                            <strong>{{ item.item || '-' }}</strong>
+                            <span>{{ item.reason || '-' }}</span>
+                          </p>
+                        </div>
+                        <el-empty v-else description="暂无弱匹配项" :image-size="56" />
+                      </div>
+                      <div class="ai-match-report-card">
+                        <h4>缺失技能</h4>
+                        <div v-if="optimizationReport.missingSkills.length" class="ai-match-list">
+                          <p v-for="item in optimizationReport.missingSkills" :key="`report-missing-${item.item}-${item.reason}`">
+                            <strong>{{ item.item || '-' }}</strong>
+                            <span>{{ item.reason || '-' }}</span>
+                          </p>
+                        </div>
+                        <el-empty v-else description="暂无缺失技能" :image-size="56" />
+                      </div>
+                      <div class="ai-match-report-card">
+                        <h4>风险提示</h4>
+                        <div v-if="optimizationReport.riskTips.length" class="ai-match-list">
+                          <p v-for="item in optimizationReport.riskTips" :key="`report-risk-${item}`">{{ item }}</p>
+                        </div>
+                        <el-empty v-else description="暂无风险提示" :image-size="56" />
+                      </div>
+                    </div>
+                    <div class="ai-match-report-card ai-match-report-evidence-card">
+                      <h4>匹配依据</h4>
+                      <div v-if="optimizationReport.matchEvidence.length" class="ai-match-report-evidence-list">
+                        <p
+                          v-for="item in optimizationReport.matchEvidence"
+                          :key="`report-evidence-${item.source}-${item.content}`"
+                        >
+                          <el-tag size="small" :type="item.source === 'job' ? 'warning' : 'success'">
+                            {{ item.source === 'job' ? '岗位' : item.source === 'resume' ? '简历' : item.source }}
+                          </el-tag>
+                          <span>{{ item.content || '-' }}</span>
+                        </p>
+                      </div>
+                      <el-empty v-else description="当前匹配结果缺少详细依据" :image-size="56" />
+                    </div>
+                  </section>
+
+                  <section class="ai-match-report-section">
+                    <h3 class="ai-match-section-title">优化建议</h3>
+                    <el-alert
+                      v-if="!reportHasSuggestions"
+                      title="请先生成岗位优化建议"
+                      type="info"
+                      :closable="false"
+                      show-icon
+                    />
+                    <div v-else class="ai-match-report-columns">
+                      <div class="ai-match-report-card">
+                        <h4>高优先级</h4>
+                        <div v-if="optimizationReport.highPrioritySuggestions.length" class="ai-match-suggestion-list">
+                          <article
+                            v-for="(suggestion, index) in optimizationReport.highPrioritySuggestions"
+                            :key="reportSuggestionKey(suggestion, index, 'HIGH')"
+                            class="ai-match-report-suggestion"
+                          >
+                            <div class="ai-match-suggestion-tags">
+                              <el-tag size="small">{{ resolveSuggestionTypeText(suggestion.type) }}</el-tag>
+                              <el-tag size="small" :type="resolvePriorityType(suggestion.priority)">
+                                {{ resolvePriorityText(suggestion.priority) }}
+                              </el-tag>
+                              <el-tag v-if="suggestion.targetSection" size="small" type="info">
+                                {{ suggestion.targetSection }}
+                              </el-tag>
+                            </div>
+                            <p><strong>问题：</strong>{{ suggestion.issue || '-' }}</p>
+                            <p><strong>建议：</strong>{{ suggestion.suggestion || '-' }}</p>
+                            <div v-if="suggestion.evidence.length" class="ai-match-report-evidence-list">
+                              <p v-for="evidence in suggestion.evidence" :key="`report-high-evidence-${evidence}`">
+                                <el-tag size="small" type="success">依据</el-tag>
+                                <span>{{ evidence }}</span>
+                              </p>
+                            </div>
+                            <p v-if="suggestion.caution" class="ai-match-suggestion-caution"><strong>注意：</strong>{{ suggestion.caution }}</p>
+                          </article>
+                        </div>
+                        <el-empty v-else description="暂无高优先级建议" :image-size="56" />
+                      </div>
+                      <div class="ai-match-report-card">
+                        <h4>中优先级</h4>
+                        <div v-if="optimizationReport.mediumPrioritySuggestions.length" class="ai-match-suggestion-list">
+                          <article
+                            v-for="(suggestion, index) in optimizationReport.mediumPrioritySuggestions"
+                            :key="reportSuggestionKey(suggestion, index, 'MEDIUM')"
+                            class="ai-match-report-suggestion"
+                          >
+                            <div class="ai-match-suggestion-tags">
+                              <el-tag size="small">{{ resolveSuggestionTypeText(suggestion.type) }}</el-tag>
+                              <el-tag size="small" :type="resolvePriorityType(suggestion.priority)">
+                                {{ resolvePriorityText(suggestion.priority) }}
+                              </el-tag>
+                              <el-tag v-if="suggestion.targetSection" size="small" type="info">
+                                {{ suggestion.targetSection }}
+                              </el-tag>
+                            </div>
+                            <p><strong>问题：</strong>{{ suggestion.issue || '-' }}</p>
+                            <p><strong>建议：</strong>{{ suggestion.suggestion || '-' }}</p>
+                            <div v-if="suggestion.evidence.length" class="ai-match-report-evidence-list">
+                              <p v-for="evidence in suggestion.evidence" :key="`report-medium-evidence-${evidence}`">
+                                <el-tag size="small" type="success">依据</el-tag>
+                                <span>{{ evidence }}</span>
+                              </p>
+                            </div>
+                            <p v-if="suggestion.caution" class="ai-match-suggestion-caution"><strong>注意：</strong>{{ suggestion.caution }}</p>
+                          </article>
+                        </div>
+                        <el-empty v-else description="暂无中优先级建议" :image-size="56" />
+                      </div>
+                      <div class="ai-match-report-card">
+                        <h4>低优先级</h4>
+                        <div v-if="optimizationReport.lowPrioritySuggestions.length" class="ai-match-suggestion-list">
+                          <article
+                            v-for="(suggestion, index) in optimizationReport.lowPrioritySuggestions"
+                            :key="reportSuggestionKey(suggestion, index, 'LOW')"
+                            class="ai-match-report-suggestion"
+                          >
+                            <div class="ai-match-suggestion-tags">
+                              <el-tag size="small">{{ resolveSuggestionTypeText(suggestion.type) }}</el-tag>
+                              <el-tag size="small" :type="resolvePriorityType(suggestion.priority)">
+                                {{ resolvePriorityText(suggestion.priority) }}
+                              </el-tag>
+                              <el-tag v-if="suggestion.targetSection" size="small" type="info">
+                                {{ suggestion.targetSection }}
+                              </el-tag>
+                            </div>
+                            <p><strong>问题：</strong>{{ suggestion.issue || '-' }}</p>
+                            <p><strong>建议：</strong>{{ suggestion.suggestion || '-' }}</p>
+                            <div v-if="suggestion.evidence.length" class="ai-match-report-evidence-list">
+                              <p v-for="evidence in suggestion.evidence" :key="`report-low-evidence-${evidence}`">
+                                <el-tag size="small" type="success">依据</el-tag>
+                                <span>{{ evidence }}</span>
+                              </p>
+                            </div>
+                            <p v-if="suggestion.caution" class="ai-match-suggestion-caution"><strong>注意：</strong>{{ suggestion.caution }}</p>
+                          </article>
+                        </div>
+                        <el-empty v-else description="暂无低优先级建议" :image-size="56" />
+                      </div>
+                    </div>
+                  </section>
+
+                  <section class="ai-match-report-section">
+                    <h3 class="ai-match-section-title">局部改写建议</h3>
+                    <el-alert
+                      v-if="!reportHasRewriteSuggestions"
+                      title="可选择关键片段生成局部改写"
+                      type="info"
+                      :closable="false"
+                      show-icon
+                    />
+                    <div v-else class="ai-match-report-columns">
+                      <div class="ai-match-report-card">
+                        <h4>已采纳</h4>
+                        <div v-if="optimizationReport.acceptedRewriteSuggestions.length" class="ai-match-suggestion-list">
+                          <article
+                            v-for="(suggestion, index) in optimizationReport.acceptedRewriteSuggestions"
+                            :key="reportRewriteKey(suggestion, index, 'ACCEPTED')"
+                            class="ai-match-report-rewrite"
+                          >
+                            <div class="ai-match-suggestion-tags">
+                              <el-tag size="small">{{ resolveRewriteTypeText(suggestion.rewriteType) }}</el-tag>
+                              <el-tag size="small" :type="resolveAcceptStatusType(suggestion.acceptStatus)">
+                                {{ resolveAcceptStatusText(suggestion.acceptStatus) }}
+                              </el-tag>
+                            </div>
+                            <p><strong>目标部分：</strong>{{ suggestion.targetSection || '-' }}</p>
+                            <p><strong>原文：</strong>{{ suggestion.originalText || '-' }}</p>
+                            <p><strong>改写：</strong>{{ suggestion.rewrittenText || '-' }}</p>
+                            <p><strong>理由：</strong>{{ suggestion.rewriteReason || '-' }}</p>
+                            <p v-if="suggestion.caution" class="ai-match-suggestion-caution"><strong>注意：</strong>{{ suggestion.caution }}</p>
+                          </article>
+                        </div>
+                        <el-empty v-else description="暂无已采纳改写" :image-size="56" />
+                      </div>
+                      <div class="ai-match-report-card">
+                        <h4>待确认</h4>
+                        <div v-if="optimizationReport.pendingRewriteSuggestions.length" class="ai-match-suggestion-list">
+                          <article
+                            v-for="(suggestion, index) in optimizationReport.pendingRewriteSuggestions"
+                            :key="reportRewriteKey(suggestion, index, 'PENDING')"
+                            class="ai-match-report-rewrite"
+                          >
+                            <div class="ai-match-suggestion-tags">
+                              <el-tag size="small">{{ resolveRewriteTypeText(suggestion.rewriteType) }}</el-tag>
+                              <el-tag size="small" :type="resolveAcceptStatusType(suggestion.acceptStatus)">
+                                {{ resolveAcceptStatusText(suggestion.acceptStatus) }}
+                              </el-tag>
+                            </div>
+                            <p><strong>目标部分：</strong>{{ suggestion.targetSection || '-' }}</p>
+                            <p><strong>原文：</strong>{{ suggestion.originalText || '-' }}</p>
+                            <p><strong>改写：</strong>{{ suggestion.rewrittenText || '-' }}</p>
+                            <p><strong>理由：</strong>{{ suggestion.rewriteReason || '-' }}</p>
+                            <p v-if="suggestion.caution" class="ai-match-suggestion-caution"><strong>注意：</strong>{{ suggestion.caution }}</p>
+                          </article>
+                        </div>
+                        <el-empty v-else description="暂无待确认改写" :image-size="56" />
+                      </div>
+                    </div>
+                  </section>
+
+                  <section class="ai-match-report-section">
+                    <h3 class="ai-match-section-title">下一步修改清单</h3>
+                    <div v-if="optimizationReport.nextStepChecklist.length" class="ai-match-report-step-list">
+                      <p v-for="step in optimizationReport.nextStepChecklist" :key="step.key">
+                        <el-tag size="small" type="info">{{ resolveReportSourceText(step.source) }}</el-tag>
+                        <span>{{ step.text }}</span>
+                      </p>
+                    </div>
+                    <el-empty v-else description="暂无下一步修改清单" :image-size="56" />
+                  </section>
+
+                  <section class="ai-match-report-section">
+                    <h3 class="ai-match-section-title">生成信息</h3>
+                    <div v-if="optimizationReport.modelInfo.length" class="ai-match-report-model-list">
+                      <div
+                        v-for="item in optimizationReport.modelInfo"
+                        :key="`${item.sourceType}-${item.sourceId}`"
+                        class="ai-match-report-model-item"
+                      >
+                        <el-tag size="small">{{ resolveReportSourceText(item.sourceType) }}</el-tag>
+                        <span>模型：{{ item.modelName || '-' }}</span>
+                        <span>Prompt：{{ item.promptVersion || '-' }}</span>
+                        <span>状态：{{ item.status || '-' }}</span>
+                        <span>时间：{{ formatDateTime(item.updatedAt) }}</span>
+                      </div>
+                    </div>
+                    <el-empty v-else description="暂无模型生成信息" :image-size="56" />
+                  </section>
+                </template>
+              </section>
+            </section>
 
             <section class="ai-match-suggestion-panel">
               <div class="ai-match-suggestion-header">
@@ -1227,6 +1639,14 @@ onMounted(() => {
   background: #f9fbff;
 }
 
+.ai-match-report-panel {
+  margin-top: 24px;
+  padding: 18px;
+  border: 1px solid #cfe7dc;
+  border-radius: 8px;
+  background: #f8fffb;
+}
+
 .ai-match-suggestion-header {
   display: flex;
   align-items: flex-start;
@@ -1249,6 +1669,142 @@ onMounted(() => {
 .ai-match-rewrite-body {
   min-height: 120px;
   margin-top: 16px;
+}
+
+.ai-match-report-body {
+  min-height: 120px;
+  margin-top: 16px;
+}
+
+.ai-match-report-overview {
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr);
+  gap: 20px;
+  align-items: stretch;
+}
+
+.ai-match-report-score {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 132px;
+  border: 1px solid #a7d7c5;
+  border-radius: 8px;
+  background: #ecfdf3;
+}
+
+.ai-match-report-score span {
+  color: #067647;
+  font-size: 42px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.ai-match-report-score small {
+  margin-top: 10px;
+  color: #344054;
+  font-size: 14px;
+}
+
+.ai-match-report-warning-list,
+.ai-match-report-section {
+  margin-top: 18px;
+}
+
+.ai-match-report-warning-list {
+  display: grid;
+  gap: 10px;
+}
+
+.ai-match-report-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.ai-match-report-card {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid #e5ebf3;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.ai-match-report-card h4 {
+  margin: 0 0 12px;
+  color: #111827;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.ai-match-report-evidence-card {
+  margin-top: 16px;
+}
+
+.ai-match-report-suggestion,
+.ai-match-report-rewrite {
+  display: grid;
+  gap: 10px;
+}
+
+.ai-match-report-suggestion p,
+.ai-match-report-rewrite p,
+.ai-match-report-step-list p {
+  margin: 0;
+  color: #344054;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.ai-match-report-suggestion strong,
+.ai-match-report-rewrite strong {
+  color: #111827;
+}
+
+.ai-match-report-step-list {
+  display: grid;
+  gap: 10px;
+}
+
+.ai-match-report-evidence-list {
+  display: grid;
+  gap: 8px;
+}
+
+.ai-match-report-evidence-list p {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  color: #344054;
+  line-height: 1.7;
+  word-break: break-word;
+}
+
+.ai-match-report-step-list p {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.ai-match-report-model-list {
+  display: grid;
+  gap: 10px;
+}
+
+.ai-match-report-model-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #e5ebf3;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #344054;
+  line-height: 1.6;
 }
 
 .ai-match-summary {
@@ -1458,7 +2014,8 @@ onMounted(() => {
 
 @media (max-width: 760px) {
   .ai-match-header,
-  .ai-match-summary {
+  .ai-match-summary,
+  .ai-match-report-overview {
     align-items: stretch;
     grid-template-columns: 1fr;
     flex-direction: column;
@@ -1467,6 +2024,7 @@ onMounted(() => {
   .ai-match-selectors,
   .ai-match-grid,
   .ai-match-suggestion-groups,
+  .ai-match-report-columns,
   .ai-match-rewrite-compare {
     grid-template-columns: 1fr;
   }
