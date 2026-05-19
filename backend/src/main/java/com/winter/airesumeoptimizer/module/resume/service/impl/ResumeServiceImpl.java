@@ -7,10 +7,15 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.winter.airesumeoptimizer.common.exception.BusinessException;
 import com.winter.airesumeoptimizer.common.logging.LogSanitizer;
 import com.winter.airesumeoptimizer.infra.storage.FileStorageService;
+import com.winter.airesumeoptimizer.infra.storage.StoreFileCommand;
 import com.winter.airesumeoptimizer.infra.storage.StoredFile;
 import com.winter.airesumeoptimizer.module.analysis.entity.AiJobMatchResult;
+import com.winter.airesumeoptimizer.module.analysis.entity.AiResumeSuggestion;
+import com.winter.airesumeoptimizer.module.analysis.entity.AiRewriteSuggestion;
 import com.winter.airesumeoptimizer.module.analysis.entity.ResumeAiAnalysis;
 import com.winter.airesumeoptimizer.module.analysis.mapper.AiJobMatchResultMapper;
+import com.winter.airesumeoptimizer.module.analysis.mapper.AiResumeSuggestionMapper;
+import com.winter.airesumeoptimizer.module.analysis.mapper.AiRewriteSuggestionMapper;
 import com.winter.airesumeoptimizer.module.analysis.mapper.ResumeAiAnalysisMapper;
 import com.winter.airesumeoptimizer.module.embedding.mapper.ResumeEmbeddingMapper;
 import com.winter.airesumeoptimizer.module.job.entity.JobMatchResult;
@@ -52,6 +57,8 @@ import com.winter.airesumeoptimizer.module.resume.vo.ResumeDetailVO;
 import com.winter.airesumeoptimizer.module.resume.vo.ResumeListVO;
 import com.winter.airesumeoptimizer.module.resume.vo.ResumeParseResultVO;
 import com.winter.airesumeoptimizer.module.resume.vo.ResumeUploadVO;
+import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -77,7 +84,7 @@ public class ResumeServiceImpl implements ResumeService {
     private static final Logger log = LoggerFactory.getLogger(ResumeServiceImpl.class);
 
     private static final String UPLOAD_STATUS_UPLOADED = "UPLOADED";
-    private static final String STORAGE_TYPE_LOCAL = "LOCAL";
+    private static final String STORAGE_BIZ_TYPE_RESUMES = "resumes";
     private static final String PARSE_STATUS_SUCCESS = "SUCCESS";
     private static final String PARSE_STATUS_FAILED = "FAILED";
     private static final String AI_STATUS_USED = "USED";
@@ -87,12 +94,17 @@ public class ResumeServiceImpl implements ResumeService {
     private static final double MEDIUM_SOURCE_AI_OVERRIDE_THRESHOLD = 0.85;
     private static final Set<String> ALLOWED_EXTENSIONS = Set.of("pdf", "doc", "docx");
     private static final Set<String> PDF_CONTENT_TYPES = Set.of("application/pdf");
+    private static final Set<String> DOC_CONTENT_TYPES = Set.of("application/msword");
+    private static final Set<String> DOCX_CONTENT_TYPES = Set.of(
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
 
     private final ResumeMapper resumeMapper;
     private final ResumeParseResultMapper resumeParseResultMapper;
     private final ResumeAiAnalysisMapper resumeAiAnalysisMapper;
     private final JobMatchResultMapper jobMatchResultMapper;
     private final AiJobMatchResultMapper aiJobMatchResultMapper;
+    private final AiResumeSuggestionMapper aiResumeSuggestionMapper;
+    private final AiRewriteSuggestionMapper aiRewriteSuggestionMapper;
     private final ResumeEmbeddingMapper resumeEmbeddingMapper;
     private final FileStorageService fileStorageService;
     private final ResumeTextExtractionService resumeTextExtractionService;
@@ -118,6 +130,8 @@ public class ResumeServiceImpl implements ResumeService {
             ResumeAiAnalysisMapper resumeAiAnalysisMapper,
             JobMatchResultMapper jobMatchResultMapper,
             AiJobMatchResultMapper aiJobMatchResultMapper,
+            AiResumeSuggestionMapper aiResumeSuggestionMapper,
+            AiRewriteSuggestionMapper aiRewriteSuggestionMapper,
             ResumeEmbeddingMapper resumeEmbeddingMapper,
             FileStorageService fileStorageService,
             ResumeTextExtractionService resumeTextExtractionService,
@@ -141,6 +155,8 @@ public class ResumeServiceImpl implements ResumeService {
         this.resumeAiAnalysisMapper = resumeAiAnalysisMapper;
         this.jobMatchResultMapper = jobMatchResultMapper;
         this.aiJobMatchResultMapper = aiJobMatchResultMapper;
+        this.aiResumeSuggestionMapper = aiResumeSuggestionMapper;
+        this.aiRewriteSuggestionMapper = aiRewriteSuggestionMapper;
         this.resumeEmbeddingMapper = resumeEmbeddingMapper;
         this.fileStorageService = fileStorageService;
         this.resumeTextExtractionService = resumeTextExtractionService;
@@ -169,10 +185,12 @@ public class ResumeServiceImpl implements ResumeService {
         }
         validateFile(file);
 
-        String originalFilename = StringUtils.cleanPath(file.getOriginalFilename());
+        String originalFilename = StringUtils.cleanPath(file.getOriginalFilename() == null
+                ? "resume"
+                : file.getOriginalFilename());
         String fileType = extractFileType(originalFilename);
         log.info("Resume upload started: userId={}, fileType={}, fileSize={}", userId, fileType, file.getSize());
-        StoredFile storedFile = fileStorageService.store(file, "resumes/" + userId);
+        StoredFile storedFile = storeResumeFile(userId, file, originalFilename);
 
         Resume resume = buildResume(userId, storedFile, fileType);
         try {
@@ -197,7 +215,6 @@ public class ResumeServiceImpl implements ResumeService {
                 .originalFilename(resume.getOriginalFilename())
                 .fileType(resume.getFileType())
                 .fileSize(resume.getFileSize())
-                .objectKey(resume.getObjectKey())
                 .uploadStatus(resume.getUploadStatus())
                 .createdAt(resume.getCreatedAt())
                 .build();
@@ -429,6 +446,10 @@ public class ResumeServiceImpl implements ResumeService {
 
     private void deleteResumeChildren(Long resumeId) {
         resumeEmbeddingMapper.deleteByResumeId(resumeId);
+        aiRewriteSuggestionMapper.delete(new LambdaQueryWrapper<AiRewriteSuggestion>()
+                .eq(AiRewriteSuggestion::getResumeId, resumeId));
+        aiResumeSuggestionMapper.delete(new LambdaQueryWrapper<AiResumeSuggestion>()
+                .eq(AiResumeSuggestion::getResumeId, resumeId));
         aiJobMatchResultMapper.delete(new LambdaQueryWrapper<AiJobMatchResult>()
                 .eq(AiJobMatchResult::getResumeId, resumeId));
         jobMatchResultMapper.delete(new LambdaQueryWrapper<JobMatchResult>()
@@ -447,13 +468,15 @@ public class ResumeServiceImpl implements ResumeService {
             throw new BusinessException(400, "简历文件大小不能超过 " + maxFileSize + " 字节");
         }
 
-        String originalFilename = StringUtils.cleanPath(file.getOriginalFilename());
+        String originalFilename = StringUtils.cleanPath(file.getOriginalFilename() == null
+                ? "resume"
+                : file.getOriginalFilename());
         String fileType = extractFileType(originalFilename);
         if (!ALLOWED_EXTENSIONS.contains(fileType)) {
             throw new BusinessException(400, "仅支持 PDF、DOC、DOCX 简历文件");
         }
 
-        if ("pdf".equals(fileType) && !isAllowedPdfContentType(file.getContentType())) {
+        if (!isAllowedContentType(fileType, file.getContentType())) {
             throw new BusinessException(400, "文件类型与扩展名不匹配");
         }
     }
@@ -535,8 +558,17 @@ public class ResumeServiceImpl implements ResumeService {
                 .set(ResumeParseResult::getUpdatedAt, parseResult.getUpdatedAt()));
     }
 
-    private boolean isAllowedPdfContentType(String contentType) {
-        return contentType != null && PDF_CONTENT_TYPES.contains(contentType.toLowerCase(Locale.ROOT));
+    private boolean isAllowedContentType(String fileType, String contentType) {
+        if (contentType == null || contentType.isBlank()) {
+            return false;
+        }
+        String normalizedContentType = contentType.toLowerCase(Locale.ROOT);
+        return switch (fileType) {
+            case "pdf" -> PDF_CONTENT_TYPES.contains(normalizedContentType);
+            case "doc" -> DOC_CONTENT_TYPES.contains(normalizedContentType);
+            case "docx" -> DOCX_CONTENT_TYPES.contains(normalizedContentType);
+            default -> false;
+        };
     }
 
     private Resume buildResume(Long userId, StoredFile storedFile, String fileType) {
@@ -546,12 +578,26 @@ public class ResumeServiceImpl implements ResumeService {
         resume.setOriginalFilename(storedFile.originalFilename());
         resume.setFileType(fileType.toUpperCase(Locale.ROOT));
         resume.setFileSize(storedFile.size());
-        resume.setObjectKey(storedFile.objectKey());
-        resume.setStorageType(STORAGE_TYPE_LOCAL);
+        resume.setObjectKey(storedFile.storageKey());
+        resume.setStorageType(storedFile.storageType());
         resume.setUploadStatus(UPLOAD_STATUS_UPLOADED);
         resume.setCreatedAt(now);
         resume.setUpdatedAt(now);
         return resume;
+    }
+
+    private StoredFile storeResumeFile(Long userId, MultipartFile file, String originalFilename) {
+        try (InputStream inputStream = file.getInputStream()) {
+            return fileStorageService.store(new StoreFileCommand(
+                    userId,
+                    originalFilename,
+                    file.getContentType(),
+                    file.getSize(),
+                    inputStream,
+                    STORAGE_BIZ_TYPE_RESUMES));
+        } catch (IOException exception) {
+            throw new BusinessException(500, "简历文件读取失败");
+        }
     }
 
     private void validateUserId(Long userId) {

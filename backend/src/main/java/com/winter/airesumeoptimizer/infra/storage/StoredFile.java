@@ -1,8 +1,13 @@
 package com.winter.airesumeoptimizer.infra.storage;
 
 public record StoredFile(
-        String objectKey,
+        String storageKey,
         String originalFilename,
         String contentType,
-        long size) {
+        long size,
+        String storageType) {
+
+    public String objectKey() {
+        return storageKey;
+    }
 }

@@ -5,55 +5,57 @@ import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
-import java.util.UUID;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
-import org.springframework.web.multipart.MultipartFile;
 
 @Service
+@ConditionalOnProperty(prefix = "app.storage", name = "type", havingValue = "local", matchIfMissing = true)
 public class LocalFileStorageService implements FileStorageService {
 
-    private final Path baseDirectory;
+    private static final String STORAGE_TYPE_LOCAL = "LOCAL";
 
-    public LocalFileStorageService(FileStorageProperties properties) {
-        this.baseDirectory = Path.of(properties.getBaseDir()).toAbsolutePath().normalize();
+    private final LocalStoragePathResolver pathResolver;
+    private final SafeFilenameGenerator safeFilenameGenerator;
+
+    public LocalFileStorageService(
+            LocalStoragePathResolver pathResolver,
+            SafeFilenameGenerator safeFilenameGenerator) {
+        this.pathResolver = pathResolver;
+        this.safeFilenameGenerator = safeFilenameGenerator;
     }
 
     @Override
-    public StoredFile store(MultipartFile file, String directory) {
-        if (file == null || file.isEmpty()) {
+    public StoredFile store(StoreFileCommand command) {
+        if (command == null || command.inputStream() == null || command.size() <= 0) {
             throw new FileStorageException("文件不能为空");
         }
 
-        String originalFilename = StringUtils.cleanPath(file.getOriginalFilename() == null
+        String originalFilename = StringUtils.cleanPath(command.originalFilename() == null
                 ? "resume"
-                : file.getOriginalFilename());
-        String objectKey = buildObjectKey(directory, originalFilename);
-        Path targetPath = baseDirectory.resolve(objectKey).normalize();
-
-        if (!targetPath.startsWith(baseDirectory)) {
-            throw new FileStorageException("文件存储路径不合法");
-        }
+                : command.originalFilename());
+        String safeFilename = safeFilenameGenerator.generate(originalFilename);
+        String storageKey = pathResolver.generateStorageKey(command, safeFilename);
+        Path targetPath = pathResolver.resolve(storageKey);
 
         try {
             Files.createDirectories(targetPath.getParent());
-            try (InputStream inputStream = file.getInputStream()) {
-                Files.copy(inputStream, targetPath, StandardCopyOption.REPLACE_EXISTING);
-            }
+            Files.copy(command.inputStream(), targetPath, StandardCopyOption.REPLACE_EXISTING);
         } catch (IOException exception) {
             throw new FileStorageException("文件保存失败", exception);
         }
 
         return new StoredFile(
-                objectKey,
+                storageKey,
                 originalFilename,
-                file.getContentType(),
-                file.getSize());
+                command.contentType(),
+                command.size(),
+                STORAGE_TYPE_LOCAL);
     }
 
     @Override
-    public InputStream open(String objectKey) {
-        Path targetPath = resolveObjectKey(objectKey);
+    public InputStream loadAsStream(String storageKey) {
+        Path targetPath = pathResolver.resolve(storageKey);
 
         try {
             return Files.newInputStream(targetPath);
@@ -63,12 +65,20 @@ public class LocalFileStorageService implements FileStorageService {
     }
 
     @Override
-    public void delete(String objectKey) {
-        if (objectKey == null || objectKey.isBlank()) {
+    public boolean exists(String storageKey) {
+        if (storageKey == null || storageKey.isBlank()) {
+            return false;
+        }
+        return Files.exists(pathResolver.resolve(storageKey));
+    }
+
+    @Override
+    public void delete(String storageKey) {
+        if (storageKey == null || storageKey.isBlank()) {
             return;
         }
 
-        Path targetPath = resolveObjectKey(objectKey);
+        Path targetPath = pathResolver.resolve(storageKey);
 
         try {
             Files.deleteIfExists(targetPath);
@@ -77,40 +87,13 @@ public class LocalFileStorageService implements FileStorageService {
         }
     }
 
-    private Path resolveObjectKey(String objectKey) {
-        if (objectKey == null || objectKey.isBlank()) {
-            throw new FileStorageException("文件对象 key 不能为空");
+    @Override
+    public StoredFileMetadata getMetadata(String storageKey) {
+        Path targetPath = pathResolver.resolve(storageKey);
+        try {
+            return new StoredFileMetadata(storageKey, Files.size(targetPath), STORAGE_TYPE_LOCAL);
+        } catch (IOException exception) {
+            throw new FileStorageException("文件元信息读取失败", exception);
         }
-
-        Path targetPath = baseDirectory.resolve(objectKey).normalize();
-        if (!targetPath.startsWith(baseDirectory)) {
-            throw new FileStorageException("文件存储路径不合法");
-        }
-        return targetPath;
-    }
-
-    private String buildObjectKey(String directory, String originalFilename) {
-        String safeDirectory = normalizeDirectory(directory);
-        String extension = extractExtension(originalFilename);
-        return safeDirectory + "/" + UUID.randomUUID() + extension;
-    }
-
-    private String normalizeDirectory(String directory) {
-        String cleanDirectory = StringUtils.cleanPath(directory == null ? "default" : directory);
-        cleanDirectory = cleanDirectory.replace("\\", "/");
-
-        if (cleanDirectory.isBlank() || cleanDirectory.contains("..") || cleanDirectory.startsWith("/")) {
-            throw new FileStorageException("文件存储目录不合法");
-        }
-
-        return cleanDirectory;
-    }
-
-    private String extractExtension(String filename) {
-        int index = filename.lastIndexOf('.');
-        if (index < 0 || index == filename.length() - 1) {
-            return "";
-        }
-        return filename.substring(index).toLowerCase();
     }
 }

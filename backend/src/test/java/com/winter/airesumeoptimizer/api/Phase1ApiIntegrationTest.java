@@ -22,6 +22,7 @@ import com.winter.airesumeoptimizer.config.SecurityConfig;
 import com.winter.airesumeoptimizer.module.analysis.controller.JobOptimizationReportController;
 import com.winter.airesumeoptimizer.module.analysis.controller.ResumeAnalysisController;
 import com.winter.airesumeoptimizer.module.analysis.controller.AiRewriteSuggestionController;
+import com.winter.airesumeoptimizer.module.analysis.assembler.AnalysisVoAssembler;
 import com.winter.airesumeoptimizer.module.analysis.dto.AiJobMatchItemDTO;
 import com.winter.airesumeoptimizer.module.analysis.dto.AiJobMatchRequestDTO;
 import com.winter.airesumeoptimizer.module.analysis.dto.AiRewriteAcceptStatusUpdateDTO;
@@ -116,7 +117,8 @@ import org.springframework.web.multipart.MultipartFile;
         JwtAccessDeniedHandler.class,
         GlobalExceptionHandler.class,
         RequestIdFilter.class,
-        OpenApiConfig.class
+        OpenApiConfig.class,
+        AnalysisVoAssembler.class
 })
 @ActiveProfiles("test")
 class Phase1ApiIntegrationTest {
@@ -382,7 +384,6 @@ class Phase1ApiIntegrationTest {
                 .originalFilename("resume.pdf")
                 .fileType("PDF")
                 .fileSize(14L)
-                .objectKey("resumes/1/resume.pdf")
                 .uploadStatus("UPLOADED")
                 .createdAt(LocalDateTime.now())
                 .build());
@@ -424,7 +425,8 @@ class Phase1ApiIntegrationTest {
                         .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.message").value("上传成功"))
-                .andExpect(jsonPath("$.data.id").value(100));
+                .andExpect(jsonPath("$.data.id").value(100))
+                .andExpect(jsonPath("$.data.objectKey").doesNotExist());
 
         mockMvc.perform(get("/api/resumes")
                         .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))

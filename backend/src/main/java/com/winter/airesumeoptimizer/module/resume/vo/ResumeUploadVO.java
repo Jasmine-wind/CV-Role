@@ -18,8 +18,6 @@ public class ResumeUploadVO {
     private String fileType;
     @Schema(description = "文件大小，单位字节", example = "102400")
     private Long fileSize;
-    @Schema(description = "文件对象 key", example = "resumes/1/xxx.pdf")
-    private String objectKey;
     @Schema(description = "上传状态", example = "UPLOADED")
     private String uploadStatus;
     @Schema(description = "上传时间")

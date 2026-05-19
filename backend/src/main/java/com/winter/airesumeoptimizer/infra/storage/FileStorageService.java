@@ -1,13 +1,25 @@
 package com.winter.airesumeoptimizer.infra.storage;
 
+import java.io.IOException;
 import java.io.InputStream;
-import org.springframework.web.multipart.MultipartFile;
 
 public interface FileStorageService {
 
-    StoredFile store(MultipartFile file, String directory);
+    StoredFile store(StoreFileCommand command);
 
-    InputStream open(String objectKey);
+    InputStream loadAsStream(String storageKey);
 
-    void delete(String objectKey);
+    default byte[] loadAsBytes(String storageKey) {
+        try (InputStream inputStream = loadAsStream(storageKey)) {
+            return inputStream.readAllBytes();
+        } catch (IOException exception) {
+            throw new FileStorageException("文件读取失败", exception);
+        }
+    }
+
+    boolean exists(String storageKey);
+
+    void delete(String storageKey);
+
+    StoredFileMetadata getMetadata(String storageKey);
 }

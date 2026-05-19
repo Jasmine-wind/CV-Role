@@ -26,7 +26,7 @@ class ResumeTextExtractionServiceImplTest {
     @Test
     void extractTextShouldReadDocxContent() throws IOException {
         byte[] docxBytes = buildDocx("Java 后端开发工程师");
-        when(fileStorageService.open("resumes/1/resume.docx")).thenReturn(new ByteArrayInputStream(docxBytes));
+        when(fileStorageService.loadAsStream("resumes/1/resume.docx")).thenReturn(new ByteArrayInputStream(docxBytes));
 
         String text = service.extractText("resumes/1/resume.docx", "docx");
 
@@ -42,7 +42,7 @@ class ResumeTextExtractionServiceImplTest {
 
     @Test
     void extractTextShouldWrapStorageFailure() {
-        when(fileStorageService.open("resumes/1/missing.docx"))
+        when(fileStorageService.loadAsStream("resumes/1/missing.docx"))
                 .thenThrow(new FileStorageException("file not found"));
 
         assertThatThrownBy(() -> service.extractText("resumes/1/missing.docx", "DOCX"))
@@ -53,7 +53,7 @@ class ResumeTextExtractionServiceImplTest {
     @Test
     void extractTextShouldReturnBlankTextForQualityCheck() throws IOException {
         byte[] docxBytes = buildDocx(" ");
-        when(fileStorageService.open("resumes/1/blank.docx")).thenReturn(new ByteArrayInputStream(docxBytes));
+        when(fileStorageService.loadAsStream("resumes/1/blank.docx")).thenReturn(new ByteArrayInputStream(docxBytes));
 
         String text = service.extractText("resumes/1/blank.docx", "docx");
 
@@ -63,7 +63,7 @@ class ResumeTextExtractionServiceImplTest {
     @Test
     void extractTextShouldReadDocxTextBoxContentAndDeduplicate() throws IOException {
         byte[] docxBytes = buildDocxWithTextBox("普通段落", "文本框内容", "文本框内容");
-        when(fileStorageService.open("resumes/1/textbox.docx")).thenReturn(new ByteArrayInputStream(docxBytes));
+        when(fileStorageService.loadAsStream("resumes/1/textbox.docx")).thenReturn(new ByteArrayInputStream(docxBytes));
 
         String text = service.extractText("resumes/1/textbox.docx", "docx");
 

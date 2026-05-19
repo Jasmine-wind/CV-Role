@@ -22,7 +22,6 @@ export interface ResumeUploadResult {
   originalFilename: string
   fileType: string
   fileSize: number
-  objectKey: string
   uploadStatus: string
   createdAt: string
 }

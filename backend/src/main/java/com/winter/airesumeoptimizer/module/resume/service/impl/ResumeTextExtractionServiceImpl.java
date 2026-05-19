@@ -42,7 +42,7 @@ public class ResumeTextExtractionServiceImpl implements ResumeTextExtractionServ
     public String extractText(String objectKey, String fileType) {
         String normalizedFileType = normalizeFileType(fileType);
 
-        try (InputStream inputStream = fileStorageService.open(objectKey)) {
+        try (InputStream inputStream = fileStorageService.loadAsStream(objectKey)) {
             return switch (normalizedFileType) {
                 case "PDF" -> extractPdfText(inputStream);
                 case "DOC" -> extractDocText(inputStream);

@@ -32,8 +32,8 @@
 |---|---|---|
 | v3.1 | 架构现状审查与领域边界收敛 | 已完成 |
 | v3.2 | 面向领域的包结构整理 | 已完成 |
-| v3.3 | 文件存储抽象与存储策略演进 | 当前版本 |
-| v3.4 | 长耗时任务异步化设计 | 未开始 |
+| v3.3 | 文件存储抽象与存储策略演进 | 已完成 |
+| v3.4 | 长耗时任务异步化设计 | 当前版本 |
 | v3.5 | 解析与 AI 任务状态机落地 | 未开始 |
 | v3.6 | 安全加固与敏感信息治理 | 未开始 |
 | v3.7 | 可部署配置与环境隔离 | 未开始 |
@@ -182,660 +182,59 @@ v3.2 已完成面向领域的包结构整理：
 
 # v3.3 - 文件存储抽象与存储策略演进
 
-状态：当前版本
+状态：已完成
 
 ## v3.3 目标
 
 完善文件存储抽象，使简历文件访问不依赖具体本地路径，便于后续从本地存储切换到 MinIO 或其他对象存储。
 
-v3.3 不要求立刻正式接入 MinIO，也不要求迁移历史文件。当前重点是把“文件怎么存、怎么读、怎么删除、怎么生成访问引用”抽象清楚，避免业务代码直接依赖本地磁盘路径。
+v3.3 不要求立刻正式接入 MinIO，也不迁移历史文件。本版本重点是把“文件怎么存、怎么读、怎么删除、怎么生成访问引用”抽象清楚，避免业务代码直接依赖本地磁盘路径。
 
 ---
 
-## v3.3 范围
+## v3.3 总结
 
-### 范围内
+v3.3 已完成文件存储抽象与存储策略演进：
 
-- 审查当前文件上传、保存、读取、删除逻辑。
-- 统一 `FileStorageService` 接口。
-- 整理本地文件存储实现。
-- 隐藏本地真实路径，不让业务层直接拼接磁盘路径。
-- 预留 MinIO 配置结构和实现方案。
-- 梳理文件访问安全校验。
-- 更新架构文档和迭代日志。
+- 已审查简历上传、读取、解析、删除、配置、数据库字段和 MinIO 预留状态。
+- 已将 `FileStorageService` 统一为 `StoreFileCommand` 输入、`storageKey` 语义、文件流读取、存在性判断、元信息读取和删除能力。
+- 已保持数据库 `objectKey` 字段兼容历史数据，但业务语义收敛为内部 `storageKey`，不作为前端可见字段。
+- 已拆出 `LocalStoragePathResolver` 和 `SafeFilenameGenerator`，本地实现集中处理路径生成、安全文件名和路径穿越防护。
+- 已支持 `app.storage.type=local`、`app.storage.local.base-dir`、`APP_STORAGE_LOCAL_BASE_DIR`，并兼容旧的 `LOCAL_STORAGE_BASE_DIR`。
+- 已预留 MinIO 配置属性和切换方案，当前不引入 MinIO SDK、不默认启用对象存储。
+- 已移除上传响应中的内部 `objectKey`，前端不再接收服务器真实路径或内部存储引用。
+- 已补充 PDF / DOC / DOCX 扩展名与 content-type 一致性校验。
+- 已确认 Controller 不直接操作文件系统，简历解析通过 `FileStorageService.loadAsStream` 读取文件流。
+- 已确认用户只能访问自己的简历，越权解析和越权删除不会读取或删除文件。
+- 已修复删除链路遗漏的 AI 优化建议和局部改写建议清理问题，避免生成过建议的简历因外键引用删除失败。
+- 已完成后端测试、后端编译、前端构建和用户手动验收。
+- 已更新 `docs/phase-4-architecture.md` 和 `docs/iteration-log/v3.3-file-storage.md`。
 
-### 范围外
+说明：
 
-- 不强制立即启用 MinIO。
-- 不迁移已有本地文件。
-- 不做复杂文件 CDN。
-- 不做文件在线预览系统。
-- 不做简历导出 PDF / DOCX。
-- 不改简历上传接口语义。
-- 不改数据库结构，除非当前字段完全无法表达存储引用。
-- 不新增新的文件业务功能。
+- v3.3 不改接口路径。
+- v3.3 不改数据库结构。
+- v3.3 不新增 AI 能力。
+- v3.3 不拆微服务。
+- MinIO 当前只是配置和设计预留，不代表已经可用。
+- 文件物理删除失败后的补偿清理仍保留为后续一致性任务。
 
----
+## v3.3 小任务完成情况
 
-## v3.3 总原则
-
-- 业务层只关心“文件引用”，不关心本地路径。
-- 本地存储和对象存储通过同一个接口访问。
-- 简历文件权限校验仍由业务层负责。
-- 存储实现只负责保存、读取、删除文件。
-- 不在 Controller 中直接操作文件系统。
-- 不把服务器真实路径返回给前端。
-- 不把 MinIO 作为当前必做目标，先完成抽象。
-- 每次整理后必须保证原有上传、下载、解析流程可用。
-
----
-
-# v3.3.1 当前文件存储实现审查
-
-状态：未开始
-
-## 目标
-
-审查当前项目中的文件存储实现，明确文件保存在哪里、路径如何生成、业务代码是否直接依赖本地路径、后续切换 MinIO 的阻碍在哪里。
-
-本小任务优先只读审查，可以不修改代码。
-
-## 重点检查对象
-
-建议检查：
-
-```text
-backend/src/main/java/com/winter/airesumeoptimizer/module/resume
-backend/src/main/java/com/winter/airesumeoptimizer/infra/storage
-backend/src/main/java/com/winter/airesumeoptimizer/config
-backend/src/main/resources/application.yaml
-backend/src/main/resources/application-dev.yaml
-backend/src/main/resources/application-prod.yaml
-.env.example
-docker-compose.yml
-```
-
-如果实际目录不同，以当前仓库为准。
-
-## 重点检查问题
-
-| 检查项 | 需要确认的问题 |
+| 小任务 | 状态 |
 |---|---|
-| 文件保存位置 | 当前文件实际保存到哪里 |
-| 路径生成 | 是否直接使用字符串拼接路径 |
-| 文件读取 | 解析服务是否直接读取本地路径 |
-| 文件删除 | 删除简历时是否同步删除物理文件 |
-| 配置项 | 文件保存路径是否可通过配置修改 |
-| 业务耦合 | ResumeService 是否直接依赖本地文件系统 |
-| 安全风险 | 是否把真实服务器路径返回给前端 |
-| 扩展性 | 切换 MinIO 时哪些类必须修改 |
-| 测试 | 当前是否有文件上传 / 读取相关测试 |
-
-## 任务
-
-- [ ] 扫描当前文件上传流程。
-- [ ] 扫描当前文件读取流程。
-- [ ] 扫描当前简历解析读取文件的逻辑。
-- [ ] 扫描当前文件删除逻辑。
-- [ ] 确认是否存在 Controller 直接操作文件。
-- [ ] 确认是否存在 Service 直接拼接本地路径。
-- [ ] 确认是否存在返回真实本地路径给前端的问题。
-- [ ] 确认当前配置项，例如 `app.storage.local.base-dir`。
-- [ ] 确认当前数据库中保存的是文件路径、文件名还是 storageKey。
-- [ ] 记录当前切换 MinIO 的阻碍。
-- [ ] 更新 `docs/iteration-log/v3.3-file-storage.md`。
-
-## 输出要求
-
-输出审查结果：
-
-```text
-## v3.3.1 文件存储审查结果
-
-### 1. 当前文件存储流程
-- 上传入口：
-- 存储实现：
-- 数据库字段：
-- 文件读取方式：
-- 文件删除方式：
-
-### 2. 当前问题
-| 位置 | 问题 | 风险 | 建议 |
-|---|---|---|---|
-
-### 3. 当前不建议立即改的问题
-| 问题 | 原因 | 后续阶段 |
-|---|---|---|
-
-### 4. 是否可以进入 v3.3.2
-- 是 / 否
-```
-
-## 验收标准
-
-- 已明确当前文件存储流程。
-- 已明确当前业务代码和本地路径的耦合点。
-- 已明确是否存在安全风险。
-- 已明确 MinIO 切换阻碍。
-- 本小任务可以不修改代码。
-- 不影响现有业务。
-
----
-
-# v3.3.2 FileStorageService 接口规范
-
-状态：未开始
-
-## 目标
-
-定义统一文件存储接口，让业务层不再关心文件到底存储在本地磁盘、MinIO 还是其他对象存储中。
-
-## 推荐接口职责
-
-`FileStorageService` 应负责：
-
-- 保存文件。
-- 读取文件。
-- 删除文件。
-- 判断文件是否存在。
-- 生成内部存储引用。
-- 获取文件输入流或文件字节。
-- 返回文件元信息。
-
-不负责：
-
-- 判断当前用户是否有权限。
-- 判断简历是否属于当前用户。
-- 解析 PDF / DOCX 文本。
-- 返回公开 URL。
-- 处理 AI 逻辑。
-
-## 推荐接口设计
-
-可以参考：
-
-```java
-public interface FileStorageService {
-
-    StoredFile store(StoreFileCommand command);
-
-    InputStream loadAsStream(String storageKey);
-
-    byte[] loadAsBytes(String storageKey);
-
-    boolean exists(String storageKey);
-
-    void delete(String storageKey);
-
-    StoredFileMetadata getMetadata(String storageKey);
-}
-```
-
-## 推荐 Command
-
-```java
-public class StoreFileCommand {
-    private Long userId;
-    private String originalFilename;
-    private String contentType;
-    private long size;
-    private InputStream inputStream;
-    private String bizType;
-}
-```
-
-## 推荐返回对象
-
-```java
-public class StoredFile {
-    private String storageKey;
-    private String originalFilename;
-    private String contentType;
-    private long size;
-    private String storageType;
-}
-```
-
-## 推荐 storageKey 设计
-
-`storageKey` 不应该是绝对路径。
-
-推荐格式：
-
-```text
-resumes/{userId}/{yyyyMMdd}/{uuid}-{safeFilename}
-```
-
-例如：
-
-```text
-resumes/12/20260519/9f3a2c-resume.pdf
-```
-
-## 推荐 storageType
-
-```text
-LOCAL
-MINIO
-```
-
-当前可以先只实现：
-
-```text
-LOCAL
-```
-
-MinIO 只预留，不强制启用。
-
-## 任务
-
-- [ ] 检查当前是否已有 `FileStorageService`。
-- [ ] 如果已有，审查接口是否足够抽象。
-- [ ] 如果没有，新增统一 `FileStorageService` 接口。
-- [ ] 新增或整理 `StoreFileCommand`。
-- [ ] 新增或整理 `StoredFile`。
-- [ ] 新增或整理 `StoredFileMetadata`。
-- [ ] 统一使用 `storageKey` 表示文件内部引用。
-- [ ] 避免业务层直接依赖本地绝对路径。
-- [ ] 保留当前上传接口语义。
-- [ ] 保留当前数据库字段兼容。
-- [ ] 更新相关文档。
-
-## 验收标准
-
-- 存在统一的 `FileStorageService`。
-- 业务层可以通过接口保存文件。
-- 业务层可以通过接口读取文件。
-- storageKey 不暴露本地真实路径。
-- 不改接口路径。
-- 不改数据库结构。
-- 后端编译通过。
-
----
-
-# v3.3.3 本地文件存储实现整理
-
-状态：未开始
-
-## 目标
-
-整理当前本地文件存储实现，使其成为 `FileStorageService` 的一个实现类，业务层不再直接关心本地文件路径。
-
-## 推荐类名
-
-```text
-LocalFileStorageService
-LocalFileStorageProperties
-StoragePathResolver
-SafeFilenameGenerator
-```
-
-具体类名以当前项目风格为准。
-
-## 本地存储实现职责
-
-`LocalFileStorageService` 负责：
-
-- 根据 `storageKey` 生成本地路径。
-- 创建目录。
-- 保存文件。
-- 读取文件。
-- 删除文件。
-- 防止路径穿越。
-- 返回文件元信息。
-
-不负责：
-
-- 简历权限校验。
-- 简历解析。
-- 用户身份判断。
-- AI 调用。
-
-## 路径安全要求
-
-必须防止：
-
-```text
-../../etc/passwd
-绝对路径注入
-非法文件名
-路径穿越
-```
-
-建议：
-
-- 文件名只保留安全字符。
-- storageKey 必须规范化校验。
-- 最终路径必须位于 `baseDir` 内。
-- 不允许业务层传入任意本地路径读取文件。
-
-## 配置建议
-
-```yaml
-app:
-  storage:
-    type: local
-    local:
-      base-dir: uploads
-```
-
-`.env.example` 可添加：
-
-```env
-APP_STORAGE_TYPE=local
-APP_STORAGE_LOCAL_BASE_DIR=uploads
-```
-
-## 任务
-
-- [ ] 检查当前本地存储实现。
-- [ ] 将本地存储逻辑整理为 `LocalFileStorageService`。
-- [ ] 使用配置读取本地存储根目录。
-- [ ] 统一生成 storageKey。
-- [ ] 保存文件时使用安全文件名。
-- [ ] 读取文件时通过 storageKey 解析路径。
-- [ ] 删除文件时通过 storageKey 删除。
-- [ ] 增加路径穿越校验。
-- [ ] 避免返回绝对路径给前端。
-- [ ] 更新 Resume 上传逻辑，改为依赖 `FileStorageService` 接口。
-- [ ] 更新 Resume 解析逻辑，改为通过 `FileStorageService` 读取文件流。
-- [ ] 后端编译通过。
-
-## 验收标准
-
-- 上传简历仍然可用。
-- 简历解析仍然能读取文件。
-- 业务层不直接拼接本地路径。
-- 本地路径不返回给前端。
-- storageKey 可以定位文件。
-- 路径穿越被防护。
-- 不改数据库结构。
-- 不改接口路径。
-
----
-
-# v3.3.4 MinIO 预留配置与实现方案
-
-状态：未开始
-
-## 目标
-
-为后续切换 MinIO 或对象存储预留配置结构和实现方案。当前阶段可以只写配置和文档，不要求正式启用 MinIO。
-
-## 当前策略
-
-本阶段推荐：
-
-```text
-优先完成接口抽象和本地实现整理。
-MinIO 只预留配置和实现骨架。
-暂不强制引入 MinIO 运行依赖。
-```
-
-如果当前项目已经引入 MinIO SDK，可以实现一个未启用的 `MinioFileStorageService`。
-
-如果还没有引入 MinIO SDK，可以只写文档和配置示例，避免增加复杂度。
-
-## 推荐配置
-
-```yaml
-app:
-  storage:
-    type: local
-    minio:
-      endpoint: ${MINIO_ENDPOINT:http://localhost:9000}
-      access-key: ${MINIO_ACCESS_KEY:}
-      secret-key: ${MINIO_SECRET_KEY:}
-      bucket: ${MINIO_BUCKET:ai-resume-files}
-      public-endpoint: ${MINIO_PUBLIC_ENDPOINT:}
-```
-
-`.env.example`：
-
-```env
-APP_STORAGE_TYPE=local
-
-MINIO_ENDPOINT=http://localhost:9000
-MINIO_ACCESS_KEY=minioadmin
-MINIO_SECRET_KEY=minioadmin
-MINIO_BUCKET=ai-resume-files
-MINIO_PUBLIC_ENDPOINT=
-```
-
-## MinIO 实现职责
-
-`MinioFileStorageService` 未来应负责：
-
-- 上传对象。
-- 下载对象流。
-- 删除对象。
-- 判断对象是否存在。
-- 创建 bucket，可选。
-- 返回对象 metadata。
-
-不负责：
-
-- 简历权限校验。
-- 生成公开匿名访问链接。
-- 解析文件内容。
-- AI 相关逻辑。
-
-## 注意事项
-
-- 不建议默认返回 MinIO public URL。
-- 简历属于用户隐私文件，访问必须经过后端权限校验。
-- 即使用 MinIO，也应通过后端读取或生成短期签名 URL。
-- Phase 4 可以先使用后端代理下载，后续再考虑签名 URL。
-
-## 任务
-
-- [ ] 确认当前是否已引入 MinIO SDK。
-- [ ] 如果未引入，暂不强制添加依赖。
-- [ ] 新增或整理 MinIO 配置属性类，可选。
-- [ ] 在 `application.yaml` 中预留 MinIO 配置，可选。
-- [ ] 更新 `.env.example`。
-- [ ] 编写 `MinioFileStorageService` 设计说明。
-- [ ] 如已引入 SDK，可新增 `MinioFileStorageService` 实现但默认不启用。
-- [ ] 通过 `app.storage.type` 控制使用 `local` 或 `minio`。
-- [ ] 更新部署文档，说明本地存储和 MinIO 的差异。
-- [ ] 更新迭代日志。
-
-## 验收标准
-
-- 当前默认仍使用本地存储。
-- MinIO 配置边界明确。
-- 不强制用户安装 MinIO。
-- 不破坏现有上传和解析流程。
-- `.env.example` 包含 MinIO 预留配置。
-- 文档说明后续如何切换 MinIO。
-
----
-
-# v3.3.5 文件访问安全校验
-
-状态：未开始
-
-## 目标
-
-确保用户只能访问自己的简历文件，避免通过文件路径或 ID 越权读取其他用户文件。
-
-## 安全边界
-
-文件访问安全由业务层负责。
-
-存储层只知道：
-
-```text
-storageKey
-```
-
-业务层需要判断：
-
-```text
-当前用户是否拥有该 resumeId
-```
-
-## 重点风险
-
-| 风险 | 说明 |
-|---|---|
-| IDOR 越权 | 用户通过修改 resumeId 查看他人简历 |
-| 路径穿越 | 用户构造恶意路径读取服务器文件 |
-| 真实路径泄露 | 前端看到服务器磁盘路径 |
-| 文件类型绕过 | 上传非 PDF / DOC / DOCX |
-| 文件过大 | 恶意上传大文件 |
-| 下载绕过权限 | 下载接口只按 storageKey 读取 |
-| 解析绕过权限 | 解析接口未检查 resume.userId |
-
-## 推荐安全策略
-
-- 所有简历文件访问必须先查 `resume` 记录。
-- 校验 `resume.userId == currentUserId`。
-- 只通过 `resume.storageKey` 读取文件。
-- 不允许前端传任意 storageKey 直接读取。
-- 下载接口不要接收本地路径。
-- 解析接口不要接收本地路径。
-- 上传文件扩展名和 contentType 双重校验。
-- 文件大小限制配置化。
-- storageKey 做路径穿越校验。
-- 错误信息不要暴露服务器路径。
-
-## 任务
-
-- [ ] 检查简历上传权限。
-- [ ] 检查简历列表权限。
-- [ ] 检查简历详情权限。
-- [ ] 检查简历解析权限。
-- [ ] 检查简历文件读取权限。
-- [ ] 检查简历删除权限。
-- [ ] 检查是否存在直接用 storageKey 访问文件的接口。
-- [ ] 检查是否存在返回本地真实路径给前端的问题。
-- [ ] 检查文件类型限制。
-- [ ] 检查文件大小限制。
-- [ ] 检查路径穿越防护。
-- [ ] 补充缺失的权限校验。
-- [ ] 补充必要的异常处理。
-- [ ] 更新安全说明文档。
-
-## 验收标准
-
-- 用户只能访问自己的简历文件。
-- 用户不能通过修改 ID 查看他人文件。
-- 前端拿不到服务器真实路径。
-- 解析接口校验简历归属。
-- 删除接口校验简历归属。
-- 文件类型和大小限制仍然有效。
-- 错误信息不泄露本地路径。
-- 后端编译通过。
-
----
-
-# v3.3.6 v3.3 联调、审查与日志
-
-状态：未开始
-
-## 目标
-
-完成文件存储抽象整理后的编译、上传、解析、删除、权限校验和文档记录。
-
-## 后端验证
-
-建议执行：
-
-```bash
-cd backend
-./mvnw test
-```
-
-如果测试不完整，至少执行：
-
-```bash
-cd backend
-./mvnw -q -DskipTests package
-```
-
-如果没有 `mvnw`：
-
-```bash
-cd backend
-mvn test
-mvn -q -DskipTests package
-```
-
-## 手动流程验收
-
-- [ ] 登录用户 A。
-- [ ] 上传 PDF 简历。
-- [ ] 上传 DOCX 简历。
-- [ ] 查看简历列表。
-- [ ] 查看简历详情。
-- [ ] 触发简历解析。
-- [ ] 确认解析服务可以读取文件。
-- [ ] 删除简历。
-- [ ] 确认删除后文件访问失败或记录状态正确。
-- [ ] 登录用户 B。
-- [ ] 尝试访问用户 A 的 resumeId。
-- [ ] 确认返回无权限或不存在。
-- [ ] 尝试构造异常 storageKey。
-- [ ] 确认无法读取任意路径。
-
-## 配置验证
-
-- [ ] `app.storage.type=local` 时系统正常。
-- [ ] `app.storage.local.base-dir` 修改后，文件保存位置随配置变化。
-- [ ] `.env.example` 中配置项清晰。
-- [ ] MinIO 配置存在但不影响当前本地运行。
-
-## 架构边界验收
-
-| 验收项 | 是否通过 |
-|---|---|
-| 业务层依赖 FileStorageService 接口 |  |
-| 本地存储实现封装在 storage 实现类中 |  |
-| Controller 不直接操作文件系统 |  |
-| Service 不直接拼接绝对路径 |  |
-| 前端不接收服务器真实路径 |  |
-| 简历解析通过接口读取文件流 |  |
-| 用户只能访问自己的文件 |  |
-| MinIO 只预留，不影响本地运行 |  |
-| 数据库结构未改变 |  |
-| 接口路径未改变 |  |
-
-## 文档更新
-
-- [ ] 新增或更新 `docs/iteration-log/v3.3-file-storage.md`。
-- [ ] 如有必要，更新 `docs/project-structure.md`。
-- [ ] 如有必要，更新 `docs/deployment.md`。
-- [ ] 记录当前默认存储方式。
-- [ ] 记录 storageKey 规则。
-- [ ] 记录本地存储配置。
-- [ ] 记录 MinIO 后续切换方式。
-- [ ] 记录安全校验点。
-- [ ] 记录验证命令和结果。
-- [ ] 记录遗留问题。
-
-## v3.3 完成标准
-
-v3.3 完成时，应满足：
-
-- 文件存储接口清晰。
-- 本地存储实现封装完成。
-- 业务代码不再直接依赖本地绝对路径。
-- 简历上传、读取、解析、删除流程仍然可用。
-- 用户只能访问自己的简历文件。
-- 前端不暴露服务器真实路径。
-- MinIO 切换方案明确。
-- 当前默认仍可使用本地存储。
-- 后端构建通过。
-- 迭代日志已更新。
-- 未改接口路径。
-- 未破坏现有业务行为。
+| v3.3.1 当前文件存储实现审查 | 已完成 |
+| v3.3.2 FileStorageService 接口规范 | 已完成 |
+| v3.3.3 本地文件存储实现整理 | 已完成 |
+| v3.3.4 MinIO 预留配置与实现方案 | 已完成 |
+| v3.3.5 文件访问安全校验 | 已完成 |
+| v3.3.6 v3.3 联调、审查与日志 | 已完成 |
 
 ---
 
 # v3.4 - 长耗时任务异步化设计
 
-状态：未开始
+状态：当前版本
 
 ## v3.4 目标
 
@@ -889,7 +288,7 @@ v3.4 重点是建立单体应用内的异步任务基础能力，不做复杂分
 
 # v3.4.1 长耗时任务异步化方案设计
 
-状态：未开始
+状态：当前任务
 
 ## 目标
 

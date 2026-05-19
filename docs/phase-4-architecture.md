@@ -35,6 +35,18 @@
 
 简历文件应通过存储接口访问，以便后续将本地存储替换为对象存储。
 
+当前 Phase 4 默认仍使用本地存储：
+
+- `APP_STORAGE_TYPE=local`
+- `APP_STORAGE_LOCAL_BASE_DIR=uploads`
+
+MinIO 在 Phase 4 中先作为对象存储预留能力：
+
+- 可以在配置中声明 `APP_STORAGE_TYPE=minio` 和 `MINIO_*` 参数。
+- 当前未引入 MinIO SDK，未启用真实 `MinioFileStorageService`。
+- 在正式实现 MinIO 前，生产部署仍应使用本地持久化目录或单独完成对象存储接入任务。
+- 简历文件不建议直接暴露 public URL，后续如接入 MinIO，应优先通过后端权限校验后读取或生成短期签名 URL。
+
 ### 安全
 
 安全需要覆盖：

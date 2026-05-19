@@ -15,8 +15,11 @@ import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.winter.airesumeoptimizer.common.exception.BusinessException;
 import com.winter.airesumeoptimizer.infra.storage.FileStorageService;
+import com.winter.airesumeoptimizer.infra.storage.StoreFileCommand;
 import com.winter.airesumeoptimizer.infra.storage.StoredFile;
 import com.winter.airesumeoptimizer.module.analysis.mapper.AiJobMatchResultMapper;
+import com.winter.airesumeoptimizer.module.analysis.mapper.AiResumeSuggestionMapper;
+import com.winter.airesumeoptimizer.module.analysis.mapper.AiRewriteSuggestionMapper;
 import com.winter.airesumeoptimizer.module.analysis.mapper.ResumeAiAnalysisMapper;
 import com.winter.airesumeoptimizer.module.embedding.mapper.ResumeEmbeddingMapper;
 import com.winter.airesumeoptimizer.module.job.mapper.JobMatchResultMapper;
@@ -59,6 +62,8 @@ class ResumeServiceImplTest {
     private final ResumeAiAnalysisMapper resumeAiAnalysisMapper = mock(ResumeAiAnalysisMapper.class);
     private final JobMatchResultMapper jobMatchResultMapper = mock(JobMatchResultMapper.class);
     private final AiJobMatchResultMapper aiJobMatchResultMapper = mock(AiJobMatchResultMapper.class);
+    private final AiResumeSuggestionMapper aiResumeSuggestionMapper = mock(AiResumeSuggestionMapper.class);
+    private final AiRewriteSuggestionMapper aiRewriteSuggestionMapper = mock(AiRewriteSuggestionMapper.class);
     private final ResumeEmbeddingMapper resumeEmbeddingMapper = mock(ResumeEmbeddingMapper.class);
     private final FileStorageService fileStorageService = mock(FileStorageService.class);
     private final ResumeTextExtractionService resumeTextExtractionService = mock(ResumeTextExtractionService.class);
@@ -80,6 +85,8 @@ class ResumeServiceImplTest {
             resumeAiAnalysisMapper,
             jobMatchResultMapper,
             aiJobMatchResultMapper,
+            aiResumeSuggestionMapper,
+            aiRewriteSuggestionMapper,
             resumeEmbeddingMapper,
             fileStorageService,
             resumeTextExtractionService,
@@ -110,9 +117,10 @@ class ResumeServiceImplTest {
                 "resumes/1/resume.pdf",
                 "resume.pdf",
                 "application/pdf",
-                file.getSize());
+                file.getSize(),
+                "LOCAL");
 
-        when(fileStorageService.store(file, "resumes/1")).thenReturn(storedFile);
+        when(fileStorageService.store(any(StoreFileCommand.class))).thenReturn(storedFile);
         when(resumeMapper.insert(any(Resume.class))).thenAnswer(invocation -> {
             Resume resume = invocation.getArgument(0);
             resume.setId(100L);
@@ -125,7 +133,6 @@ class ResumeServiceImplTest {
         assertThat(uploadVO.getOriginalFilename()).isEqualTo("resume.pdf");
         assertThat(uploadVO.getFileType()).isEqualTo("PDF");
         assertThat(uploadVO.getFileSize()).isEqualTo(file.getSize());
-        assertThat(uploadVO.getObjectKey()).isEqualTo("resumes/1/resume.pdf");
         assertThat(uploadVO.getUploadStatus()).isEqualTo("UPLOADED");
 
         ArgumentCaptor<Resume> resumeCaptor = ArgumentCaptor.forClass(Resume.class);
@@ -135,6 +142,15 @@ class ResumeServiceImplTest {
         assertThat(savedResume.getStorageType()).isEqualTo("LOCAL");
         assertThat(savedResume.getCreatedAt()).isNotNull();
         assertThat(savedResume.getUpdatedAt()).isNotNull();
+
+        ArgumentCaptor<StoreFileCommand> commandCaptor = ArgumentCaptor.forClass(StoreFileCommand.class);
+        verify(fileStorageService).store(commandCaptor.capture());
+        StoreFileCommand command = commandCaptor.getValue();
+        assertThat(command.userId()).isEqualTo(1L);
+        assertThat(command.bizType()).isEqualTo("resumes");
+        assertThat(command.originalFilename()).isEqualTo("resume.pdf");
+        assertThat(command.contentType()).isEqualTo("application/pdf");
+        assertThat(command.size()).isEqualTo(file.getSize());
     }
 
     @Test
@@ -149,7 +165,7 @@ class ResumeServiceImplTest {
                 .isInstanceOf(BusinessException.class)
                 .hasMessage("仅支持 PDF、DOC、DOCX 简历文件");
 
-        verify(fileStorageService, never()).store(any(), any());
+        verify(fileStorageService, never()).store(any(StoreFileCommand.class));
     }
 
     @Test
@@ -160,6 +176,8 @@ class ResumeServiceImplTest {
                 resumeAiAnalysisMapper,
                 jobMatchResultMapper,
                 aiJobMatchResultMapper,
+                aiResumeSuggestionMapper,
+                aiRewriteSuggestionMapper,
                 resumeEmbeddingMapper,
                 fileStorageService,
                 resumeTextExtractionService,
@@ -188,7 +206,22 @@ class ResumeServiceImplTest {
                 .isInstanceOf(BusinessException.class)
                 .hasMessage("简历文件大小不能超过 5 字节");
 
-        verify(fileStorageService, never()).store(any(), any());
+        verify(fileStorageService, never()).store(any(StoreFileCommand.class));
+    }
+
+    @Test
+    void uploadShouldRejectContentTypeMismatch() {
+        MockMultipartFile file = new MockMultipartFile(
+                "file",
+                "resume.docx",
+                "application/pdf",
+                "docx-content".getBytes());
+
+        assertThatThrownBy(() -> service.upload(1L, file))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("文件类型与扩展名不匹配");
+
+        verify(fileStorageService, never()).store(any(StoreFileCommand.class));
     }
 
     @Test
@@ -202,9 +235,10 @@ class ResumeServiceImplTest {
                 "resumes/1/resume.pdf",
                 "resume.pdf",
                 "application/pdf",
-                file.getSize());
+                file.getSize(),
+                "LOCAL");
 
-        when(fileStorageService.store(file, "resumes/1")).thenReturn(storedFile);
+        when(fileStorageService.store(any(StoreFileCommand.class))).thenReturn(storedFile);
         when(resumeMapper.insert(any(Resume.class))).thenReturn(0);
 
         assertThatThrownBy(() -> service.upload(1L, file))
@@ -226,12 +260,37 @@ class ResumeServiceImplTest {
         service.delete(1L, 100L);
 
         verify(resumeEmbeddingMapper).deleteByResumeId(100L);
+        verify(aiRewriteSuggestionMapper).delete(any(Wrapper.class));
+        verify(aiResumeSuggestionMapper).delete(any(Wrapper.class));
         verify(aiJobMatchResultMapper).delete(any(Wrapper.class));
         verify(jobMatchResultMapper).delete(any(Wrapper.class));
         verify(resumeAiAnalysisMapper).delete(any(Wrapper.class));
         verify(resumeParseResultMapper).delete(any(Wrapper.class));
         verify(resumeMapper).deleteById(100L);
         verify(fileStorageService).delete("resumes/1/demo.pdf");
+    }
+
+    @Test
+    void deleteShouldRejectUnownedResumeWithoutDeletingFile() {
+        when(resumeMapper.selectOne(any(Wrapper.class))).thenReturn(null);
+
+        assertThatThrownBy(() -> service.delete(2L, 100L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("简历不存在");
+
+        verify(fileStorageService, never()).delete(anyString());
+        verify(resumeMapper, never()).deleteById(100L);
+    }
+
+    @Test
+    void parseShouldRejectUnownedResumeWithoutReadingFile() {
+        when(resumeMapper.selectOne(any(Wrapper.class))).thenReturn(null);
+
+        assertThatThrownBy(() -> service.parse(2L, 100L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("简历不存在");
+
+        verify(resumeTextExtractionService, never()).extractText(anyString(), anyString());
     }
 
     @Test
