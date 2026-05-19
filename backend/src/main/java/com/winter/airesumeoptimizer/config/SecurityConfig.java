@@ -62,6 +62,7 @@ public class SecurityConfig {
                                 "/api/rewrite-suggestions/**",
                                 "/api/ai-results/**",
                                 "/api/history/**",
+                                "/api/tasks/**",
                                 "/api/job-descriptions/**").authenticated()
                         .anyRequest().permitAll())
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);

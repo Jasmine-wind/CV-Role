@@ -225,6 +225,61 @@ class ResumeServiceImplTest {
     }
 
     @Test
+    void uploadShouldAllowBrowserFallbackContentType() {
+        MockMultipartFile file = new MockMultipartFile(
+                "file",
+                "resume.docx",
+                "application/octet-stream",
+                "docx-content".getBytes());
+        StoredFile storedFile = new StoredFile(
+                "resumes/1/resume.docx",
+                "resume.docx",
+                "application/octet-stream",
+                file.getSize(),
+                "LOCAL");
+
+        when(fileStorageService.store(any(StoreFileCommand.class))).thenReturn(storedFile);
+        when(resumeMapper.insert(any(Resume.class))).thenAnswer(invocation -> {
+            Resume resume = invocation.getArgument(0);
+            resume.setId(101L);
+            return 1;
+        });
+
+        var uploadVO = service.upload(1L, file);
+
+        assertThat(uploadVO.getId()).isEqualTo(101L);
+        assertThat(uploadVO.getFileType()).isEqualTo("DOCX");
+        verify(fileStorageService).store(any(StoreFileCommand.class));
+    }
+
+    @Test
+    void uploadShouldAllowContentTypeWithParameters() {
+        MockMultipartFile file = new MockMultipartFile(
+                "file",
+                "resume.pdf",
+                "application/pdf; charset=binary",
+                "pdf-content".getBytes());
+        StoredFile storedFile = new StoredFile(
+                "resumes/1/resume.pdf",
+                "resume.pdf",
+                "application/pdf; charset=binary",
+                file.getSize(),
+                "LOCAL");
+
+        when(fileStorageService.store(any(StoreFileCommand.class))).thenReturn(storedFile);
+        when(resumeMapper.insert(any(Resume.class))).thenAnswer(invocation -> {
+            Resume resume = invocation.getArgument(0);
+            resume.setId(102L);
+            return 1;
+        });
+
+        var uploadVO = service.upload(1L, file);
+
+        assertThat(uploadVO.getId()).isEqualTo(102L);
+        assertThat(uploadVO.getFileType()).isEqualTo("PDF");
+    }
+
+    @Test
     void uploadShouldDeleteStoredFileWhenMetadataSaveFails() {
         MockMultipartFile file = new MockMultipartFile(
                 "file",

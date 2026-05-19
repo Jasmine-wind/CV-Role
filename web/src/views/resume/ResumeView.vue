@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { UploadFile, UploadProps, UploadUserFile } from 'element-plus'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   analyzeResume,
@@ -12,7 +12,10 @@ import {
   parseResume,
   uploadResume,
 } from '@/api/resume'
+import type { AsyncTaskPollingController } from '@/utils/asyncTaskPolling'
+import { startAsyncTaskPolling } from '@/utils/asyncTaskPolling'
 import { buildResumeParseDisplaySections } from '@/utils/resumeParseDisplayAdapter'
+import type { AsyncTaskVO } from '@/types/task'
 import type {
   ResumeAiAnalysis,
   ResumeBlock,
@@ -29,12 +32,17 @@ const route = useRoute()
 const router = useRouter()
 const MAX_FILE_SIZE = 10 * 1024 * 1024
 const ACCEPTED_EXTENSIONS = ['pdf', 'doc', 'docx']
+const RESUME_ASYNC_TASK_TIMEOUT_MS = 5 * 60 * 1000
+const RESUME_UPLOAD_LIMIT = 10
+const RESUME_ORDER_STORAGE_KEY = 'ai-resume-optimizer:resume-order'
 
 const resumes = ref<ResumeListItem[]>([])
-const selectedFile = ref<File | null>(null)
 const uploadFiles = ref<UploadUserFile[]>([])
 const loading = ref(false)
 const uploading = ref(false)
+const uploadProgressText = ref<string | null>(null)
+const draggingResumeId = ref<number | null>(null)
+const dragOverResumeId = ref<number | null>(null)
 const parsingResumeId = ref<number | null>(null)
 const loadingParseResult = ref(false)
 const analyzingResumeId = ref<number | null>(null)
@@ -55,6 +63,11 @@ const expandedSkillGroups = ref<Set<string>>(new Set())
 const summaryExpanded = ref(false)
 const othersExpanded = ref(false)
 const projectsExpanded = ref(false)
+const activeAsyncTask = ref<AsyncTaskVO | null>(null)
+const activeAsyncTaskResumeId = ref<number | null>(null)
+const activeAsyncTaskPolling = ref<AsyncTaskPollingController | null>(null)
+const asyncTaskError = ref<string | null>(null)
+const asyncTaskTimedOut = ref(false)
 
 const parseModeOptions: Array<{ label: string; value: ResumeParseMode; description: string }> = [
   { label: 'FAST', value: 'FAST', description: '快速预览' },
@@ -62,11 +75,51 @@ const parseModeOptions: Array<{ label: string; value: ResumeParseMode; descripti
   { label: 'ACCURATE', value: 'ACCURATE', description: '高精度' },
 ]
 
+const isActiveAsyncTaskRunning = computed(() => {
+  const status = activeAsyncTask.value?.status
+  return status === 'PENDING' || status === 'RUNNING'
+})
+
+const asyncTaskProgress = computed(() => {
+  return Math.min(Math.max(activeAsyncTask.value?.progress ?? 0, 0), 100)
+})
+
+const activeAsyncTaskTitle = computed(() => {
+  if (!activeAsyncTask.value) {
+    return '异步任务'
+  }
+
+  const typeMap: Record<string, string> = {
+    RESUME_PARSE: '简历解析',
+    RESUME_DIAGNOSIS: '简历诊断',
+    TARGET_JOB_PARSE: '目标岗位解析',
+    MATCH_ANALYSIS: '匹配分析',
+    JOB_SUGGESTION: '岗位优化建议',
+    LOCAL_REWRITE: '局部改写',
+    RESUME_EMBEDDING: '简历向量生成',
+    JOB_DESCRIPTION_EMBEDDING: '岗位向量生成',
+    RAG_INDEX_BUILD: '索引构建',
+  }
+
+  return typeMap[activeAsyncTask.value.taskType] ?? activeAsyncTask.value.taskType
+})
+
 const isRowBusy = (resumeId: number) => {
   return parsingResumeId.value === resumeId
     || analyzingResumeId.value === resumeId
     || deletingResumeId.value === resumeId
+    || (isActiveAsyncTaskRunning.value && activeAsyncTaskResumeId.value === resumeId)
 }
+
+const selectedUploadFiles = computed(() => {
+  const files: File[] = []
+  for (const item of uploadFiles.value) {
+    if (item.raw) {
+      files.push(item.raw as File)
+    }
+  }
+  return files
+})
 
 const structuredContent = computed<ResumeStructuredContent | null>(() => {
   if (!parseResult.value?.structuredJson) {
@@ -451,12 +504,66 @@ const validateFile = (file: File) => {
   return true
 }
 
+const readStoredResumeOrder = () => {
+  try {
+    const value = window.localStorage.getItem(RESUME_ORDER_STORAGE_KEY)
+    if (!value) {
+      return []
+    }
+
+    const parsed = JSON.parse(value) as unknown
+    if (!Array.isArray(parsed)) {
+      return []
+    }
+
+    return parsed.filter((item): item is number => Number.isInteger(item))
+  } catch (error) {
+    return []
+  }
+}
+
+const saveResumeOrder = () => {
+  window.localStorage.setItem(
+    RESUME_ORDER_STORAGE_KEY,
+    JSON.stringify(resumes.value.map((resume) => resume.id)),
+  )
+}
+
+const applyStoredResumeOrder = (records: ResumeListItem[]) => {
+  const storedOrder = readStoredResumeOrder()
+  if (!storedOrder.length) {
+    return records
+  }
+
+  const orderMap = new Map(storedOrder.map((id, index) => [id, index]))
+  return [...records].sort((left, right) => {
+    const leftOrder = orderMap.get(left.id)
+    const rightOrder = orderMap.get(right.id)
+
+    if (leftOrder != null && rightOrder != null) {
+      return leftOrder - rightOrder
+    }
+
+    if (leftOrder != null) {
+      return -1
+    }
+
+    if (rightOrder != null) {
+      return 1
+    }
+
+    return 0
+  })
+}
+
 const loadResumes = async () => {
   loading.value = true
 
   try {
-    resumes.value = await getResumeList()
+    resumes.value = applyStoredResumeOrder(await getResumeList())
     selectResumeFromRoute()
+    await nextTick()
+    bindResumeTableDragHandlers()
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '获取简历列表失败')
   } finally {
@@ -464,44 +571,150 @@ const loadResumes = async () => {
   }
 }
 
-const handleFileChange: UploadProps['onChange'] = (uploadFile: UploadFile) => {
+const handleFileChange: UploadProps['onChange'] = (uploadFile: UploadFile, fileList) => {
   if (!uploadFile.raw) {
-    selectedFile.value = null
     return
   }
 
   if (!validateFile(uploadFile.raw)) {
-    selectedFile.value = null
-    uploadFiles.value = []
+    uploadFiles.value = fileList.filter((item) => item.uid !== uploadFile.uid)
     return
   }
-
-  selectedFile.value = uploadFile.raw
 }
 
 const handleFileRemove: UploadProps['onRemove'] = () => {
-  selectedFile.value = null
+  uploadProgressText.value = null
+}
+
+const handleFileExceed: UploadProps['onExceed'] = () => {
+  ElMessage.warning(`一次最多选择 ${RESUME_UPLOAD_LIMIT} 份简历`)
 }
 
 const handleUpload = async () => {
-  if (!selectedFile.value) {
+  const uploadItems = uploadFiles.value.filter((item) => item.raw)
+  if (!selectedUploadFiles.value.length) {
     ElMessage.warning('请先选择简历文件')
     return
   }
 
   uploading.value = true
+  let successCount = 0
+  let failedCount = 0
+  const failedUids = new Set<number>()
 
   try {
-    await uploadResume(selectedFile.value)
-    ElMessage.success('上传成功')
-    selectedFile.value = null
-    uploadFiles.value = []
+    for (let index = 0; index < uploadItems.length; index += 1) {
+      const uploadItem = uploadItems[index]
+      if (!uploadItem) {
+        continue
+      }
+      const file = uploadItem?.raw as File | undefined
+      if (!file) {
+        continue
+      }
+      uploadProgressText.value = `正在上传 ${index + 1}/${uploadItems.length}：${file.name}`
+      try {
+        await uploadResume(file)
+        successCount += 1
+      } catch (error) {
+        failedCount += 1
+        if (uploadItem.uid != null) {
+          failedUids.add(uploadItem.uid)
+        }
+        ElMessage.error(`${file.name} 上传失败：${error instanceof Error ? error.message : '上传失败'}`)
+      }
+    }
+
+    if (successCount > 0) {
+      ElMessage.success(`上传完成：成功 ${successCount} 份${failedCount ? `，失败 ${failedCount} 份` : ''}`)
+    }
+
+    if (failedCount === 0) {
+      uploadFiles.value = []
+    } else {
+      uploadFiles.value = uploadFiles.value.filter((item) => item.uid != null && failedUids.has(item.uid))
+    }
     await loadResumes()
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '上传失败')
   } finally {
     uploading.value = false
+    uploadProgressText.value = null
   }
+}
+
+const moveResumeBefore = (draggedId: number, targetId: number) => {
+  if (draggedId === targetId) {
+    return
+  }
+
+  const draggedIndex = resumes.value.findIndex((item) => item.id === draggedId)
+  const targetIndex = resumes.value.findIndex((item) => item.id === targetId)
+  if (draggedIndex < 0 || targetIndex < 0) {
+    return
+  }
+
+  const nextRecords = [...resumes.value]
+  const [dragged] = nextRecords.splice(draggedIndex, 1)
+  if (!dragged) {
+    return
+  }
+
+  const nextTargetIndex = nextRecords.findIndex((item) => item.id === targetId)
+  nextRecords.splice(nextTargetIndex, 0, dragged)
+  resumes.value = nextRecords
+  saveResumeOrder()
+}
+
+const getResumeTableRows = () => {
+  return Array.from(document.querySelectorAll<HTMLTableRowElement>('.resume-table .el-table__body-wrapper tbody tr'))
+}
+
+const bindResumeTableDragHandlers = () => {
+  getResumeTableRows().forEach((row, index) => {
+    const resume = resumes.value[index]
+    if (!resume) {
+      return
+    }
+
+    row.draggable = true
+    row.dataset.resumeId = String(resume.id)
+    row.ondragstart = (event) => {
+      draggingResumeId.value = resume.id
+      event.dataTransfer?.setData('text/plain', String(resume.id))
+      if (event.dataTransfer) {
+        event.dataTransfer.effectAllowed = 'move'
+      }
+    }
+    row.ondragover = (event) => {
+      event.preventDefault()
+      dragOverResumeId.value = resume.id
+    }
+    row.ondrop = (event) => {
+      event.preventDefault()
+      const draggedId = Number(event.dataTransfer?.getData('text/plain') || draggingResumeId.value)
+      if (Number.isInteger(draggedId)) {
+        moveResumeBefore(draggedId, resume.id)
+      }
+      draggingResumeId.value = null
+      dragOverResumeId.value = null
+    }
+    row.ondragend = () => {
+      draggingResumeId.value = null
+      dragOverResumeId.value = null
+    }
+  })
+}
+
+const resolveResumeRowClass = ({ row }: { row: ResumeListItem }) => {
+  const classes: string[] = []
+  if (draggingResumeId.value === row.id) {
+    classes.push('resume-row-dragging')
+  }
+  if (dragOverResumeId.value === row.id && draggingResumeId.value !== row.id) {
+    classes.push('resume-row-drop-target')
+  }
+  return classes.join(' ')
 }
 
 const resolveParseStatusText = (status: string | null | undefined) => {
@@ -680,6 +893,120 @@ const selectResumeFromRoute = () => {
   }
 }
 
+const parseRouteNumericId = (value: unknown) => {
+  const rawValue = Array.isArray(value) ? value[0] : value
+
+  if (typeof rawValue !== 'string' || rawValue.trim() === '') {
+    return null
+  }
+
+  const parsed = Number(rawValue)
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null
+}
+
+const resolveAsyncTaskStatusText = (status: string | null | undefined) => {
+  const statusMap: Record<string, string> = {
+    PENDING: '待执行',
+    RUNNING: '执行中',
+    SUCCESS: '已完成',
+    FAILED: '执行失败',
+    CANCELLED: '已取消',
+  }
+
+  return status ? (statusMap[status] ?? status) : '-'
+}
+
+const resolveAsyncTaskStatusType = (status: string | null | undefined) => {
+  if (status === 'SUCCESS') {
+    return 'success'
+  }
+
+  if (status === 'FAILED' || status === 'CANCELLED') {
+    return 'danger'
+  }
+
+  if (status === 'RUNNING') {
+    return 'warning'
+  }
+
+  return 'info'
+}
+
+const stopActiveAsyncTaskPolling = () => {
+  activeAsyncTaskPolling.value?.stop()
+  activeAsyncTaskPolling.value = null
+}
+
+const clearAsyncTaskState = () => {
+  stopActiveAsyncTaskPolling()
+  activeAsyncTask.value = null
+  activeAsyncTaskResumeId.value = null
+  asyncTaskError.value = null
+  asyncTaskTimedOut.value = false
+}
+
+const startResumeTaskPolling = (taskId: number, resumeId: number | null) => {
+  stopActiveAsyncTaskPolling()
+  activeAsyncTask.value = null
+  activeAsyncTaskResumeId.value = resumeId
+  asyncTaskError.value = null
+  asyncTaskTimedOut.value = false
+
+  activeAsyncTaskPolling.value = startAsyncTaskPolling({
+    taskId,
+    timeoutMs: RESUME_ASYNC_TASK_TIMEOUT_MS,
+    onUpdate: (task) => {
+      activeAsyncTask.value = task
+    },
+    onSuccess: async (task) => {
+      activeAsyncTask.value = task
+      ElMessage.success(task.resultSummary || '任务已完成')
+
+      if (resumeId) {
+        const resume = resumes.value.find((item) => item.id === resumeId)
+        if (resume) {
+          if (task.taskType === 'RESUME_DIAGNOSIS') {
+            await loadAiAnalysis(resume)
+          } else if (task.taskType === 'RESUME_PARSE') {
+            await loadParseResult(resume)
+          }
+        }
+      }
+    },
+    onFailed: (task) => {
+      activeAsyncTask.value = task
+      asyncTaskError.value = task.errorMessage || task.message || '任务执行失败'
+      ElMessage.error(asyncTaskError.value)
+    },
+    onCancelled: (task) => {
+      activeAsyncTask.value = task
+      asyncTaskError.value = task.message || '任务已取消'
+      ElMessage.warning(asyncTaskError.value)
+    },
+    onTimeout: (task) => {
+      if (task) {
+        activeAsyncTask.value = task
+      }
+      asyncTaskTimedOut.value = true
+      asyncTaskError.value = '任务仍在后台执行，请稍后刷新查看结果'
+      ElMessage.warning(asyncTaskError.value)
+    },
+    onError: (error) => {
+      asyncTaskError.value = error instanceof Error ? error.message : '任务状态查询失败'
+      ElMessage.error(asyncTaskError.value)
+    },
+  })
+}
+
+const startRouteAsyncTaskPolling = () => {
+  const taskId = parseRouteNumericId(route.query.taskId)
+  if (!taskId) {
+    return
+  }
+
+  startResumeTaskPolling(taskId, parseRouteNumericId(route.query.resumeId))
+}
+
 const loadParseResult = async (resume: ResumeListItem) => {
   selectResume(resume)
   activePanel.value = 'parse'
@@ -797,6 +1124,7 @@ const handleDelete = async (resume: ResumeListItem) => {
   try {
     await deleteResume(resume.id)
     resumes.value = resumes.value.filter((item) => item.id !== resume.id)
+    saveResumeOrder()
 
     if (activeResume.value?.id === resume.id) {
       activeResume.value = null
@@ -875,8 +1203,18 @@ const toggleSkillGroupExpanded = (id: string) => {
   expandedSkillGroups.value = next
 }
 
-onMounted(() => {
-  loadResumes()
+onMounted(async () => {
+  await loadResumes()
+  startRouteAsyncTaskPolling()
+})
+
+watch(resumes, async () => {
+  await nextTick()
+  bindResumeTableDragHandlers()
+})
+
+onUnmounted(() => {
+  stopActiveAsyncTaskPolling()
 })
 </script>
 
@@ -900,17 +1238,20 @@ onMounted(() => {
             v-model:file-list="uploadFiles"
             accept=".pdf,.doc,.docx"
             :auto-upload="false"
-            :limit="1"
+            multiple
+            :limit="RESUME_UPLOAD_LIMIT"
             :on-change="handleFileChange"
+            :on-exceed="handleFileExceed"
             :on-remove="handleFileRemove"
           >
             <el-button type="primary">选择简历文件</el-button>
             <template #tip>
-              <div class="resume-upload-tip">支持 PDF、DOC、DOCX，最大 10 MB。</div>
+              <div class="resume-upload-tip">支持 PDF、DOC、DOCX，单份最大 10 MB，一次最多 {{ RESUME_UPLOAD_LIMIT }} 份。</div>
             </template>
           </el-upload>
 
           <p class="resume-upload-tip">解析会优先使用规则结果；只有需要 AI 参与时才调用 AI，调用失败后自动降级为规则解析。</p>
+          <p v-if="uploadProgressText" class="resume-upload-progress">{{ uploadProgressText }}</p>
           <div class="resume-parse-mode-control">
             <span class="resume-parse-mode-label">解析模式</span>
             <el-select v-model="selectedParseMode" size="small" class="resume-parse-mode-select">
@@ -927,7 +1268,44 @@ onMounted(() => {
         <el-button type="success" :loading="uploading" @click="handleUpload">上传</el-button>
       </section>
 
-      <el-table v-loading="loading" :data="resumes" class="resume-table" empty-text="暂无简历">
+      <section v-if="activeAsyncTask || asyncTaskError" class="resume-task-panel">
+        <header class="resume-task-header">
+          <div>
+            <h2 class="resume-task-title">{{ activeAsyncTaskTitle }}</h2>
+            <p class="resume-task-subtitle">
+              {{ activeAsyncTask?.message || asyncTaskError || '正在获取任务状态' }}
+            </p>
+          </div>
+          <el-space>
+            <el-tag v-if="activeAsyncTask" :type="resolveAsyncTaskStatusType(activeAsyncTask.status)">
+              {{ resolveAsyncTaskStatusText(activeAsyncTask.status) }}
+            </el-tag>
+            <el-button v-if="isActiveAsyncTaskRunning" size="small" @click="clearAsyncTaskState">停止轮询</el-button>
+          </el-space>
+        </header>
+        <el-progress
+          v-if="activeAsyncTask"
+          :percentage="asyncTaskProgress"
+          :status="activeAsyncTask.status === 'SUCCESS' ? 'success' : undefined"
+        />
+        <el-alert
+          v-if="asyncTaskError"
+          class="resume-task-alert"
+          :title="asyncTaskError"
+          :type="asyncTaskTimedOut ? 'warning' : 'error'"
+          :closable="false"
+          show-icon
+        />
+      </section>
+
+      <el-table
+        v-loading="loading"
+        :data="resumes"
+        class="resume-table"
+        empty-text="暂无简历"
+        row-key="id"
+        :row-class-name="resolveResumeRowClass"
+      >
         <el-table-column prop="originalFilename" label="文件名" min-width="220" />
         <el-table-column prop="fileType" label="类型" width="100" />
         <el-table-column label="大小" width="130">
@@ -1727,6 +2105,48 @@ onMounted(() => {
   font-size: 13px;
 }
 
+.resume-upload-progress {
+  margin: 10px 0 0;
+  color: #2563eb;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.resume-task-panel {
+  display: grid;
+  gap: 14px;
+  margin-bottom: 20px;
+  padding: 20px 24px;
+  border: 1px solid #dde5f0;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.resume-task-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.resume-task-title {
+  margin: 0;
+  color: #111827;
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.resume-task-subtitle {
+  margin: 6px 0 0;
+  color: #667085;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.resume-task-alert {
+  margin-top: 2px;
+}
+
 .resume-parse-mode-control {
   display: flex;
   align-items: center;
@@ -1757,6 +2177,14 @@ onMounted(() => {
 .resume-actions {
   display: flex;
   gap: 8px;
+}
+
+:deep(.resume-row-dragging) {
+  opacity: 0.55;
+}
+
+:deep(.resume-row-drop-target td) {
+  background: #eef6ff !important;
 }
 
 .resume-detail-panel {
@@ -2116,6 +2544,7 @@ onMounted(() => {
 @media (max-width: 640px) {
   .resume-header,
   .resume-upload-panel,
+  .resume-task-header,
   .resume-parse-header {
     align-items: stretch;
     flex-direction: column;

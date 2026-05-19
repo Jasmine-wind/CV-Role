@@ -93,10 +93,18 @@ public class ResumeServiceImpl implements ResumeService {
     private static final String AI_STATUS_DISABLED = "DISABLED";
     private static final double MEDIUM_SOURCE_AI_OVERRIDE_THRESHOLD = 0.85;
     private static final Set<String> ALLOWED_EXTENSIONS = Set.of("pdf", "doc", "docx");
-    private static final Set<String> PDF_CONTENT_TYPES = Set.of("application/pdf");
-    private static final Set<String> DOC_CONTENT_TYPES = Set.of("application/msword");
+    private static final String OCTET_STREAM_CONTENT_TYPE = "application/octet-stream";
+    private static final Set<String> PDF_CONTENT_TYPES = Set.of("application/pdf", "application/x-pdf");
+    private static final Set<String> DOC_CONTENT_TYPES = Set.of(
+            "application/msword",
+            "application/vnd.ms-word",
+            "application/x-msword",
+            "application/wps-office.doc");
     private static final Set<String> DOCX_CONTENT_TYPES = Set.of(
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "application/zip",
+            "application/x-zip-compressed",
+            "application/wps-office.docx");
 
     private final ResumeMapper resumeMapper;
     private final ResumeParseResultMapper resumeParseResultMapper;
@@ -560,9 +568,15 @@ public class ResumeServiceImpl implements ResumeService {
 
     private boolean isAllowedContentType(String fileType, String contentType) {
         if (contentType == null || contentType.isBlank()) {
-            return false;
+            return true;
         }
-        String normalizedContentType = contentType.toLowerCase(Locale.ROOT);
+        String normalizedContentType = contentType
+                .split(";", 2)[0]
+                .strip()
+                .toLowerCase(Locale.ROOT);
+        if (normalizedContentType.isBlank() || OCTET_STREAM_CONTENT_TYPE.equals(normalizedContentType)) {
+            return true;
+        }
         return switch (fileType) {
             case "pdf" -> PDF_CONTENT_TYPES.contains(normalizedContentType);
             case "doc" -> DOC_CONTENT_TYPES.contains(normalizedContentType);
