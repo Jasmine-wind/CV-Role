@@ -32,6 +32,9 @@ public class LocalStoragePathResolver {
         if (storageKey == null || storageKey.isBlank()) {
             throw new FileStorageException("文件对象 key 不能为空");
         }
+        if (storageKey.contains("\\") || storageKey.indexOf('\0') >= 0) {
+            throw new FileStorageException("文件存储路径不合法");
+        }
 
         Path targetPath = baseDirectory.resolve(storageKey).normalize();
         if (!targetPath.startsWith(baseDirectory)) {

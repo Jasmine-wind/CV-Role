@@ -69,6 +69,7 @@ import com.winter.airesumeoptimizer.module.job.vo.JobListVO;
 import com.winter.airesumeoptimizer.module.job.vo.JobMatchResultVO;
 import com.winter.airesumeoptimizer.module.resume.controller.ResumeController;
 import com.winter.airesumeoptimizer.module.resume.service.ResumeService;
+import com.winter.airesumeoptimizer.module.resume.service.ResumeAsyncTaskService;
 import com.winter.airesumeoptimizer.module.resume.vo.ResumeDetailVO;
 import com.winter.airesumeoptimizer.module.resume.vo.ResumeListVO;
 import com.winter.airesumeoptimizer.module.resume.vo.ResumeParseResultVO;
@@ -143,6 +144,9 @@ class Phase1ApiIntegrationTest {
 
     @MockitoBean
     private ResumeService resumeService;
+
+    @MockitoBean
+    private ResumeAsyncTaskService resumeAsyncTaskService;
 
     @MockitoBean
     private ResumeAnalysisService resumeAnalysisService;
@@ -235,6 +239,14 @@ class Phase1ApiIntegrationTest {
                 .andExpect(jsonPath("$.code").value(401))
                 .andExpect(jsonPath("$.path").value("/api/users/me"))
                 .andExpect(header().exists(RequestIdFilter.REQUEST_ID_HEADER));
+    }
+
+    @Test
+    void unlistedApiEndpointShouldRejectAnonymousUserByDefault() throws Exception {
+        mockMvc.perform(get("/api/internal-risk-check"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value(401))
+                .andExpect(jsonPath("$.path").value("/api/internal-risk-check"));
     }
 
     @Test

@@ -68,6 +68,15 @@ class LocalFileStorageServiceTest {
     }
 
     @Test
+    void loadShouldRejectBackslashTraversalStorageKey() {
+        LocalFileStorageService service = newService();
+
+        assertThatThrownBy(() -> service.loadAsBytes("..\\..\\windows\\system32"))
+                .isInstanceOf(FileStorageException.class)
+                .hasMessage("文件存储路径不合法");
+    }
+
+    @Test
     void storeShouldRejectInvalidUserId() {
         LocalFileStorageService service = newService();
 

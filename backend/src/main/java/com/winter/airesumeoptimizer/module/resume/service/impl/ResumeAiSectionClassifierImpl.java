@@ -136,7 +136,7 @@ public class ResumeAiSectionClassifierImpl implements ResumeAiSectionClassifier 
                     .classifications(classifications)
                     .build();
         } catch (RuntimeException exception) {
-            log.warn("Resume AI section classify fallback: reason={}", exception.getMessage());
+            log.warn("Resume AI section classify fallback: reason={}", LogSanitizer.sanitize(exception.getMessage()));
             return aiFallback("AI 章节归类失败：" + LogSanitizer.sanitize(exception.getMessage()), startedAt);
         }
     }

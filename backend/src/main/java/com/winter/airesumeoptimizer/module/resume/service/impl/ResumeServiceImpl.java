@@ -70,6 +70,8 @@ import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -105,6 +107,9 @@ public class ResumeServiceImpl implements ResumeService {
             "application/zip",
             "application/x-zip-compressed",
             "application/wps-office.docx");
+    private static final byte[] PDF_SIGNATURE = new byte[]{0x25, 0x50, 0x44, 0x46, 0x2D};
+    private static final byte[] DOC_SIGNATURE = new byte[]{
+            (byte) 0xD0, (byte) 0xCF, 0x11, (byte) 0xE0, (byte) 0xA1, (byte) 0xB1, 0x1A, (byte) 0xE1};
 
     private final ResumeMapper resumeMapper;
     private final ResumeParseResultMapper resumeParseResultMapper;
@@ -204,7 +209,7 @@ public class ResumeServiceImpl implements ResumeService {
         try {
             int rows = resumeMapper.insert(resume);
             if (rows != 1 || resume.getId() == null) {
-                log.warn("Resume metadata save failed: userId={}, objectKey={}", userId, storedFile.objectKey());
+                log.warn("Resume metadata save failed: userId={}, storageType={}", userId, storedFile.storageType());
                 throw new BusinessException(500, "简历元数据保存失败");
             }
         } catch (RuntimeException exception) {
@@ -487,6 +492,9 @@ public class ResumeServiceImpl implements ResumeService {
         if (!isAllowedContentType(fileType, file.getContentType())) {
             throw new BusinessException(400, "文件类型与扩展名不匹配");
         }
+        if (!hasSupportedFileSignature(fileType, file)) {
+            throw new BusinessException(400, "文件内容与扩展名不匹配");
+        }
     }
 
     private Resume getOwnedResume(Long userId, Long resumeId) {
@@ -583,6 +591,54 @@ public class ResumeServiceImpl implements ResumeService {
             case "docx" -> DOCX_CONTENT_TYPES.contains(normalizedContentType);
             default -> false;
         };
+    }
+
+    private boolean hasSupportedFileSignature(String fileType, MultipartFile file) {
+        return switch (fileType) {
+            case "pdf" -> startsWith(file, PDF_SIGNATURE);
+            case "doc" -> startsWith(file, DOC_SIGNATURE);
+            case "docx" -> isDocxZip(file);
+            default -> false;
+        };
+    }
+
+    private boolean startsWith(MultipartFile file, byte[] signature) {
+        try (InputStream inputStream = file.getInputStream()) {
+            byte[] header = inputStream.readNBytes(signature.length);
+            if (header.length < signature.length) {
+                return false;
+            }
+            for (int index = 0; index < signature.length; index++) {
+                if (header[index] != signature[index]) {
+                    return false;
+                }
+            }
+            return true;
+        } catch (IOException exception) {
+            throw new BusinessException(500, "简历文件读取失败");
+        }
+    }
+
+    private boolean isDocxZip(MultipartFile file) {
+        boolean hasContentTypes = false;
+        boolean hasDocumentXml = false;
+        try (ZipInputStream zipInputStream = new ZipInputStream(file.getInputStream())) {
+            ZipEntry entry;
+            while ((entry = zipInputStream.getNextEntry()) != null) {
+                String entryName = entry.getName();
+                if ("[Content_Types].xml".equals(entryName)) {
+                    hasContentTypes = true;
+                } else if ("word/document.xml".equals(entryName)) {
+                    hasDocumentXml = true;
+                }
+                if (hasContentTypes && hasDocumentXml) {
+                    return true;
+                }
+            }
+            return false;
+        } catch (IOException exception) {
+            return false;
+        }
     }
 
     private Resume buildResume(Long userId, StoredFile storedFile, String fileType) {
@@ -860,10 +916,10 @@ public class ResumeServiceImpl implements ResumeService {
         } catch (RuntimeException exception) {
             structuredContent.setDisplayModel(structuredContent.getRuleDisplayModel());
             addQualityWarning(structuredContent, "DISPLAY_MODEL_FAILED");
-            log.warn("Resume display model skipped: resumeId={}, reason={}",
+            log.warn("Resume display model skipped: resumeId={}, exceptionType={}, reason={}",
                     resumeId,
-                    LogSanitizer.sanitize(normalizeErrorMessage(exception)),
-                    exception);
+                    exception.getClass().getSimpleName(),
+                    LogSanitizer.sanitize(normalizeErrorMessage(exception)));
         }
     }
 
@@ -1138,10 +1194,11 @@ public class ResumeServiceImpl implements ResumeService {
     }
 
     private String truncateErrorMessage(String errorMessage) {
-        if (errorMessage == null || errorMessage.length() <= 1000) {
-            return errorMessage;
+        String sanitized = LogSanitizer.sanitize(errorMessage);
+        if (sanitized == null || sanitized.length() <= 1000) {
+            return sanitized;
         }
-        return errorMessage.substring(0, 1000);
+        return sanitized.substring(0, 1000);
     }
 
     private String extractFileType(String filename) {

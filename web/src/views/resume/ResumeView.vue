@@ -4,12 +4,13 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
-  analyzeResume,
   deleteResume,
   getResumeAiAnalysis,
   getResumeList,
   getResumeParseResult,
-  parseResume,
+  submitResumeDiagnosisTask,
+  submitResumeEmbeddingTask,
+  submitResumeParseTask,
   uploadResume,
 } from '@/api/resume'
 import type { AsyncTaskPollingController } from '@/utils/asyncTaskPolling'
@@ -35,6 +36,8 @@ const ACCEPTED_EXTENSIONS = ['pdf', 'doc', 'docx']
 const RESUME_ASYNC_TASK_TIMEOUT_MS = 5 * 60 * 1000
 const RESUME_UPLOAD_LIMIT = 10
 const RESUME_ORDER_STORAGE_KEY = 'ai-resume-optimizer:resume-order'
+const ASYNC_TASK_PROGRESS_CAP = 95
+const ASYNC_TASK_PROGRESS_INTERVAL_MS = 500
 
 const resumes = ref<ResumeListItem[]>([])
 const uploadFiles = ref<UploadUserFile[]>([])
@@ -47,6 +50,7 @@ const parsingResumeId = ref<number | null>(null)
 const loadingParseResult = ref(false)
 const analyzingResumeId = ref<number | null>(null)
 const loadingAiAnalysis = ref(false)
+const embeddingResumeId = ref<number | null>(null)
 const deletingResumeId = ref<number | null>(null)
 const activeResume = ref<ResumeListItem | null>(null)
 const parseResult = ref<ResumeParseResult | null>(null)
@@ -68,6 +72,8 @@ const activeAsyncTaskResumeId = ref<number | null>(null)
 const activeAsyncTaskPolling = ref<AsyncTaskPollingController | null>(null)
 const asyncTaskError = ref<string | null>(null)
 const asyncTaskTimedOut = ref(false)
+const displayedAsyncTaskProgress = ref(0)
+const asyncTaskProgressTimer = ref<number | null>(null)
 
 const parseModeOptions: Array<{ label: string; value: ResumeParseMode; description: string }> = [
   { label: 'FAST', value: 'FAST', description: '快速预览' },
@@ -81,7 +87,7 @@ const isActiveAsyncTaskRunning = computed(() => {
 })
 
 const asyncTaskProgress = computed(() => {
-  return Math.min(Math.max(activeAsyncTask.value?.progress ?? 0, 0), 100)
+  return Math.min(Math.max(Math.round(displayedAsyncTaskProgress.value), 0), 100)
 })
 
 const activeAsyncTaskTitle = computed(() => {
@@ -107,6 +113,7 @@ const activeAsyncTaskTitle = computed(() => {
 const isRowBusy = (resumeId: number) => {
   return parsingResumeId.value === resumeId
     || analyzingResumeId.value === resumeId
+    || embeddingResumeId.value === resumeId
     || deletingResumeId.value === resumeId
     || (isActiveAsyncTaskRunning.value && activeAsyncTaskResumeId.value === resumeId)
 }
@@ -932,9 +939,65 @@ const resolveAsyncTaskStatusType = (status: string | null | undefined) => {
   return 'info'
 }
 
+const stopAsyncTaskProgressTimer = () => {
+  if (asyncTaskProgressTimer.value !== null) {
+    window.clearInterval(asyncTaskProgressTimer.value)
+    asyncTaskProgressTimer.value = null
+  }
+}
+
+const resolveProgressStep = (current: number) => {
+  if (current < 35) {
+    return 3
+  }
+  if (current < 70) {
+    return 2
+  }
+  return 1
+}
+
+const tickDisplayedAsyncTaskProgress = () => {
+  const task = activeAsyncTask.value
+  if (!task || !isActiveAsyncTaskRunning.value) {
+    stopAsyncTaskProgressTimer()
+    return
+  }
+
+  displayedAsyncTaskProgress.value = Math.min(
+    displayedAsyncTaskProgress.value + resolveProgressStep(displayedAsyncTaskProgress.value),
+    ASYNC_TASK_PROGRESS_CAP,
+  )
+}
+
+const startAsyncTaskProgressTimer = () => {
+  stopAsyncTaskProgressTimer()
+  asyncTaskProgressTimer.value = window.setInterval(tickDisplayedAsyncTaskProgress, ASYNC_TASK_PROGRESS_INTERVAL_MS)
+}
+
+const syncDisplayedAsyncTaskProgress = (task: AsyncTaskVO | null) => {
+  if (!task) {
+    displayedAsyncTaskProgress.value = 0
+    return
+  }
+
+  if (task.status === 'SUCCESS') {
+    stopAsyncTaskProgressTimer()
+    displayedAsyncTaskProgress.value = 100
+    return
+  }
+
+  if (task.status === 'FAILED' || task.status === 'CANCELLED') {
+    stopAsyncTaskProgressTimer()
+    return
+  }
+
+  startAsyncTaskProgressTimer()
+}
+
 const stopActiveAsyncTaskPolling = () => {
   activeAsyncTaskPolling.value?.stop()
   activeAsyncTaskPolling.value = null
+  stopAsyncTaskProgressTimer()
 }
 
 const clearAsyncTaskState = () => {
@@ -943,23 +1006,28 @@ const clearAsyncTaskState = () => {
   activeAsyncTaskResumeId.value = null
   asyncTaskError.value = null
   asyncTaskTimedOut.value = false
+  displayedAsyncTaskProgress.value = 0
 }
 
-const startResumeTaskPolling = (taskId: number, resumeId: number | null) => {
+const startResumeTaskPolling = (taskId: number, resumeId: number | null, initialTask?: AsyncTaskVO) => {
   stopActiveAsyncTaskPolling()
-  activeAsyncTask.value = null
+  activeAsyncTask.value = initialTask ?? null
   activeAsyncTaskResumeId.value = resumeId
   asyncTaskError.value = null
   asyncTaskTimedOut.value = false
+  displayedAsyncTaskProgress.value = 0
+  syncDisplayedAsyncTaskProgress(activeAsyncTask.value)
 
   activeAsyncTaskPolling.value = startAsyncTaskPolling({
     taskId,
     timeoutMs: RESUME_ASYNC_TASK_TIMEOUT_MS,
     onUpdate: (task) => {
       activeAsyncTask.value = task
+      syncDisplayedAsyncTaskProgress(task)
     },
     onSuccess: async (task) => {
       activeAsyncTask.value = task
+      syncDisplayedAsyncTaskProgress(task)
       ElMessage.success(task.resultSummary || '任务已完成')
 
       if (resumeId) {
@@ -975,23 +1043,28 @@ const startResumeTaskPolling = (taskId: number, resumeId: number | null) => {
     },
     onFailed: (task) => {
       activeAsyncTask.value = task
+      syncDisplayedAsyncTaskProgress(task)
       asyncTaskError.value = task.errorMessage || task.message || '任务执行失败'
       ElMessage.error(asyncTaskError.value)
     },
     onCancelled: (task) => {
       activeAsyncTask.value = task
+      syncDisplayedAsyncTaskProgress(task)
       asyncTaskError.value = task.message || '任务已取消'
       ElMessage.warning(asyncTaskError.value)
     },
     onTimeout: (task) => {
       if (task) {
         activeAsyncTask.value = task
+        syncDisplayedAsyncTaskProgress(task)
       }
+      stopAsyncTaskProgressTimer()
       asyncTaskTimedOut.value = true
       asyncTaskError.value = '任务仍在后台执行，请稍后刷新查看结果'
       ElMessage.warning(asyncTaskError.value)
     },
     onError: (error) => {
+      stopAsyncTaskProgressTimer()
       asyncTaskError.value = error instanceof Error ? error.message : '任务状态查询失败'
       ElMessage.error(asyncTaskError.value)
     },
@@ -1030,15 +1103,12 @@ const handleParse = async (resume: ResumeListItem) => {
   parsingResumeId.value = resume.id
 
   try {
-    parseResult.value = await parseResume(resume.id, { parseMode: selectedParseMode.value })
-    if (parseResult.value.parseStatus === 'FAILED') {
-      ElMessage.error(parseResult.value.errorMessage || '解析失败')
-    } else {
-      ElMessage.success('解析完成')
-      aiAnalysis.value = null
-    }
+    const task = await submitResumeParseTask(resume.id, { parseMode: selectedParseMode.value })
+    aiAnalysis.value = null
+    startResumeTaskPolling(task.taskId, resume.id, task)
+    ElMessage.success('简历解析任务已提交')
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '解析失败')
+    ElMessage.error(error instanceof Error ? error.message : '提交解析任务失败')
   } finally {
     parsingResumeId.value = null
   }
@@ -1089,18 +1159,27 @@ const handleAiAnalysis = async (resume: ResumeListItem) => {
   analyzingResumeId.value = resume.id
 
   try {
-    const triggerResult = await analyzeResume(resume.id)
-    aiAnalysis.value = await getResumeAiAnalysis(resume.id)
-
-    if (triggerResult.analysisStatus === 'FAILED') {
-      ElMessage.error(triggerResult.errorMessage || '简历诊断失败')
-    } else {
-      ElMessage.success('简历诊断完成')
-    }
+    const task = await submitResumeDiagnosisTask(resume.id)
+    startResumeTaskPolling(task.taskId, resume.id, task)
+    ElMessage.success('简历诊断任务已提交')
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '简历诊断失败')
+    ElMessage.error(error instanceof Error ? error.message : '提交简历诊断任务失败')
   } finally {
     analyzingResumeId.value = null
+  }
+}
+
+const handleEmbedding = async (resume: ResumeListItem) => {
+  embeddingResumeId.value = resume.id
+
+  try {
+    const task = await submitResumeEmbeddingTask(resume.id)
+    startResumeTaskPolling(task.taskId, resume.id, task)
+    ElMessage.success('简历向量生成任务已提交')
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '提交简历向量生成任务失败')
+  } finally {
+    embeddingResumeId.value = null
   }
 }
 
@@ -1319,7 +1398,7 @@ onUnmounted(() => {
             {{ formatDateTime(row.createdAt) }}
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="430" fixed="right">
+        <el-table-column label="操作" width="520" fixed="right">
           <template #default="{ row }: { row: ResumeListItem }">
             <div class="resume-actions">
               <el-button
@@ -1355,6 +1434,14 @@ onUnmounted(() => {
                 @click="loadAiAnalysis(row)"
               >
                 查看诊断
+              </el-button>
+              <el-button
+                size="small"
+                :disabled="isRowBusy(row.id)"
+                :loading="embeddingResumeId === row.id"
+                @click="handleEmbedding(row)"
+              >
+                生成向量
               </el-button>
               <el-button
                 size="small"

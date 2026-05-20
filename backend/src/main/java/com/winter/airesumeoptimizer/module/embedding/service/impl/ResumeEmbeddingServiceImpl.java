@@ -2,6 +2,7 @@ package com.winter.airesumeoptimizer.module.embedding.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.winter.airesumeoptimizer.common.exception.BusinessException;
+import com.winter.airesumeoptimizer.common.logging.LogSanitizer;
 import com.winter.airesumeoptimizer.infra.ai.AiClientException;
 import com.winter.airesumeoptimizer.infra.embedding.EmbeddingClientService;
 import com.winter.airesumeoptimizer.module.embedding.entity.ResumeEmbedding;
@@ -84,13 +85,13 @@ public class ResumeEmbeddingServiceImpl implements ResumeEmbeddingService {
                         embeddingRecord.getId(),
                         embeddingClientService.modelName(),
                         embeddingClientService.dimension(),
-                        truncateErrorMessage(exception.getMessage()),
+                        sanitizeAndTruncateErrorMessage(exception.getMessage()),
                         LocalDateTime.now());
                 log.warn("Resume embedding chunk failed: userId={}, resumeId={}, chunkIndex={}, reason={}",
                         userId,
                         resume.getId(),
                         index,
-                        exception.getMessage());
+                        LogSanitizer.sanitize(exception.getMessage()));
             }
         }
 
@@ -229,10 +230,11 @@ public class ResumeEmbeddingServiceImpl implements ResumeEmbeddingService {
                 .orElse("") + "]";
     }
 
-    private String truncateErrorMessage(String errorMessage) {
-        if (errorMessage == null || errorMessage.length() <= MAX_ERROR_MESSAGE_LENGTH) {
-            return errorMessage;
+    private String sanitizeAndTruncateErrorMessage(String errorMessage) {
+        String sanitized = LogSanitizer.sanitize(errorMessage);
+        if (sanitized == null || sanitized.length() <= MAX_ERROR_MESSAGE_LENGTH) {
+            return sanitized;
         }
-        return errorMessage.substring(0, MAX_ERROR_MESSAGE_LENGTH);
+        return sanitized.substring(0, MAX_ERROR_MESSAGE_LENGTH);
     }
 }

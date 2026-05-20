@@ -125,6 +125,35 @@ public class AsyncTaskServiceImpl implements AsyncTaskService {
         return toVO(task);
     }
 
+    @Override
+    public AsyncTaskVO findActiveTask(Long userId, AsyncTaskType taskType, String bizType, Long bizId) {
+        validateUserId(userId);
+        if (taskType == null) {
+            throw new BusinessException(400, "任务类型不能为空");
+        }
+
+        QueryWrapper<AsyncTask> queryWrapper = new QueryWrapper<AsyncTask>()
+                .eq("user_id", userId)
+                .eq("task_type", taskType.name())
+                .in("status", AsyncTaskStatus.PENDING.name(), AsyncTaskStatus.RUNNING.name())
+                .orderByDesc("created_at")
+                .last("LIMIT 1");
+        String normalizedBizType = normalizeBlank(bizType);
+        if (normalizedBizType == null) {
+            queryWrapper.isNull("biz_type");
+        } else {
+            queryWrapper.eq("biz_type", normalizedBizType);
+        }
+        if (bizId == null) {
+            queryWrapper.isNull("biz_id");
+        } else {
+            queryWrapper.eq("biz_id", bizId);
+        }
+
+        AsyncTask task = asyncTaskMapper.selectOne(queryWrapper);
+        return task == null ? null : toVO(task);
+    }
+
     private void updateTask(Long taskId, UpdateWrapper<AsyncTask> updateWrapper) {
         if (taskId == null) {
             throw new BusinessException(400, "任务 ID 不能为空");

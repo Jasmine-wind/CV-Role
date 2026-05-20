@@ -600,7 +600,7 @@ deploy/
 | 测试配置 | `application-test.yaml` 有测试默认值 | 测试环境可接受 |
 | 示例配置 | `.env.example` 使用占位符和本地默认值 | 可接受，但需要提醒部署时替换 |
 
-当前 `.env.example` 和 `docker-compose.yml` 中存在 `postgres`、`minioadmin` 等本地开发默认值。这些适合本地快速启动，但不能作为生产部署配置。后续 v3.7 需要整理生产 Profile 和部署环境变量清单。
+当前 `.env.example` 和 `docker-compose.yml` 已使用明显的本地占位值替代易被照抄的默认密码。这些配置仍只适合本地快速启动，不能作为生产部署配置。后续 v3.7 需要整理生产 Profile 和部署环境变量清单。
 
 ### 5. 日志与错误信息
 

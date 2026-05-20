@@ -56,6 +56,7 @@ public class SecurityConfig {
                                 "/swagger-ui/**",
                                 "/swagger-ui.html").permitAll()
                         .requestMatchers("/api/auth/register", "/api/auth/login").permitAll()
+                        .requestMatchers("/api/jobs/**").permitAll()
                         .requestMatchers(
                                 "/api/users/me",
                                 "/api/resumes/**",
@@ -64,7 +65,7 @@ public class SecurityConfig {
                                 "/api/history/**",
                                 "/api/tasks/**",
                                 "/api/job-descriptions/**").authenticated()
-                        .anyRequest().permitAll())
+                        .anyRequest().authenticated())
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
         return http.build();
     }

@@ -16,4 +16,6 @@ public interface AsyncTaskService {
     void markFailed(Long taskId, String errorCode, String errorMessage);
 
     AsyncTaskVO getTask(Long taskId, Long currentUserId);
+
+    AsyncTaskVO findActiveTask(Long userId, AsyncTaskType taskType, String bizType, Long bizId);
 }

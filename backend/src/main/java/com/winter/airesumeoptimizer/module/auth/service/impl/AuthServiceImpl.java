@@ -55,10 +55,10 @@ public class AuthServiceImpl implements AuthService {
 
         int rows = userMapper.insert(user);
         if (rows != 1 || user.getId() == null) {
-            log.warn("User register failed: username={}", requestDTO.getUsername());
+            log.warn("User register failed: accountType={}", resolveAccountType(requestDTO.getUsername()));
             throw new BusinessException(500, "注册失败，请稍后重试");
         }
-        log.info("User registered: userId={}, username={}", user.getId(), user.getUsername());
+        log.info("User registered: userId={}", user.getId());
         return user.getId();
     }
 
@@ -76,7 +76,7 @@ public class AuthServiceImpl implements AuthService {
         }
 
         String token = jwtTokenProvider.generateToken(user.getId(), user.getUsername());
-        log.info("User logged in: userId={}, username={}", user.getId(), user.getUsername());
+        log.info("User logged in: userId={}", user.getId());
         return LoginVO.builder()
                 .userId(user.getId())
                 .username(user.getUsername())

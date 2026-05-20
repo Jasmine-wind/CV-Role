@@ -1,6 +1,7 @@
 package com.winter.airesumeoptimizer.module.task.service.impl;
 
 import com.winter.airesumeoptimizer.common.exception.BusinessException;
+import com.winter.airesumeoptimizer.common.logging.LogSanitizer;
 import com.winter.airesumeoptimizer.infra.ai.AiClientException;
 import com.winter.airesumeoptimizer.infra.storage.FileStorageException;
 import com.winter.airesumeoptimizer.module.task.enums.AsyncTaskErrorCode;
@@ -27,7 +28,11 @@ public class AsyncTaskFailureHandlerImpl implements AsyncTaskFailureHandler {
     @Override
     public void markFailed(Long taskId, AsyncTaskErrorCode errorCode, Throwable exception) {
         AsyncTaskErrorCode resolvedCode = errorCode == null ? resolveErrorCode(exception) : errorCode;
-        log.warn("Async task failed, taskId={}, errorCode={}", taskId, resolvedCode.name(), exception);
+        log.warn("Async task failed, taskId={}, errorCode={}, exceptionType={}, message={}",
+                taskId,
+                resolvedCode.name(),
+                exception == null ? "unknown" : exception.getClass().getName(),
+                exception == null ? null : LogSanitizer.sanitize(exception.getMessage()));
         asyncTaskService.markFailed(taskId, resolvedCode.name(), resolvedCode.getUserMessage());
     }
 
@@ -76,6 +81,16 @@ public class AsyncTaskFailureHandlerImpl implements AsyncTaskFailureHandler {
 
         if (message.contains("文件") && (message.contains("解析") || message.contains("提取"))) {
             return AsyncTaskErrorCode.FILE_PARSE_FAILED;
+        }
+
+        if (message.contains("尚未解析")
+                || message.contains("解析未成功")
+                || message.contains("解析文本为空")) {
+            return AsyncTaskErrorCode.PARSE_RESULT_NOT_FOUND;
+        }
+
+        if (message.contains("Embedding") || message.contains("向量")) {
+            return AsyncTaskErrorCode.EMBEDDING_FAILED;
         }
 
         if (message.contains("JSON") || message.contains("格式") || message.contains("返回结果")) {

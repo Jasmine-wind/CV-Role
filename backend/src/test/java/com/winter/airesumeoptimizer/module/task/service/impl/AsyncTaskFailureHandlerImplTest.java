@@ -43,5 +43,9 @@ class AsyncTaskFailureHandlerImplTest {
                 .isEqualTo(AsyncTaskErrorCode.AI_JSON_PARSE_FAILED);
         assertThat(handler.resolveErrorCode(new BusinessException(401, "请先登录")))
                 .isEqualTo(AsyncTaskErrorCode.PERMISSION_DENIED);
+        assertThat(handler.resolveErrorCode(new BusinessException(400, "简历尚未解析，不能生成向量")))
+                .isEqualTo(AsyncTaskErrorCode.PARSE_RESULT_NOT_FOUND);
+        assertThat(handler.resolveErrorCode(new BusinessException(400, "向量生成失败")))
+                .isEqualTo(AsyncTaskErrorCode.EMBEDDING_FAILED);
     }
 }

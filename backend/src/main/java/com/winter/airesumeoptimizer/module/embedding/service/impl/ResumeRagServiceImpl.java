@@ -1,6 +1,7 @@
 package com.winter.airesumeoptimizer.module.embedding.service.impl;
 
 import com.winter.airesumeoptimizer.common.exception.BusinessException;
+import com.winter.airesumeoptimizer.common.logging.LogSanitizer;
 import com.winter.airesumeoptimizer.module.embedding.dto.RagContextDTO;
 import com.winter.airesumeoptimizer.module.embedding.service.ResumeRagService;
 import com.winter.airesumeoptimizer.module.embedding.service.SemanticMatchService;
@@ -32,7 +33,7 @@ public class ResumeRagServiceImpl implements ResumeRagService {
             return buildAvailableContext(result.getMatches());
         } catch (BusinessException exception) {
             if (exception.getCode() != null && exception.getCode() == 400) {
-                return unavailable(exception.getMessage());
+                return unavailable(LogSanitizer.sanitize(exception.getMessage()));
             }
             throw exception;
         }

@@ -3,6 +3,7 @@ package com.winter.airesumeoptimizer.module.resume.service.impl;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.winter.airesumeoptimizer.common.logging.LogSanitizer;
 import com.winter.airesumeoptimizer.infra.ai.AiClientService;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeAchievementDTO;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeDisplayModelDTO;
@@ -127,7 +128,9 @@ public class ResumeDisplayModelServiceImpl implements ResumeDisplayModelService 
             cache.put(cacheKey, copy(validated));
             return validated;
         } catch (RuntimeException exception) {
-            log.warn("Resume AI display model fallback: resumeId={}, reason={}", resumeId, exception.getMessage());
+            log.warn("Resume AI display model fallback: resumeId={}, reason={}",
+                    resumeId,
+                    LogSanitizer.sanitize(exception.getMessage()));
             ResumeDisplayModelDTO fallback = copy(ruleModel);
             applyDisplayMeta(fallback, "RULE", false, true, safeError(exception.getMessage()), elapsedMs(startedAt), false, "");
             return fallback;
@@ -148,7 +151,9 @@ public class ResumeDisplayModelServiceImpl implements ResumeDisplayModelService 
             applyDisplayMeta(cachedCopy, "AI", true, false, "", elapsedMs(startedAt), true, cacheKey);
             return cachedCopy;
         } catch (RuntimeException exception) {
-            log.warn("Resume cached AI display model ignored: resumeId={}, reason={}", resumeId, exception.getMessage());
+            log.warn("Resume cached AI display model ignored: resumeId={}, reason={}",
+                    resumeId,
+                    LogSanitizer.sanitize(exception.getMessage()));
             return null;
         }
     }
@@ -1167,7 +1172,7 @@ public class ResumeDisplayModelServiceImpl implements ResumeDisplayModelService 
         if (message == null || message.isBlank()) {
             return "AI 展示优化失败";
         }
-        String cleaned = message.replaceAll("\\s+", " ").strip();
+        String cleaned = LogSanitizer.sanitize(message).replaceAll("\\s+", " ").strip();
         return cleaned.length() > 140 ? cleaned.substring(0, 140) : cleaned;
     }
 

@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.winter.airesumeoptimizer.common.logging.LogSanitizer;
 import com.winter.airesumeoptimizer.infra.ai.AiClientService;
 import com.winter.airesumeoptimizer.module.resume.config.ResumeParseProperties;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeAiStructuredParseResultDTO;
@@ -131,12 +132,13 @@ public class ResumeAiStructuredParserImpl implements ResumeAiStructuredParser {
                     .qualityWarnings(validated.getQualityWarnings())
                     .build();
         } catch (JsonProcessingException exception) {
-            log.warn("Resume AI structured parse fallback: reason={}", exception.getMessage());
+            log.warn("Resume AI structured parse fallback: reason={}", LogSanitizer.sanitize(exception.getMessage()));
             return aiFallback("AI 结构化补全 JSON 解析失败：" + sanitizeErrorMessage(exception.getOriginalMessage()),
                     ruleStructuredContent, qualityWarnings, startedAt);
         } catch (RuntimeException exception) {
-            log.warn("Resume AI structured parse fallback: reason={}", exception.getMessage());
-            return aiFallback("AI 结构化补全失败：" + exception.getMessage(), ruleStructuredContent, qualityWarnings, startedAt);
+            log.warn("Resume AI structured parse fallback: reason={}", LogSanitizer.sanitize(exception.getMessage()));
+            return aiFallback("AI 结构化补全失败：" + sanitizeErrorMessage(exception.getMessage()),
+                    ruleStructuredContent, qualityWarnings, startedAt);
         }
     }
 
@@ -405,7 +407,7 @@ public class ResumeAiStructuredParserImpl implements ResumeAiStructuredParser {
         if (message == null || message.isBlank()) {
             return "unknown";
         }
-        String singleLine = message.replaceAll("\\s+", " ").strip();
+        String singleLine = LogSanitizer.sanitize(message).replaceAll("\\s+", " ").strip();
         if (singleLine.length() <= 120) {
             return singleLine;
         }

@@ -349,9 +349,10 @@ public class AiResumeSuggestionServiceImpl implements AiResumeSuggestionService 
     }
 
     private String truncateErrorMessage(String errorMessage) {
-        if (errorMessage == null || errorMessage.length() <= MAX_ERROR_MESSAGE_LENGTH) {
-            return errorMessage;
+        String sanitized = LogSanitizer.sanitize(errorMessage);
+        if (sanitized == null || sanitized.length() <= MAX_ERROR_MESSAGE_LENGTH) {
+            return sanitized;
         }
-        return errorMessage.substring(0, MAX_ERROR_MESSAGE_LENGTH);
+        return sanitized.substring(0, MAX_ERROR_MESSAGE_LENGTH);
     }
 }

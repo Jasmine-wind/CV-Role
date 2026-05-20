@@ -3,6 +3,8 @@ package com.winter.airesumeoptimizer.module.embedding.controller;
 import com.winter.airesumeoptimizer.common.result.Result;
 import com.winter.airesumeoptimizer.module.embedding.service.ResumeEmbeddingService;
 import com.winter.airesumeoptimizer.module.embedding.vo.ResumeEmbeddingSummaryVO;
+import com.winter.airesumeoptimizer.module.resume.service.ResumeAsyncTaskService;
+import com.winter.airesumeoptimizer.module.task.vo.AsyncTaskVO;
 import com.winter.airesumeoptimizer.security.AuthenticatedUser;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
@@ -24,9 +26,13 @@ import org.springframework.web.bind.annotation.RestController;
 public class ResumeEmbeddingController {
 
     private final ResumeEmbeddingService resumeEmbeddingService;
+    private final ResumeAsyncTaskService resumeAsyncTaskService;
 
-    public ResumeEmbeddingController(ResumeEmbeddingService resumeEmbeddingService) {
+    public ResumeEmbeddingController(
+            ResumeEmbeddingService resumeEmbeddingService,
+            ResumeAsyncTaskService resumeAsyncTaskService) {
         this.resumeEmbeddingService = resumeEmbeddingService;
+        this.resumeAsyncTaskService = resumeAsyncTaskService;
     }
 
     @PostMapping("/{resumeId}/embeddings")
@@ -37,6 +43,16 @@ public class ResumeEmbeddingController {
         AuthenticatedUser authenticatedUser = (AuthenticatedUser) authentication.getPrincipal();
         return Result.success("简历向量生成完成",
                 resumeEmbeddingService.generate(authenticatedUser.getUserId(), resumeId));
+    }
+
+    @PostMapping("/{resumeId}/embeddings/tasks")
+    @Operation(summary = "提交简历向量生成任务", description = "提交异步简历向量生成任务，前端通过任务 ID 轮询状态")
+    public Result<AsyncTaskVO> submitEmbeddingTask(
+            @PathVariable @Positive(message = "简历 ID 必须大于 0") Long resumeId,
+            Authentication authentication) {
+        AuthenticatedUser authenticatedUser = (AuthenticatedUser) authentication.getPrincipal();
+        return Result.success("简历向量生成任务已提交",
+                resumeAsyncTaskService.submitEmbeddingTask(authenticatedUser.getUserId(), resumeId));
     }
 
     @GetMapping("/{resumeId}/embeddings")

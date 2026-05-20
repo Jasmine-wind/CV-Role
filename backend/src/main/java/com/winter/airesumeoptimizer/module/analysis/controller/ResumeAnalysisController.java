@@ -20,6 +20,8 @@ import com.winter.airesumeoptimizer.module.analysis.vo.AiResumeSuggestionVO;
 import com.winter.airesumeoptimizer.module.analysis.vo.AiRewriteSuggestionVO;
 import com.winter.airesumeoptimizer.module.analysis.vo.ResumeAiAnalysisVO;
 import com.winter.airesumeoptimizer.module.analysis.vo.ResumeAiAnalysisTriggerVO;
+import com.winter.airesumeoptimizer.module.resume.service.ResumeAsyncTaskService;
+import com.winter.airesumeoptimizer.module.task.vo.AsyncTaskVO;
 import com.winter.airesumeoptimizer.security.AuthenticatedUser;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
@@ -49,18 +51,21 @@ public class ResumeAnalysisController {
     private final AiResumeSuggestionService aiResumeSuggestionService;
     private final AiRewriteSuggestionService aiRewriteSuggestionService;
     private final AnalysisVoAssembler analysisVoAssembler;
+    private final ResumeAsyncTaskService resumeAsyncTaskService;
 
     public ResumeAnalysisController(
             ResumeAnalysisService resumeAnalysisService,
             AiJobMatchService aiJobMatchService,
             AiResumeSuggestionService aiResumeSuggestionService,
             AiRewriteSuggestionService aiRewriteSuggestionService,
-            AnalysisVoAssembler analysisVoAssembler) {
+            AnalysisVoAssembler analysisVoAssembler,
+            ResumeAsyncTaskService resumeAsyncTaskService) {
         this.resumeAnalysisService = resumeAnalysisService;
         this.aiJobMatchService = aiJobMatchService;
         this.aiResumeSuggestionService = aiResumeSuggestionService;
         this.aiRewriteSuggestionService = aiRewriteSuggestionService;
         this.analysisVoAssembler = analysisVoAssembler;
+        this.resumeAsyncTaskService = resumeAsyncTaskService;
     }
 
     @PostMapping("/{id}/ai-analysis")
@@ -72,6 +77,16 @@ public class ResumeAnalysisController {
         ResumeAiAnalysis analysis = resumeAnalysisService.analyze(authenticatedUser.getUserId(), id);
         String message = "FAILED".equals(analysis.getAnalysisStatus()) ? "简历诊断失败" : "简历诊断完成";
         return Result.success(message, analysisVoAssembler.toResumeAiAnalysisTriggerVO(analysis));
+    }
+
+    @PostMapping("/{id}/diagnosis/tasks")
+    @Operation(summary = "提交简历诊断任务", description = "提交异步简历诊断任务，前端通过任务 ID 轮询状态")
+    public Result<AsyncTaskVO> submitDiagnosisTask(
+            @PathVariable @Positive(message = "简历 ID 必须大于 0") Long id,
+            Authentication authentication) {
+        AuthenticatedUser authenticatedUser = (AuthenticatedUser) authentication.getPrincipal();
+        return Result.success("简历诊断任务已提交",
+                resumeAsyncTaskService.submitDiagnosisTask(authenticatedUser.getUserId(), id));
     }
 
     @GetMapping("/{id}/ai-analysis")

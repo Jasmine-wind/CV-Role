@@ -2,11 +2,13 @@ package com.winter.airesumeoptimizer.module.resume.controller;
 
 import com.winter.airesumeoptimizer.common.result.Result;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeParseOptionsDTO;
+import com.winter.airesumeoptimizer.module.resume.service.ResumeAsyncTaskService;
 import com.winter.airesumeoptimizer.module.resume.service.ResumeService;
 import com.winter.airesumeoptimizer.module.resume.vo.ResumeDetailVO;
 import com.winter.airesumeoptimizer.module.resume.vo.ResumeListVO;
 import com.winter.airesumeoptimizer.module.resume.vo.ResumeParseResultVO;
 import com.winter.airesumeoptimizer.module.resume.vo.ResumeUploadVO;
+import com.winter.airesumeoptimizer.module.task.vo.AsyncTaskVO;
 import com.winter.airesumeoptimizer.security.AuthenticatedUser;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
@@ -34,9 +36,11 @@ import org.springframework.web.multipart.MultipartFile;
 public class ResumeController {
 
     private final ResumeService resumeService;
+    private final ResumeAsyncTaskService resumeAsyncTaskService;
 
-    public ResumeController(ResumeService resumeService) {
+    public ResumeController(ResumeService resumeService, ResumeAsyncTaskService resumeAsyncTaskService) {
         this.resumeService = resumeService;
+        this.resumeAsyncTaskService = resumeAsyncTaskService;
     }
 
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -74,6 +78,17 @@ public class ResumeController {
         ResumeParseResultVO result = resumeService.parse(authenticatedUser.getUserId(), id, options);
         String message = "FAILED".equals(result.getParseStatus()) ? "解析失败" : "解析完成";
         return Result.success(message, result);
+    }
+
+    @PostMapping("/{id}/parse/tasks")
+    @Operation(summary = "提交简历解析任务", description = "提交异步简历解析任务，前端通过任务 ID 轮询状态")
+    public Result<AsyncTaskVO> submitParseTask(
+            @PathVariable @Positive(message = "简历 ID 必须大于 0") Long id,
+            @RequestBody(required = false) ResumeParseOptionsDTO options,
+            Authentication authentication) {
+        AuthenticatedUser authenticatedUser = (AuthenticatedUser) authentication.getPrincipal();
+        return Result.success("简历解析任务已提交",
+                resumeAsyncTaskService.submitParseTask(authenticatedUser.getUserId(), id, options));
     }
 
     @GetMapping("/{id}/parse-result")

@@ -50,7 +50,11 @@ import com.winter.airesumeoptimizer.module.resume.service.ResumeTextQualityCheck
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeTextSectionDTO;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeTextQualityResultDTO;
 import com.winter.airesumeoptimizer.module.resume.entity.ResumeParseResult;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.util.List;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.mock.web.MockMultipartFile;
@@ -112,7 +116,7 @@ class ResumeServiceImplTest {
                 "file",
                 "resume.pdf",
                 "application/pdf",
-                "pdf-content".getBytes());
+                pdfBytes());
         StoredFile storedFile = new StoredFile(
                 "resumes/1/resume.pdf",
                 "resume.pdf",
@@ -200,7 +204,7 @@ class ResumeServiceImplTest {
                 "file",
                 "resume.pdf",
                 "application/pdf",
-                "too-large".getBytes());
+                pdfBytes());
 
         assertThatThrownBy(() -> limitedService.upload(1L, file))
                 .isInstanceOf(BusinessException.class)
@@ -215,7 +219,7 @@ class ResumeServiceImplTest {
                 "file",
                 "resume.docx",
                 "application/pdf",
-                "docx-content".getBytes());
+                docxBytes());
 
         assertThatThrownBy(() -> service.upload(1L, file))
                 .isInstanceOf(BusinessException.class)
@@ -230,7 +234,7 @@ class ResumeServiceImplTest {
                 "file",
                 "resume.docx",
                 "application/octet-stream",
-                "docx-content".getBytes());
+                docxBytes());
         StoredFile storedFile = new StoredFile(
                 "resumes/1/resume.docx",
                 "resume.docx",
@@ -258,7 +262,7 @@ class ResumeServiceImplTest {
                 "file",
                 "resume.pdf",
                 "application/pdf; charset=binary",
-                "pdf-content".getBytes());
+                pdfBytes());
         StoredFile storedFile = new StoredFile(
                 "resumes/1/resume.pdf",
                 "resume.pdf",
@@ -285,7 +289,7 @@ class ResumeServiceImplTest {
                 "file",
                 "resume.pdf",
                 "application/pdf",
-                "pdf-content".getBytes());
+                pdfBytes());
         StoredFile storedFile = new StoredFile(
                 "resumes/1/resume.pdf",
                 "resume.pdf",
@@ -301,6 +305,21 @@ class ResumeServiceImplTest {
                 .hasMessage("简历元数据保存失败");
 
         verify(fileStorageService).delete("resumes/1/resume.pdf");
+    }
+
+    @Test
+    void uploadShouldRejectContentSignatureMismatch() {
+        MockMultipartFile file = new MockMultipartFile(
+                "file",
+                "resume.pdf",
+                "application/pdf",
+                "not-a-pdf".getBytes());
+
+        assertThatThrownBy(() -> service.upload(1L, file))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("文件内容与扩展名不匹配");
+
+        verify(fileStorageService, never()).store(any(StoreFileCommand.class));
     }
 
     @Test
@@ -323,6 +342,27 @@ class ResumeServiceImplTest {
         verify(resumeParseResultMapper).delete(any(Wrapper.class));
         verify(resumeMapper).deleteById(100L);
         verify(fileStorageService).delete("resumes/1/demo.pdf");
+    }
+
+    private byte[] pdfBytes() {
+        return "%PDF-1.4\nresume-content".getBytes();
+    }
+
+    private byte[] docxBytes() {
+        try {
+            ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+            try (ZipOutputStream zipOutputStream = new ZipOutputStream(outputStream)) {
+                zipOutputStream.putNextEntry(new ZipEntry("[Content_Types].xml"));
+                zipOutputStream.write("<Types/>".getBytes());
+                zipOutputStream.closeEntry();
+                zipOutputStream.putNextEntry(new ZipEntry("word/document.xml"));
+                zipOutputStream.write("<document/>".getBytes());
+                zipOutputStream.closeEntry();
+            }
+            return outputStream.toByteArray();
+        } catch (IOException exception) {
+            throw new IllegalStateException("Failed to create test docx bytes", exception);
+        }
     }
 
     @Test

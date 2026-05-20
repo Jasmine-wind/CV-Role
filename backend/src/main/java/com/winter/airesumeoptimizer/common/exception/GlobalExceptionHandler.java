@@ -34,7 +34,7 @@ public class GlobalExceptionHandler {
                 exception.getCode(),
                 request.getRequestURI(),
                 LogSanitizer.sanitize(exception.getMessage()));
-        return Result.failure(exception.getCode(), exception.getMessage(), request.getRequestURI());
+        return Result.failure(exception.getCode(), LogSanitizer.sanitize(exception.getMessage()), request.getRequestURI());
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)

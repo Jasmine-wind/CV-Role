@@ -1,4 +1,5 @@
 import request from '@/api/request'
+import type { AsyncTaskVO } from '@/types/task'
 import type {
   ResumeAiAnalysis,
   ResumeAiAnalysisTrigger,
@@ -33,6 +34,10 @@ export const parseResume = (id: number, options?: ResumeParseOptions) => {
   })
 }
 
+export const submitResumeParseTask = (id: number, options?: ResumeParseOptions) => {
+  return request.post<AsyncTaskVO>(`/api/resumes/${id}/parse/tasks`, options ?? {})
+}
+
 export const getResumeParseResult = (id: number) => {
   return request.get<ResumeParseResult>(`/api/resumes/${id}/parse-result`)
 }
@@ -43,8 +48,16 @@ export const analyzeResume = (id: number) => {
   })
 }
 
+export const submitResumeDiagnosisTask = (id: number) => {
+  return request.post<AsyncTaskVO>(`/api/resumes/${id}/diagnosis/tasks`)
+}
+
 export const getResumeAiAnalysis = (id: number) => {
   return request.get<ResumeAiAnalysis>(`/api/resumes/${id}/ai-analysis`)
+}
+
+export const submitResumeEmbeddingTask = (id: number) => {
+  return request.post<AsyncTaskVO>(`/api/resumes/${id}/embeddings/tasks`)
 }
 
 export const deleteResume = (id: number) => {

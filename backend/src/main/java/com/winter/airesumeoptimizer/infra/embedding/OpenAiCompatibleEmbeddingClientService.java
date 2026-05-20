@@ -2,6 +2,7 @@ package com.winter.airesumeoptimizer.infra.embedding;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.winter.airesumeoptimizer.common.logging.LogSanitizer;
 import com.winter.airesumeoptimizer.infra.ai.AiClientException;
 import java.io.IOException;
 import java.net.URI;
@@ -77,7 +78,7 @@ public class OpenAiCompatibleEmbeddingClientService implements EmbeddingClientSe
         } catch (IOException exception) {
             log.warn("Embedding request IO failed: model={}, message={}",
                     properties.getModel(),
-                    exception.getMessage());
+                    LogSanitizer.sanitize(exception.getMessage()));
             throw new AiClientException("Embedding 调用失败，请检查网络或 base-url 配置", exception);
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();

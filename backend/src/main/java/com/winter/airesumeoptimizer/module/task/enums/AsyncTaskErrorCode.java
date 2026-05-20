@@ -8,6 +8,7 @@ public enum AsyncTaskErrorCode {
     AI_RESPONSE_INVALID("AI 返回结果格式异常，请稍后重试"),
     AI_JSON_PARSE_FAILED("AI 返回结果解析失败，请稍后重试"),
     AI_SERVICE_UNAVAILABLE("AI 服务暂时不可用，请稍后重试"),
+    PARSE_RESULT_NOT_FOUND("请先完成简历解析后再生成向量"),
     EMBEDDING_FAILED("向量生成失败，请稍后重试"),
     DATABASE_ERROR("结果保存失败，请稍后重试"),
     PERMISSION_DENIED("无权限执行该任务"),

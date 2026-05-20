@@ -2,6 +2,7 @@ package com.winter.airesumeoptimizer.infra.ai;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.winter.airesumeoptimizer.common.logging.LogSanitizer;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -74,7 +75,7 @@ public class OpenAiCompatibleAiClientService implements AiClientService {
         } catch (IOException exception) {
             log.warn("AI completion request IO failed: model={}, message={}",
                     properties.getModel(),
-                    exception.getMessage());
+                    LogSanitizer.sanitize(exception.getMessage()));
             throw new AiClientException("AI 调用失败，请检查网络或 base-url 配置", exception);
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();

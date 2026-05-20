@@ -156,41 +156,13 @@ backend/src/main/resources/application-dev.yaml
 backend/src/main/resources/application-test.yaml
 ```
 
-后端会读取仓库根目录 `.env` 或 `backend/.env`。本地可参考 `.env.example` 在仓库根目录创建 `.env`：
-
-```properties
-SERVER_PORT=8080
-POSTGRES_DB=ai_resume_optimizer
-POSTGRES_USER=dawn
-POSTGRES_PASSWORD=postgres
-POSTGRES_PORT=5433
-DB_URL=jdbc:postgresql://localhost:5432/ai_resume_optimizer
-DB_USERNAME=dawn
-DB_PASSWORD=postgres
-JWT_SECRET=change-this-to-a-long-random-secret-at-least-32-chars
-DASHSCOPE_API_KEY=your_api_key
-OPENAI_BASE_URL=https://api.deepseek.com
-OPENAI_MODEL=deepseek-v4-flash
-OPENAI_TEMPERATURE=0.2
-OPENAI_TIMEOUT_SECONDS=90
-OPENAI_MAX_TOKENS=4000
-EMBEDDING_BASE_URL=
-EMBEDDING_API_KEY=
-EMBEDDING_MODEL=Qwen3-Embedding-0.6B
-EMBEDDING_DIMENSION=1024
-EMBEDDING_TIMEOUT=30
-EMBEDDING_MAX_INPUT_LENGTH=8192
-LOCAL_STORAGE_BASE_DIR=uploads
-MINIO_ROOT_USER=minioadmin
-MINIO_ROOT_PASSWORD=minioadmin
-MINIO_API_PORT=9000
-MINIO_CONSOLE_PORT=9001
-```
+后端会读取仓库根目录 `.env` 或 `backend/.env`。本地可参考 `.env.example` 在仓库根目录创建 `.env`，并替换数据库密码、`JWT_SECRET`、AI API Key、Embedding API Key 和 MinIO 密钥。
 
 说明：
 
 - 不要提交 `.env`。
-- `.env.example` 只保留占位符，可以提交。
+- `.env.example` 只保留本地示例值和占位符，可以提交。
+- 示例密码仅用于本地开发，不要用于共享环境或生产部署。
 - `DASHSCOPE_API_KEY` 当前被用作 AI 客户端 API Key 环境变量名。
 - AI base URL 可通过 `OPENAI_BASE_URL` 覆盖，默认是 `https://api.deepseek.com`。
 - Embedding 使用独立的 `EMBEDDING_*` 配置；当前默认模型为 `Qwen3-Embedding-0.6B`，默认向量维度为 `1024`。
@@ -252,7 +224,7 @@ MinIO 控制台: http://localhost:9001
 ```properties
 POSTGRES_DB=ai_resume_optimizer
 POSTGRES_USER=dawn
-POSTGRES_PASSWORD=postgres
+POSTGRES_PASSWORD=change-me-local-postgres-password
 ```
 
 如果不使用 Compose，也可以手动创建数据库：
@@ -266,7 +238,7 @@ createdb ai_resume_optimizer
 ```properties
 DB_URL=jdbc:postgresql://localhost:5432/ai_resume_optimizer
 DB_USERNAME=dawn
-DB_PASSWORD=postgres
+DB_PASSWORD=change-me-local-postgres-password
 ```
 
 启动后端后，Flyway 会自动执行迁移脚本：
