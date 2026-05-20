@@ -1,16 +1,21 @@
-# 部署检查清单
+# AI 简历优化与岗位匹配系统部署文档
 
-本文档用于记录当前项目从本地开发迁移到服务器部署前需要确认的事项。当前版本目标是让项目具备“可部署准备”，不是完成完整生产级高可用部署。
+本文档用于记录当前项目的单机部署准备流程，覆盖环境准备、环境变量、构建、启动、Nginx 反向代理、部署后验证和回滚。
 
-## 1. 当前部署边界
+当前版本目标是形成可执行的部署 runbook，不代表已经完成真实服务器上线、HTTPS、应用容器化或生产级高可用。
 
-当前推荐部署形态：
+## 1. 部署目标
+
+推荐部署形态：
 
 ```text
-用户浏览器 -> Nginx -> Vue 静态文件
-用户浏览器 -> Nginx /api -> Spring Boot 后端 -> PostgreSQL
-                                           -> 本地文件存储目录
-                                           -> AI / Embedding 服务
+用户浏览器
+  -> Nginx
+      -> Vue 静态文件
+      -> /api/ 反向代理到 Spring Boot 后端
+            -> PostgreSQL
+            -> 本地文件存储目录
+            -> AI / Embedding 服务
 ```
 
 当前已准备：
@@ -20,76 +25,208 @@
 - 环境变量示例位于 `.env.example`。
 - 前端环境变量示例位于 `web/.env.example`。
 - 本地依赖 Compose 位于 `docker-compose.yml`。
-- Nginx 反向代理草案位于 `deploy/nginx/ai-resume.conf`。
+- Nginx 草案位于 `deploy/nginx/ai-resume.conf`。
 
-当前未完成：
+当前边界：
 
 - `docker-compose.yml` 只编排 PostgreSQL、Redis、MinIO 等依赖，不包含后端和前端应用镜像。
-- 后端上传链路当前仍使用本地文件存储，MinIO 只是部署预留。
+- 后端当前推荐用 jar 方式启动。
+- 前端当前推荐构建为静态文件后交给 Nginx 托管。
+- 后端上传链路当前仍使用 local 存储，MinIO 只是后续对象存储接入预留。
 - Redis 当前只作为依赖预留，后端运行路径尚未依赖 Redis。
-- HTTPS、正式域名、证书自动续期和后端 systemd 服务不在本轮实现范围。
-- `LOG_FILE_PATH` 已作为环境变量预留，当前后端主要完成日志级别环境化。
 
-## 2. 服务器准备清单
+## 2. 服务器环境要求
 
-- [ ] Linux 服务器已准备。
-- [ ] 已安装 Java 21。
-- [ ] 如需在服务器构建前端，已安装 Node.js 和 npm。
-- [ ] 已安装 Docker / Podman。
-- [ ] 已安装 Docker Compose / Podman Compose。
-- [ ] 已准备 PostgreSQL，或使用仓库 Compose 中的 PostgreSQL。
-- [ ] 已准备 Nginx。
-- [ ] 域名已解析到服务器，可选。
-- [ ] HTTPS 证书已准备，可选。
+基础要求：
+
+- [ ] Linux 服务器。
+- [ ] Java 21。
+- [ ] Git。
+- [ ] PostgreSQL 16，或使用仓库 Compose 中的 PostgreSQL。
+- [ ] Nginx。
 - [ ] 防火墙开放 `80` / `443`。
 - [ ] 后端端口 `8080` 不直接暴露公网，建议仅允许本机或内网访问。
 - [ ] 上传文件目录使用服务器持久化目录。
 - [ ] 数据库数据目录或 volume 可持久化。
-- [ ] 日志目录按服务器策略持久化。
 
-## 3. 环境变量清单
+可选要求：
 
-部署前从 `.env.example` 复制并创建服务器私有 `.env`，不要提交 `.env`。
+- [ ] Node.js 和 npm，用于在服务器构建前端。
+- [ ] Docker / Podman。
+- [ ] Docker Compose / Podman Compose。
+- [ ] Redis。
+- [ ] MinIO。
+- [ ] 域名。
+- [ ] HTTPS 证书。
 
-必须确认：
-
-- [ ] `SPRING_PROFILES_ACTIVE=prod`
-- [ ] `SERVER_PORT=8080`
-- [ ] `POSTGRES_DB` 已设置。
-- [ ] `POSTGRES_USER` 已设置。
-- [ ] `POSTGRES_PASSWORD` 已替换为强密码。
-- [ ] `DB_URL` 指向生产 PostgreSQL。
-- [ ] `DB_USERNAME` 与生产数据库用户一致。
-- [ ] `DB_PASSWORD` 与生产数据库密码一致。
-- [ ] `JWT_SECRET` 已替换为足够长的强随机值。
-- [ ] `JWT_EXPIRATION_MINUTES` 符合部署预期。
-- [ ] `AI_BASE_URL` 已设置。
-- [ ] `AI_API_KEY` 已设置，且不是示例值。
-- [ ] `AI_MODEL` 已设置。
-- [ ] `AI_TIMEOUT_SECONDS` 已按慢请求场景设置。
-- [ ] `AI_MAX_TOKENS` 已按模型输出需要设置。
-- [ ] `EMBEDDING_ENABLED` 按实际部署能力设置。
-- [ ] 如果启用向量能力，`EMBEDDING_BASE_URL` / `EMBEDDING_API_KEY` / `EMBEDDING_MODEL` / `EMBEDDING_DIMENSION` 已确认。
-- [ ] `APP_STORAGE_TYPE=local`
-- [ ] `APP_STORAGE_LOCAL_BASE_DIR` 指向服务器持久化目录。
-- [ ] `LOG_LEVEL_ROOT` 和 `LOG_LEVEL_APP` 符合生产环境预期。
-
-前端确认：
-
-- [ ] 如果前端通过 Nginx 同域代理后端，生产构建使用 `VITE_API_BASE_URL=/api`。
-- [ ] 如果前端和后端不同域，`VITE_API_BASE_URL` 指向后端公开代理地址。
-- [ ] 不在前端环境变量中放置后端密钥、AI Key 或数据库密码。
-
-## 4. 构建命令
+## 3. 必要软件
 
 后端：
+
+```text
+Java 21
+Maven Wrapper，仓库已提供 backend/mvnw
+PostgreSQL 16
+```
+
+前端：
+
+```text
+Node.js
+npm
+Nginx
+```
+
+依赖编排：
+
+```text
+Docker / Podman
+Docker Compose / Podman Compose
+```
+
+说明：
+
+- 如果前端在本地构建后再发布到服务器，服务器不一定需要 Node.js。
+- 如果 PostgreSQL 使用外部数据库，服务器不一定需要启动 Compose 中的 PostgreSQL。
+- 如果不使用 MinIO，当前上传链路继续依赖 `APP_STORAGE_LOCAL_BASE_DIR` 指向的本地持久化目录。
+
+## 4. 环境变量配置
+
+部署前从 `.env.example` 复制服务器私有 `.env`，并替换所有生产值。不要提交 `.env`。
+
+应用基础：
+
+```env
+SPRING_PROFILES_ACTIVE=prod
+SERVER_PORT=8080
+```
+
+数据库：
+
+```env
+POSTGRES_DB=ai_resume_optimizer
+POSTGRES_USER=your_db_user
+POSTGRES_PASSWORD=change-to-strong-password
+DB_URL=jdbc:postgresql://127.0.0.1:5432/ai_resume_optimizer
+DB_USERNAME=your_db_user
+DB_PASSWORD=change-to-strong-password
+```
+
+JWT：
+
+```env
+JWT_SECRET=change-to-a-long-random-secret-at-least-32-chars
+JWT_EXPIRATION_MINUTES=1440
+```
+
+AI Chat：
+
+```env
+AI_BASE_URL=https://api.example.com
+AI_API_KEY=change-to-real-ai-api-key
+AI_MODEL=your-model-name
+AI_TIMEOUT_SECONDS=120
+AI_MAX_TOKENS=4096
+```
+
+Embedding：
+
+```env
+EMBEDDING_ENABLED=true
+EMBEDDING_BASE_URL=https://embedding.example.com/v1
+EMBEDDING_API_KEY=change-to-real-embedding-api-key
+EMBEDDING_MODEL=your-embedding-model
+EMBEDDING_DIMENSION=1024
+```
+
+如果暂不启用向量能力，应显式关闭或确保相关页面能接受失败提示：
+
+```env
+EMBEDDING_ENABLED=false
+```
+
+文件存储：
+
+```env
+APP_STORAGE_TYPE=local
+APP_STORAGE_LOCAL_BASE_DIR=/data/ai-resume/uploads
+```
+
+日志：
+
+```env
+LOG_LEVEL_ROOT=info
+LOG_LEVEL_APP=info
+```
+
+前端：
+
+```env
+VITE_API_BASE_URL=/api
+```
+
+生产环境必须确认：
+
+- [ ] `SPRING_PROFILES_ACTIVE=prod`。
+- [ ] `JWT_SECRET` 已替换为强随机值。
+- [ ] `POSTGRES_PASSWORD` / `DB_PASSWORD` 已替换为强密码。
+- [ ] `AI_API_KEY` 不是示例值。
+- [ ] `APP_STORAGE_LOCAL_BASE_DIR` 指向服务器持久化目录。
+- [ ] 前端环境变量不包含后端密钥、数据库密码或 AI Key。
+
+## 5. 数据库准备
+
+方式 A：使用 Compose 中的 PostgreSQL。
+
+```bash
+docker compose --env-file .env up -d postgres
+```
+
+方式 B：使用已有 PostgreSQL。
+
+需要提前创建：
+
+```text
+database: ai_resume_optimizer
+user:     与 DB_USERNAME 一致
+password: 与 DB_PASSWORD 一致
+```
+
+项目使用 Flyway 管理数据库迁移。后端启动时会按配置执行迁移，生产部署前应先备份数据库。
+
+检查项：
+
+- [ ] PostgreSQL 可以从后端所在机器访问。
+- [ ] `DB_URL` 指向正确地址。
+- [ ] 数据库用户有建表、迁移和读写权限。
+- [ ] 数据库数据目录或 volume 已持久化。
+
+## 6. 后端构建与启动
+
+构建：
 
 ```bash
 cd backend
 ./mvnw clean package -DskipTests
 ```
 
-前端：
+启动：
+
+```bash
+cd backend
+SPRING_PROFILES_ACTIVE=prod java -jar target/*.jar
+```
+
+建议：
+
+- 在服务器上用 systemd 或进程管理工具托管后端进程。
+- 后端监听 `8080` 即可，公网访问通过 Nginx `/api/` 代理。
+- 不要把 `8080` 直接开放到公网。
+- 启动日志中不应出现 JWT Secret、AI Key、数据库密码或本地敏感路径。
+
+## 7. 前端构建与部署
+
+如果在服务器构建：
 
 ```bash
 cd web
@@ -97,15 +234,33 @@ npm install
 npm run build
 ```
 
-说明：
+构建产物：
 
-- 后端构建产物位于 `backend/target/`。
-- 前端构建产物位于 `web/dist/`。
-- `target/` 和 `dist/` 属于构建产物，不提交 Git。
+```text
+web/dist/
+```
 
-## 5. 启动命令
+部署方式：
 
-启动依赖服务：
+```text
+将 web/dist/ 内容发布到 Nginx 配置中的 root 目录。
+```
+
+如果使用同域 Nginx 代理，生产构建建议：
+
+```env
+VITE_API_BASE_URL=/api
+```
+
+检查项：
+
+- [ ] 首页可以打开。
+- [ ] 刷新前端二级路由不返回 404。
+- [ ] 浏览器 Network 中 API 请求走 `/api/`。
+
+## 8. Docker Compose 部署方式
+
+当前 Compose 只用于依赖服务：
 
 ```bash
 docker compose --env-file .env up -d postgres redis minio
@@ -117,28 +272,121 @@ docker compose --env-file .env up -d postgres redis minio
 podman compose --env-file .env up -d postgres redis minio
 ```
 
-启动后端：
+检查配置展开：
 
 ```bash
-cd backend
-SPRING_PROFILES_ACTIVE=prod java -jar target/*.jar
+docker compose --env-file .env.example config
 ```
 
-前端静态文件：
+停止依赖服务：
+
+```bash
+docker compose down
+```
+
+清理 volume 会删除本地数据，谨慎使用：
+
+```bash
+docker compose down -v
+```
+
+说明：
+
+- `postgres` 使用 `pgvector/pgvector:pg16`。
+- `redis` 当前是部署预留，后端运行路径尚未依赖 Redis。
+- `minio` 当前是对象存储预留，后端上传链路尚未切换到 MinIO。
+- 当前没有后端 / 前端应用镜像，不能用 Compose 一键启动完整系统。
+
+## 9. Nginx 反向代理
+
+草案路径：
 
 ```text
-将 web/dist/ 发布到 Nginx 配置中的 root 目录。
+deploy/nginx/ai-resume.conf
 ```
 
-Nginx：
+部署前必须替换：
 
-- 参考 `deploy/nginx/ai-resume.conf`。
-- 替换 `server_name`。
-- 替换前端静态文件 `root`。
-- 确认 `/api/` 代理到后端本机地址。
-- 如需 HTTPS，单独增加证书和 `listen 443 ssl` 配置。
+- `server_name example.com`
+- `root /var/www/ai-resume-optimizer/web`
+- 如启用 HTTPS，补充证书路径和 `listen 443 ssl`
 
-## 6. 部署后手动验收
+关键要求：
+
+- `/` 托管前端静态文件。
+- Vue Router history 模式使用 `try_files $uri $uri/ /index.html`。
+- `/api/` 代理到 `http://127.0.0.1:8080/api/`。
+- `client_max_body_size` 不低于后端上传限制。
+- AI 慢请求场景下，代理超时不要过短。
+
+如果服务器已安装 Nginx，可检查配置：
+
+```bash
+nginx -t
+```
+
+重新加载：
+
+```bash
+nginx -s reload
+```
+
+## 10. 文件存储目录
+
+当前上传链路使用 local 存储。
+
+生产环境建议：
+
+```text
+/data/ai-resume/uploads
+```
+
+配置：
+
+```env
+APP_STORAGE_TYPE=local
+APP_STORAGE_LOCAL_BASE_DIR=/data/ai-resume/uploads
+```
+
+检查项：
+
+- [ ] 目录存在。
+- [ ] 后端进程用户有读写权限。
+- [ ] 目录不在临时目录中。
+- [ ] 目录有备份策略。
+- [ ] 删除简历后相关文件访问按预期失效。
+
+## 11. AI / Embedding 服务配置
+
+AI Chat 用于简历诊断、岗位解析、匹配分析、优化建议和局部改写等已有能力。
+
+必须配置：
+
+```env
+AI_BASE_URL=
+AI_API_KEY=
+AI_MODEL=
+```
+
+Embedding 用于向量生成和后续检索增强相关能力。当前项目中向量能力不是所有主流程的硬阻塞项，但如果开启，需要确认：
+
+```env
+EMBEDDING_ENABLED=true
+EMBEDDING_BASE_URL=
+EMBEDDING_API_KEY=
+EMBEDDING_MODEL=
+EMBEDDING_DIMENSION=
+```
+
+检查项：
+
+- [ ] AI base URL 不重复拼接 endpoint。
+- [ ] API Key 不写入代码或前端环境变量。
+- [ ] 超时时间足够覆盖慢请求。
+- [ ] Embedding 维度与数据库向量字段一致。
+- [ ] 失败信息不会把密钥、请求头或完整服务端路径返回给前端。
+
+## 12. 部署后验证
 
 基础检查：
 
@@ -161,8 +409,8 @@ Nginx：
 - [ ] 用户粘贴 JD 后可以解析目标岗位。
 - [ ] 简历与目标岗位匹配分析正常。
 - [ ] 岗位优化建议正常。
-- [ ] 局部改写仍只针对用户选中片段。
-- [ ] 历史记录只查询已有 AI 结果，不触发新的 AI 生成。
+- [ ] 局部改写只针对用户选中片段。
+- [ ] AI 结果回看只查询历史结果，不触发新的 AI 生成。
 
 持久化检查：
 
@@ -179,7 +427,7 @@ Nginx：
 - [ ] Nginx 上传大小限制不低于后端上传限制。
 - [ ] 错误提示不暴露数据库、JWT、AI Key 或本地绝对路径。
 
-## 7. 回滚清单
+## 13. 回滚方案
 
 部署前保留：
 
@@ -198,9 +446,56 @@ Nginx：
 4. 如涉及数据库迁移失败，恢复数据库备份。
 5. 如涉及上传文件异常，恢复上传目录备份。
 6. 重新加载 Nginx。
-7. 按部署后手动验收清单重新验证主流程。
+7. 按部署后验证清单重新验证主流程。
 
-## 8. 后续待补
+## 14. 常见问题
+
+### 前端页面能打开，但 API 请求失败
+
+检查：
+
+- `VITE_API_BASE_URL` 是否为 `/api` 或正确后端代理地址。
+- Nginx 是否包含 `/api/` 代理。
+- 后端是否在 `8080` 启动。
+- 浏览器 Network 中请求路径是否正确。
+
+### 刷新前端页面返回 404
+
+检查 Nginx 是否配置：
+
+```nginx
+try_files $uri $uri/ /index.html;
+```
+
+### 后端启动失败，提示数据库连接失败
+
+检查：
+
+- `DB_URL`、`DB_USERNAME`、`DB_PASSWORD` 是否正确。
+- PostgreSQL 是否启动。
+- 数据库用户是否有权限。
+- 服务器防火墙或容器网络是否允许访问。
+
+### 上传失败
+
+检查：
+
+- `APP_STORAGE_LOCAL_BASE_DIR` 是否存在。
+- 后端进程用户是否有写权限。
+- Nginx `client_max_body_size` 是否低于后端上传限制。
+- 上传文件扩展名、MIME 和真实内容是否匹配。
+
+### AI 请求超时或失败
+
+检查：
+
+- `AI_BASE_URL` 是否为 base URL，不要重复包含 `/chat/completions`。
+- `AI_API_KEY` 是否有效。
+- `AI_MODEL` 是否存在。
+- `AI_TIMEOUT_SECONDS` 是否过短。
+- Nginx proxy timeout 是否过短。
+
+## 15. 后续待补
 
 - 后端应用容器镜像和前端静态资源镜像。
 - systemd 服务文件或 Compose 应用服务。
