@@ -1,7 +1,13 @@
 <script setup lang="ts">
-import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, onMounted, ref } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { useRoute, useRouter } from 'vue-router'
+import BaseCard from '@/components/common/BaseCard.vue'
+import EmptyState from '@/components/common/EmptyState.vue'
+import ErrorState from '@/components/common/ErrorState.vue'
+import PageHeader from '@/components/common/PageHeader.vue'
+import StatusTag from '@/components/common/StatusTag.vue'
+import JobParseResult from '@/components/job/JobParseResult.vue'
 import { deleteJobDescription, getJobDescriptionDetail, parseJobDescription } from '@/api/job-description'
 import type { JobDescriptionDetail, JobDescriptionStructuredContent } from '@/types/job-description'
 
@@ -36,6 +42,16 @@ const structuredContent = computed<JobDescriptionStructuredContent | null>(() =>
   }
 })
 
+const sourceTypeText = computed(() => {
+  if (detail.value?.sourceType === 'PRESET') {
+    return '系统预置参考'
+  }
+  if (detail.value?.sourceType === 'CRAWLED') {
+    return '外部采集'
+  }
+  return '用户粘贴 JD'
+})
+
 const formatDateTime = (value: string | null) => {
   if (!value) {
     return '-'
@@ -43,36 +59,6 @@ const formatDateTime = (value: string | null) => {
 
   return value.replace('T', ' ').slice(0, 19)
 }
-
-const statusType = computed(() => {
-  if (detail.value?.parseStatus === 'SUCCESS') {
-    return 'success'
-  }
-  if (detail.value?.parseStatus === 'FAILED') {
-    return 'danger'
-  }
-  return 'info'
-})
-
-const statusText = computed(() => {
-  if (detail.value?.parseStatus === 'SUCCESS') {
-    return '已解析'
-  }
-  if (detail.value?.parseStatus === 'FAILED') {
-    return '解析失败'
-  }
-  return '未解析'
-})
-
-const sourceTypeText = computed(() => {
-  if (detail.value?.sourceType === 'PRESET') {
-    return '系统预置'
-  }
-  if (detail.value?.sourceType === 'CRAWLED') {
-    return '外部采集'
-  }
-  return '用户粘贴 JD'
-})
 
 const loadDetail = async () => {
   if (!Number.isFinite(jobDescriptionId.value)) {
@@ -150,55 +136,64 @@ onMounted(() => {
 </script>
 
 <template>
-  <main class="job-description-page">
-    <section class="job-description-shell">
-      <header class="job-description-header">
-        <div>
-          <h1 class="job-description-title">{{ detail?.title || '目标岗位详情' }}</h1>
-          <p class="job-description-subtitle">查看目标岗位 JD，并触发目标岗位解析。</p>
-        </div>
-        <el-space>
-          <el-button @click="router.push('/job-descriptions')">目标岗位</el-button>
-          <el-button @click="router.push('/job-descriptions/new')">新增目标岗位</el-button>
-          <el-button
-            :disabled="detail?.parseStatus !== 'SUCCESS'"
-            @click="router.push(`/ai-job-matches?jobDescriptionId=${detail?.id}`)"
-          >
-            匹配分析
-          </el-button>
-          <el-button
-            v-if="detail"
-            type="danger"
-            :loading="deleting"
-            :disabled="parsing"
-            @click="handleDelete"
-          >
-            删除
-          </el-button>
-          <el-button @click="router.push('/jobs')">岗位库</el-button>
-        </el-space>
-      </header>
+  <section class="job-description-detail-page">
+    <PageHeader
+      eyebrow="目标岗位详情"
+      :title="detail?.title || '目标岗位详情'"
+      description="详情页只展示 JD 原文和目标岗位解析结果，匹配分析从底部主按钮进入。"
+    >
+      <template #actions>
+        <el-button @click="router.push('/job-descriptions')">返回目标岗位</el-button>
+        <el-button
+          v-if="detail"
+          type="primary"
+          :loading="parsing"
+          @click="handleParse"
+        >
+          {{ detail.parseStatus === 'SUCCESS' ? '重新解析' : '解析目标岗位' }}
+        </el-button>
+        <el-button
+          v-if="detail"
+          type="danger"
+          plain
+          :loading="deleting"
+          :disabled="parsing"
+          @click="handleDelete"
+        >
+          删除
+        </el-button>
+      </template>
+    </PageHeader>
 
-      <section v-loading="loading" class="job-description-panel">
-        <el-empty v-if="loadFailed" description="目标岗位不存在或无权访问" :image-size="96">
-          <el-button type="primary" @click="router.push('/job-descriptions/new')">新增目标岗位</el-button>
-        </el-empty>
+    <section v-loading="loading" class="job-description-detail-body">
+      <ErrorState
+        v-if="loadFailed"
+        title="目标岗位不存在或无权访问"
+        description="可以返回目标岗位列表，或新增一个真实 JD。"
+        action-text="新增目标岗位"
+        @action="router.push('/job-descriptions/new')"
+      />
 
-        <template v-else-if="detail">
-          <div class="job-description-toolbar">
-            <el-tag :type="statusType">{{ statusText }}</el-tag>
-            <el-button type="primary" :loading="parsing" @click="handleParse">开始解析</el-button>
+      <template v-else-if="detail">
+        <BaseCard title="岗位状态" subtitle="解析成功后可进入匹配与优化。">
+          <div class="job-description-meta-grid">
+            <span>
+              来源
+              <strong>{{ sourceTypeText }}</strong>
+            </span>
+            <span>
+              解析状态
+              <StatusTag :status="detail.parseStatus" />
+            </span>
+            <span>
+              模型
+              <strong>{{ detail.modelName || '-' }}</strong>
+            </span>
+            <span>
+              更新时间
+              <strong>{{ formatDateTime(detail.updatedAt) }}</strong>
+            </span>
           </div>
-
-          <el-descriptions :column="2" border>
-            <el-descriptions-item label="标题">{{ detail.title }}</el-descriptions-item>
-            <el-descriptions-item label="来源">{{ sourceTypeText }}</el-descriptions-item>
-            <el-descriptions-item label="解析状态">{{ detail.parseStatus }}</el-descriptions-item>
-            <el-descriptions-item label="模型">{{ detail.modelName || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="Prompt 版本">{{ detail.promptVersion || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="更新时间">{{ formatDateTime(detail.updatedAt) }}</el-descriptions-item>
-          </el-descriptions>
-
           <el-alert
             v-if="detail.parseStatus === 'FAILED'"
             class="job-description-alert"
@@ -207,167 +202,126 @@ onMounted(() => {
             :closable="false"
             show-icon
           />
+        </BaseCard>
 
-          <section class="job-description-section">
-            <h2 class="job-description-section-title">目标岗位 JD 原文</h2>
-            <p class="job-description-text">{{ detail.rawText }}</p>
-          </section>
+        <section class="job-description-split">
+          <BaseCard title="JD 原文" subtitle="保留用户粘贴的真实岗位描述，不作为系统岗位库数据。">
+            <p class="job-description-raw-text">{{ detail.rawText }}</p>
+          </BaseCard>
 
-          <section class="job-description-section">
-            <h2 class="job-description-section-title">结构化解析结果</h2>
-            <el-empty v-if="!structuredContent" description="暂无解析结果" :image-size="80" />
+          <BaseCard title="结构化解析结果" subtitle="只解析岗位职责、技能、关键词和经验要求。">
+            <JobParseResult :content="structuredContent" />
+          </BaseCard>
+        </section>
 
-            <template v-else>
-              <el-descriptions :column="1" border>
-                <el-descriptions-item label="职位名称">{{ structuredContent.jobTitle || '-' }}</el-descriptions-item>
-                <el-descriptions-item label="岗位摘要">{{ structuredContent.summary || '-' }}</el-descriptions-item>
-              </el-descriptions>
+        <BaseCard title="下一步" subtitle="目标岗位解析成功后，再基于简历进入匹配分析。">
+          <div class="job-description-next-action">
+            <div>
+              <strong>开始匹配分析</strong>
+              <p>匹配与优化页会选择简历和目标岗位，生成匹配分、强弱项、缺失技能和后续建议。</p>
+            </div>
+            <el-button
+              type="primary"
+              :disabled="detail.parseStatus !== 'SUCCESS'"
+              @click="router.push(`/ai-job-matches?jobDescriptionId=${detail.id}`)"
+            >
+              进入匹配与优化
+            </el-button>
+          </div>
+        </BaseCard>
+      </template>
 
-              <section class="job-description-grid">
-                <div>
-                  <h3 class="job-description-group-title">必备技能</h3>
-                  <div v-if="structuredContent.requiredSkills.length" class="job-description-tags">
-                    <el-tag v-for="item in structuredContent.requiredSkills" :key="item" type="success">{{ item }}</el-tag>
-                  </div>
-                  <el-empty v-else description="暂无必备技能" :image-size="72" />
-                </div>
-
-                <div>
-                  <h3 class="job-description-group-title">加分技能</h3>
-                  <div v-if="structuredContent.bonusSkills.length" class="job-description-tags">
-                    <el-tag v-for="item in structuredContent.bonusSkills" :key="item" type="warning">{{ item }}</el-tag>
-                  </div>
-                  <el-empty v-else description="暂无加分技能" :image-size="72" />
-                </div>
-
-                <div>
-                  <h3 class="job-description-group-title">经验信号</h3>
-                  <div v-if="structuredContent.experienceSignals.length" class="job-description-list">
-                    <p v-for="item in structuredContent.experienceSignals" :key="item" class="job-description-text">{{ item }}</p>
-                  </div>
-                  <el-empty v-else description="暂无经验信号" :image-size="72" />
-                </div>
-
-                <div>
-                  <h3 class="job-description-group-title">关键词</h3>
-                  <div v-if="structuredContent.keywords.length" class="job-description-tags">
-                    <el-tag v-for="item in structuredContent.keywords" :key="item">{{ item }}</el-tag>
-                  </div>
-                  <el-empty v-else description="暂无关键词" :image-size="72" />
-                </div>
-              </section>
-
-              <section class="job-description-section">
-                <h3 class="job-description-group-title">职责内容</h3>
-                <div v-if="structuredContent.responsibilities.length" class="job-description-list">
-                  <p v-for="item in structuredContent.responsibilities" :key="item" class="job-description-text">{{ item }}</p>
-                </div>
-                <el-empty v-else description="暂无职责内容" :image-size="72" />
-              </section>
-            </template>
-          </section>
-        </template>
-      </section>
+      <EmptyState
+        v-else
+        title="请选择目标岗位"
+        description="从目标岗位列表进入详情后，可以查看原文和解析结果。"
+        action-text="返回目标岗位"
+        @action="router.push('/job-descriptions')"
+      />
     </section>
-  </main>
+  </section>
 </template>
 
 <style scoped>
-.job-description-page {
-  min-height: 100vh;
-  padding: 40px 28px 56px;
-  background: #f4f7fb;
+.job-description-detail-page,
+.job-description-detail-body {
+  display: grid;
+  gap: 18px;
 }
 
-.job-description-shell {
-  width: min(100%, 1040px);
-  margin: 0 auto;
+.job-description-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
 }
 
-.job-description-header,
-.job-description-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 24px;
+.job-description-meta-grid span {
+  display: grid;
+  gap: 6px;
+  padding: 14px;
+  border: 1px solid var(--app-color-border);
+  border-radius: 14px;
+  color: var(--app-color-text-secondary);
+  font-size: 13px;
+  background: var(--app-color-surface-soft);
 }
 
-.job-description-title {
+.job-description-meta-grid strong {
+  overflow: hidden;
+  color: var(--app-color-text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.job-description-alert {
+  margin-top: 16px;
+}
+
+.job-description-split {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.job-description-raw-text {
+  max-height: 720px;
   margin: 0;
-  color: #111827;
-  font-size: 28px;
-  font-weight: 700;
-}
-
-.job-description-subtitle {
-  margin: 8px 0 0;
-  color: #667085;
-  font-size: 15px;
-  line-height: 1.7;
-}
-
-.job-description-panel {
-  min-height: 360px;
-  padding: 28px;
-  border: 1px solid #dde5f0;
-  border-radius: 8px;
-  background: #ffffff;
-}
-
-.job-description-alert,
-.job-description-section {
-  margin-top: 24px;
-}
-
-.job-description-section-title {
-  margin: 0 0 12px;
-  color: #111827;
-  font-size: 16px;
-  font-weight: 700;
-}
-
-.job-description-group-title {
-  margin: 0 0 12px;
-  color: #111827;
-  font-size: 15px;
-  font-weight: 700;
-}
-
-.job-description-text {
-  margin: 0;
-  color: #344054;
+  color: var(--app-color-text);
   line-height: 1.8;
+  overflow: auto;
   white-space: pre-wrap;
 }
 
-.job-description-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 20px;
-  margin-top: 24px;
-}
-
-.job-description-tags {
+.job-description-next-action {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
 }
 
-.job-description-list {
-  display: grid;
-  gap: 8px;
+.job-description-next-action strong {
+  color: var(--app-color-text);
+  font-size: 18px;
 }
 
-@media (max-width: 720px) {
-  .job-description-header,
-  .job-description-toolbar {
+.job-description-next-action p {
+  margin: 8px 0 0;
+  color: var(--app-color-text-secondary);
+  line-height: 1.7;
+}
+
+@media (max-width: 1024px) {
+  .job-description-meta-grid,
+  .job-description-split {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .job-description-next-action {
     align-items: stretch;
     flex-direction: column;
-  }
-
-  .job-description-grid {
-    grid-template-columns: 1fr;
   }
 }
 </style>

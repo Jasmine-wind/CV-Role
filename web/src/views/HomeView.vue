@@ -2,6 +2,12 @@
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useRouter } from 'vue-router'
+import PageHeader from '@/components/common/PageHeader.vue'
+import BaseCard from '@/components/common/BaseCard.vue'
+import EmptyState from '@/components/common/EmptyState.vue'
+import AssetReadinessCard from '@/components/workflow/AssetReadinessCard.vue'
+import NextActionCard from '@/components/workflow/NextActionCard.vue'
+import ProcessStepper from '@/components/workflow/ProcessStepper.vue'
 import { getAiResultPage } from '@/api/history'
 import { getJobDescriptionList } from '@/api/job-description'
 import { getResumeList } from '@/api/resume'
@@ -9,6 +15,19 @@ import { useAuthStore } from '@/stores/auth'
 import type { AiResultRecord } from '@/types/history'
 import type { JobDescriptionDetail } from '@/types/job-description'
 import type { ResumeListItem } from '@/types/resume'
+
+interface AssetReadinessItem {
+  label: string
+  value: string | number
+  status: 'ready' | 'pending' | 'warning'
+  description?: string
+}
+
+interface ProcessStep {
+  title: string
+  description?: string
+  status?: 'done' | 'current' | 'pending' | 'failed'
+}
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -18,18 +37,10 @@ const targetJobs = ref<JobDescriptionDetail[]>([])
 const aiResults = ref<AiResultRecord[]>([])
 const dashboardLoading = ref(false)
 
-const displayName = computed(() => {
-  const user = authStore.currentUser
+const parsedTargetJobs = computed(() => targetJobs.value.filter((item) => item.parseStatus === 'SUCCESS'))
 
-  return user?.nickname || user?.username || '已登录用户'
-})
-
-const parsedTargetJobs = computed(() => {
-  return targetJobs.value.filter((item) => item.parseStatus === 'SUCCESS')
-})
-
-const latestAiResult = computed(() => {
-  return aiResults.value[0] ?? null
+const successfulDiagnosisCount = computed(() => {
+  return aiResults.value.filter((item) => item.resultType === 'RESUME_DIAGNOSIS' && item.status === 'SUCCESS').length
 })
 
 const successfulMatchCount = computed(() => {
@@ -40,80 +51,131 @@ const successfulSuggestionCount = computed(() => {
   return aiResults.value.filter((item) => item.resultType === 'JOB_OPTIMIZATION_SUGGESTION' && item.status === 'SUCCESS').length
 })
 
-const progressItems = computed(() => [
+const latestMatchResult = computed(() => {
+  return aiResults.value.find((item) => item.resultType === 'MATCH_ANALYSIS' && item.status === 'SUCCESS') ?? null
+})
+
+const recentResults = computed(() => aiResults.value.slice(0, 3))
+
+const readinessItems = computed<AssetReadinessItem[]>(() => [
   {
-    label: '简历',
-    detail: `${resumes.value.length} 份`,
-    done: resumes.value.length > 0,
-    route: '/resumes',
+    label: '简历资产',
+    value: resumes.value.length,
+    status: resumes.value.length > 0 ? 'ready' : 'pending',
+    description: resumes.value.length > 0 ? '可进入解析和诊断' : '先上传第一份简历',
   },
   {
     label: '目标岗位',
-    detail: `${targetJobs.value.length} 个，已解析 ${parsedTargetJobs.value.length} 个`,
-    done: parsedTargetJobs.value.length > 0,
-    route: '/job-descriptions',
+    value: `${parsedTargetJobs.value.length}/${targetJobs.value.length}`,
+    status: parsedTargetJobs.value.length > 0 ? 'ready' : targetJobs.value.length > 0 ? 'warning' : 'pending',
+    description: targetJobs.value.length > 0 ? '解析后可用于匹配' : '粘贴真实 JD',
   },
   {
     label: '匹配分析',
-    detail: `${successfulMatchCount.value} 条成功结果`,
-    done: successfulMatchCount.value > 0,
-    route: '/ai-job-matches',
-  },
-  {
-    label: '岗位优化建议',
-    detail: `${successfulSuggestionCount.value} 条成功结果`,
-    done: successfulSuggestionCount.value > 0,
-    route: '/ai-job-matches',
+    value: successfulMatchCount.value,
+    status: successfulMatchCount.value > 0 ? 'ready' : 'pending',
+    description: successfulMatchCount.value > 0 ? '已有可回看的结果' : '等待简历和岗位就绪',
   },
 ])
 
 const nextStep = computed(() => {
   if (resumes.value.length === 0) {
     return {
-      title: '上传并解析简历',
-      description: '先建立简历资产，后续诊断、匹配和改写都基于已解析简历。',
-      button: '去我的简历',
+      title: '上传第一份简历',
+      description: '先建立简历资产。解析、诊断、匹配和局部改写都基于已上传简历继续。',
+      actionText: '去上传简历',
       route: '/resumes',
     }
   }
+
+  if (successfulDiagnosisCount.value === 0) {
+    return {
+      title: '生成简历诊断',
+      description: '先确认简历本身质量，再进入目标岗位匹配。诊断只分析简历，不判断岗位适配。',
+      actionText: '进入我的简历',
+      route: '/resumes',
+    }
+  }
+
   if (targetJobs.value.length === 0) {
     return {
       title: '新增目标岗位',
-      description: '粘贴真实招聘 JD，系统只保存为你的目标岗位，不写入系统岗位库。',
-      button: '新增目标岗位',
+      description: '粘贴真实招聘 JD，系统会保存为你的目标岗位，不进入系统岗位库。',
+      actionText: '新增目标岗位',
       route: '/job-descriptions/new',
     }
   }
+
   if (parsedTargetJobs.value.length === 0) {
     return {
       title: '解析目标岗位',
-      description: '先抽取岗位职责、技能和关键词，再进入匹配分析。',
-      button: '查看目标岗位',
+      description: '先抽取岗位职责、技能、关键词和经验要求，再进入匹配分析。',
+      actionText: '查看目标岗位',
       route: '/job-descriptions',
     }
   }
+
   if (successfulMatchCount.value === 0) {
     return {
-      title: '生成匹配分析',
-      description: '选择已解析简历和目标岗位，判断当前简历是否匹配。',
-      button: '进入匹配与优化',
+      title: '开始匹配分析',
+      description: '选择一份简历和一个已解析目标岗位，生成匹配分、强弱项、缺失技能和风险提示。',
+      actionText: '进入匹配与优化',
       route: '/ai-job-matches',
     }
   }
+
   if (successfulSuggestionCount.value === 0) {
     return {
       title: '生成岗位优化建议',
-      description: '基于匹配差距生成策略建议，不直接改写原简历。',
-      button: '继续匹配与优化',
+      description: '基于匹配差距生成策略建议。系统不会自动改写或写回原始简历。',
+      actionText: '继续优化',
       route: '/ai-job-matches',
     }
   }
+
   return {
-    title: '回看 AI 结果',
-    description: '已生成的诊断、解析、匹配、建议和改写结果可以从 AI 历史统一回看。',
-    button: '查看 AI 历史',
-    route: '/history',
+    title: '查看岗位优化报告',
+    description: '回看匹配分析、优化建议、局部改写和下一步修改清单。',
+    actionText: '查看匹配与优化',
+    route: '/ai-job-matches',
   }
+})
+
+const flowSteps = computed(() => {
+  const steps = [
+    {
+      title: '上传简历',
+      description: `${resumes.value.length} 份`,
+      done: resumes.value.length > 0,
+    },
+    {
+      title: '简历诊断',
+      description: `${successfulDiagnosisCount.value} 条成功结果`,
+      done: successfulDiagnosisCount.value > 0,
+    },
+    {
+      title: '目标岗位',
+      description: `${targetJobs.value.length} 个，已解析 ${parsedTargetJobs.value.length} 个`,
+      done: parsedTargetJobs.value.length > 0,
+    },
+    {
+      title: '匹配分析',
+      description: `${successfulMatchCount.value} 条成功结果`,
+      done: successfulMatchCount.value > 0,
+    },
+    {
+      title: '优化建议',
+      description: `${successfulSuggestionCount.value} 条成功结果`,
+      done: successfulSuggestionCount.value > 0,
+    },
+  ]
+  const currentIndex = Math.max(steps.findIndex((item) => !item.done), 0)
+
+  return steps.map<ProcessStep>((item, index) => ({
+    title: item.title,
+    description: item.description,
+    status: item.done ? 'done' : index === currentIndex ? 'current' : 'pending',
+  }))
 })
 
 const resultTypeText = (resultType: string) => {
@@ -135,7 +197,7 @@ const statusType = (status: string) => {
   if (status === 'FAILED') {
     return 'danger'
   }
-  return 'info'
+  return 'warning'
 }
 
 const formatDateTime = (value: string | null) => {
@@ -157,7 +219,7 @@ const loadDashboard = async () => {
     const [resumeResult, targetJobResult, aiResult] = await Promise.all([
       getResumeList(),
       getJobDescriptionList(),
-      getAiResultPage({ page: 1, size: 5 }),
+      getAiResultPage({ page: 1, size: 8 }),
     ])
 
     resumes.value = resumeResult
@@ -170,20 +232,9 @@ const loadDashboard = async () => {
   }
 }
 
-const handleRefresh = async () => {
-  try {
-    await authStore.fetchMe()
-    await loadDashboard()
-    ElMessage.success('工作台已刷新')
-  } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '刷新工作台失败')
-  }
-}
-
-const handleLogout = () => {
-  authStore.logout()
-  ElMessage.success('已退出登录')
-  router.push('/login')
+const refreshDashboard = async () => {
+  await loadDashboard()
+  ElMessage.success('工作台已刷新')
 }
 
 onMounted(async () => {
@@ -195,101 +246,93 @@ onMounted(async () => {
 </script>
 
 <template>
-  <main class="home-page">
-    <section class="home-shell">
-      <header class="home-header">
-        <div>
-          <h1 class="home-title">工作台</h1>
-          <p class="home-subtitle">围绕简历资产和用户粘贴的目标岗位 JD，串联诊断、匹配、建议、改写和结果回看。</p>
-        </div>
-        <el-space v-if="!authStore.isAuthenticated" wrap>
-          <el-button @click="router.push('/login')">登录</el-button>
-          <el-button type="primary" @click="router.push('/register')">注册</el-button>
-        </el-space>
-        <el-space v-else wrap>
-          <el-button @click="router.push('/resumes')">我的简历</el-button>
-          <el-button @click="router.push('/job-descriptions')">目标岗位</el-button>
-          <el-button @click="router.push('/ai-job-matches')">匹配与优化</el-button>
-          <el-button @click="router.push('/history')">AI 历史</el-button>
-          <el-button :loading="authStore.loading || dashboardLoading" @click="handleRefresh">刷新</el-button>
-          <el-button type="danger" plain @click="handleLogout">退出</el-button>
-        </el-space>
-      </header>
-
-      <template v-if="authStore.isAuthenticated">
-        <section v-loading="dashboardLoading" class="home-dashboard">
-          <el-card class="home-card" shadow="never">
-            <template #header>
-              <div class="home-card-header">
-                <span>当前进度</span>
-                <el-tag type="info">{{ displayName }}</el-tag>
-              </div>
-            </template>
-            <div class="home-progress-grid">
-              <button
-                v-for="item in progressItems"
-                :key="item.label"
-                class="home-progress-item"
-                type="button"
-                @click="router.push(item.route)"
-              >
-                <el-tag :type="item.done ? 'success' : 'info'">{{ item.done ? '已就绪' : '待处理' }}</el-tag>
-                <strong>{{ item.label }}</strong>
-                <span>{{ item.detail }}</span>
-              </button>
-            </div>
-          </el-card>
-
-          <el-card class="home-card" shadow="never">
-            <template #header>
-              <div class="home-card-header">
-                <span>下一步推荐</span>
-              </div>
-            </template>
-            <h2 class="home-section-title">{{ nextStep.title }}</h2>
-            <p class="home-muted">{{ nextStep.description }}</p>
-            <el-button type="primary" @click="router.push(nextStep.route)">{{ nextStep.button }}</el-button>
-          </el-card>
-
-          <el-card class="home-card" shadow="never">
-            <template #header>
-              <div class="home-card-header">
-                <span>快捷入口</span>
-              </div>
-            </template>
-            <div class="home-entry-grid">
-              <el-button @click="router.push('/resumes')">我的简历</el-button>
-              <el-button @click="router.push('/job-descriptions/new')">新增目标岗位</el-button>
-              <el-button @click="router.push('/ai-job-matches')">匹配与优化</el-button>
-              <el-button @click="router.push('/history')">AI 历史</el-button>
-              <el-button plain @click="router.push('/jobs')">岗位库参考</el-button>
-            </div>
-          </el-card>
-
-          <el-card class="home-card" shadow="never">
-            <template #header>
-              <div class="home-card-header">
-                <span>最近结果</span>
-                <el-button text type="primary" @click="router.push('/history')">查看全部</el-button>
-              </div>
-            </template>
-            <template v-if="latestAiResult">
-              <div class="home-result">
-                <el-tag :type="statusType(latestAiResult.status)">{{ resultTypeText(latestAiResult.resultType) }}</el-tag>
-                <strong>{{ latestAiResult.title }}</strong>
-                <span>{{ latestAiResult.summary || '暂无摘要' }}</span>
-                <small>{{ formatDateTime(latestAiResult.updatedAt || latestAiResult.createdAt) }}</small>
-              </div>
-            </template>
-            <el-empty v-else description="暂无 AI 结果" :image-size="80" />
-          </el-card>
-        </section>
+  <section class="home-page">
+    <PageHeader
+      eyebrow="AI 求职工作台"
+      title="围绕目标岗位推进简历优化闭环"
+      description="首页只保留当前状态、下一步主动作和最近结果。具体诊断、匹配、建议和局部改写进入对应业务页完成。"
+    >
+      <template #actions>
+        <el-button :loading="dashboardLoading" @click="refreshDashboard">刷新</el-button>
       </template>
+    </PageHeader>
 
-      <el-card v-else class="home-card" shadow="never">
-        <h2 class="home-section-title">登录后进入工作台</h2>
-        <p class="home-muted">当前没有检测到 Token，请先登录后再继续简历优化流程。</p>
-      </el-card>
+    <section v-loading="dashboardLoading" class="home-workspace">
+      <section class="home-hero-grid">
+        <NextActionCard
+          :title="nextStep.title"
+          :description="nextStep.description"
+          :action-text="nextStep.actionText"
+          @action="router.push(nextStep.route)"
+        />
+        <AssetReadinessCard :items="readinessItems" />
+      </section>
+
+      <BaseCard title="主流程进度" subtitle="从简历资产到岗位优化报告，按当前可用数据推进。">
+        <ProcessStepper :steps="flowSteps" />
+      </BaseCard>
+
+      <section class="home-summary-grid">
+        <BaseCard title="最近匹配报告" subtitle="只展示最新一条摘要，完整内容进入匹配与优化。">
+          <article v-if="latestMatchResult" class="home-result-summary">
+            <el-tag :type="statusType(latestMatchResult.status)">
+              {{ resultTypeText(latestMatchResult.resultType) }}
+            </el-tag>
+            <strong>{{ latestMatchResult.jobTitle || latestMatchResult.title || '匹配分析' }}</strong>
+            <p>{{ latestMatchResult.summary || latestMatchResult.resumeName || '暂无摘要' }}</p>
+            <el-button
+              type="primary"
+              plain
+              @click="router.push({
+                path: '/ai-job-matches',
+                query: {
+                  ...(latestMatchResult.resumeId ? { resumeId: String(latestMatchResult.resumeId) } : {}),
+                  ...(latestMatchResult.jobDescriptionId ? { jobDescriptionId: String(latestMatchResult.jobDescriptionId) } : {}),
+                },
+              })"
+            >
+              查看匹配与优化
+            </el-button>
+          </article>
+          <EmptyState
+            v-else
+            title="还没有匹配报告"
+            description="简历和目标岗位都解析完成后，可以生成第一份匹配分析。"
+            action-text="进入匹配与优化"
+            @action="router.push('/ai-job-matches')"
+          />
+        </BaseCard>
+
+        <BaseCard title="最近 AI 结果" subtitle="最多展示 3 条，AI 历史只负责回看。">
+          <div v-if="recentResults.length" class="home-recent-list">
+            <button
+              v-for="item in recentResults"
+              :key="`${item.resultType}-${item.recordId}`"
+              type="button"
+              @click="router.push('/history')"
+            >
+              <span>
+                <el-tag size="small" :type="statusType(item.status)">{{ resultTypeText(item.resultType) }}</el-tag>
+                <strong>{{ item.title || '-' }}</strong>
+              </span>
+              <small>{{ item.summary || formatDateTime(item.updatedAt || item.createdAt) }}</small>
+            </button>
+          </div>
+          <EmptyState
+            v-else
+            title="暂无 AI 结果"
+            description="完成简历诊断、目标岗位解析或匹配分析后会出现在这里。"
+          />
+        </BaseCard>
+      </section>
+
+      <BaseCard title="辅助入口" subtitle="岗位库只是参考入口，不作为主流程必经节点。">
+        <div class="home-secondary-links">
+          <el-button text type="primary" @click="router.push('/jobs')">岗位库参考</el-button>
+          <el-button text type="primary" @click="router.push('/resumes')">查看全部简历</el-button>
+          <el-button text type="primary" @click="router.push('/history')">AI 历史回看</el-button>
+        </div>
+      </BaseCard>
     </section>
-  </main>
+  </section>
 </template>

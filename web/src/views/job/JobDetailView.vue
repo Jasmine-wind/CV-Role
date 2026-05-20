@@ -1,25 +1,41 @@
 <script setup lang="ts">
-import { ElMessage } from 'element-plus'
 import { computed, onMounted, ref } from 'vue'
+import { ElMessage } from 'element-plus'
 import { useRoute, useRouter } from 'vue-router'
-import { getJobDetail, getResumeJobMatches, matchResumeToJob } from '@/api/job'
-import { getResumeList } from '@/api/resume'
-import type { JobDetail, JobMatchResult, JobMatchSuggestion } from '@/types/job'
-import type { ResumeListItem } from '@/types/resume'
+import BaseCard from '@/components/common/BaseCard.vue'
+import ErrorState from '@/components/common/ErrorState.vue'
+import PageHeader from '@/components/common/PageHeader.vue'
+import { getJobDetail } from '@/api/job'
+import type { JobDetail } from '@/types/job'
 
 const route = useRoute()
 const router = useRouter()
 const job = ref<JobDetail | null>(null)
-const resumes = ref<ResumeListItem[]>([])
-const selectedResumeId = ref<number | null>(null)
-const activeMatchResult = ref<JobMatchResult | null>(null)
 const loading = ref(false)
-const loadingResumes = ref(false)
-const loadingMatches = ref(false)
-const matching = ref(false)
 const loadFailed = ref(false)
 
 const jobId = computed(() => Number(route.params.id))
+
+const jobRequirementText = computed(() => {
+  if (!job.value) {
+    return ''
+  }
+
+  return [
+    `岗位名称：${job.value.title}`,
+    `公司：${job.value.companyName}`,
+    `方向：${job.value.jobCategory}`,
+    `地点：${job.value.location}`,
+    '',
+    '岗位描述：',
+    job.value.description,
+    '',
+    '岗位要求：',
+    job.value.requirements,
+    '',
+    `技能关键词：${job.value.requiredSkills.join('、')}`,
+  ].join('\n')
+})
 
 const formatDateTime = (value: string | null) => {
   if (!value) {
@@ -27,33 +43,6 @@ const formatDateTime = (value: string | null) => {
   }
 
   return value.replace('T', ' ').slice(0, 19)
-}
-
-const selectedResume = computed(() => {
-  return resumes.value.find((resume) => resume.id === selectedResumeId.value) ?? null
-})
-
-const resolveSuggestionType = (type: string) => {
-  const typeMap: Record<string, string> = {
-    SKILL_GAP: '技能缺口',
-    PROJECT_DESCRIPTION: '项目描述',
-    HIGHLIGHT_STRENGTH: '优势突出',
-    GENERAL: '综合建议',
-  }
-
-  return typeMap[type] ?? type
-}
-
-const resolvePriorityType = (priority: string) => {
-  if (priority === 'HIGH') {
-    return 'danger'
-  }
-
-  if (priority === 'MEDIUM') {
-    return 'warning'
-  }
-
-  return 'info'
 }
 
 const loadJob = async () => {
@@ -77,297 +66,138 @@ const loadJob = async () => {
   }
 }
 
-const loadResumes = async () => {
-  loadingResumes.value = true
-
-  try {
-    resumes.value = await getResumeList()
-    const firstResume = resumes.value[0]
-    const queryResumeId = Number(route.query.resumeId)
-
-    if (Number.isFinite(queryResumeId) && resumes.value.some((resume) => resume.id === queryResumeId)) {
-      selectedResumeId.value = queryResumeId
-    } else if (!selectedResumeId.value && firstResume) {
-      selectedResumeId.value = firstResume.id
-    }
-  } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '获取简历列表失败')
-  } finally {
-    loadingResumes.value = false
-  }
-}
-
-const loadCurrentResumeMatches = async () => {
-  if (!selectedResumeId.value || !job.value) {
-    activeMatchResult.value = null
+const copyJobRequirement = async () => {
+  if (!jobRequirementText.value) {
     return
   }
 
-  loadingMatches.value = true
-
   try {
-    const matches = await getResumeJobMatches(selectedResumeId.value)
-    activeMatchResult.value = matches.find((match) => match.jobId === job.value?.id) ?? null
-  } catch (error) {
-    activeMatchResult.value = null
-    ElMessage.warning(error instanceof Error ? error.message : '获取匹配结果失败')
-  } finally {
-    loadingMatches.value = false
+    await navigator.clipboard.writeText(jobRequirementText.value)
+    ElMessage.success('岗位要求已复制，可粘贴到新增目标岗位')
+  } catch {
+    ElMessage.warning('当前浏览器不支持自动复制，请手动复制岗位要求')
   }
 }
 
-const handleResumeChange = async () => {
-  await loadCurrentResumeMatches()
-}
-
-const handleMatch = async () => {
-  if (!job.value || !selectedResumeId.value) {
-    ElMessage.warning('请先选择简历')
-    return
-  }
-
-  matching.value = true
-
-  try {
-    await matchResumeToJob(selectedResumeId.value, job.value.id)
-    activeMatchResult.value = null
-    await loadCurrentResumeMatches()
-    ElMessage.success('基础匹配完成')
-  } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '基础匹配失败')
-  } finally {
-    matching.value = false
-  }
-}
-
-const suggestionKey = (suggestion: JobMatchSuggestion, index: number) => {
-  return `${suggestion.type}-${suggestion.relatedItem}-${index}`
-}
-
-onMounted(async () => {
-  await loadJob()
-  await loadResumes()
-  await loadCurrentResumeMatches()
+onMounted(() => {
+  loadJob()
 })
 </script>
 
 <template>
-  <main class="job-page">
-    <section class="job-shell">
-      <header class="job-header">
-        <div>
-          <h1 class="job-title">{{ job?.title || '岗位详情' }}</h1>
-          <p class="job-subtitle">{{ job ? `${job.companyName} · ${job.location}` : '查看岗位要求与技能关键词。' }}</p>
-        </div>
-        <el-space>
-          <el-button @click="router.push('/jobs')">返回岗位库</el-button>
-          <el-button @click="router.push('/resumes')">我的简历</el-button>
-          <el-button type="primary" @click="router.push('/history')">AI 历史</el-button>
-        </el-space>
-      </header>
+  <section class="job-detail-page">
+    <PageHeader
+      eyebrow="岗位库参考"
+      :title="job?.title || '岗位参考详情'"
+      description="系统预置岗位只用于参考。真实投递流程请复制岗位要求后新增目标岗位。"
+    >
+      <template #actions>
+        <el-button @click="router.push('/jobs')">返回岗位库参考</el-button>
+        <el-button @click="copyJobRequirement">复制岗位要求</el-button>
+        <el-button type="primary" @click="router.push('/job-descriptions/new')">新增目标岗位</el-button>
+      </template>
+    </PageHeader>
 
-      <section v-loading="loading" class="job-detail-panel">
-        <el-empty v-if="loadFailed" description="岗位不存在或已不可用" :image-size="96">
-          <el-button type="primary" @click="router.push('/jobs')">查看岗位库</el-button>
-        </el-empty>
+    <section v-loading="loading" class="job-detail-body">
+      <ErrorState
+        v-if="loadFailed"
+        title="岗位不存在或已不可用"
+        description="岗位库只是参考入口，可以直接新增目标岗位继续主流程。"
+        action-text="新增目标岗位"
+        @action="router.push('/job-descriptions/new')"
+      />
 
-        <template v-else-if="job">
-          <el-descriptions :column="2" border>
-            <el-descriptions-item label="岗位名称">{{ job.title }}</el-descriptions-item>
-            <el-descriptions-item label="公司">{{ job.companyName }}</el-descriptions-item>
-            <el-descriptions-item label="方向">{{ job.jobCategory }}</el-descriptions-item>
-            <el-descriptions-item label="地点">{{ job.location }}</el-descriptions-item>
-            <el-descriptions-item label="更新时间">{{ formatDateTime(job.updatedAt) }}</el-descriptions-item>
-          </el-descriptions>
+      <template v-else-if="job">
+        <BaseCard title="参考岗位信息" subtitle="这不是目标岗位记录，也不会直接进入匹配分析。">
+          <div class="job-detail-meta-grid">
+            <span>
+              公司
+              <strong>{{ job.companyName }}</strong>
+            </span>
+            <span>
+              方向
+              <strong>{{ job.jobCategory }}</strong>
+            </span>
+            <span>
+              地点
+              <strong>{{ job.location }}</strong>
+            </span>
+            <span>
+              更新时间
+              <strong>{{ formatDateTime(job.updatedAt) }}</strong>
+            </span>
+          </div>
+        </BaseCard>
 
-          <section class="job-section">
-            <h2 class="job-section-title">技能要求</h2>
-            <div class="job-tag-list">
-              <el-tag v-for="skill in job.requiredSkills" :key="skill" type="success">{{ skill }}</el-tag>
-            </div>
-          </section>
+        <section class="job-detail-split">
+          <BaseCard title="参考职责内容">
+            <p class="job-detail-text">{{ job.description }}</p>
+          </BaseCard>
 
-          <section class="job-section">
-            <h2 class="job-section-title">岗位描述</h2>
-            <p class="job-text">{{ job.description }}</p>
-          </section>
+          <BaseCard title="岗位要求">
+            <p class="job-detail-text">{{ job.requirements }}</p>
+          </BaseCard>
+        </section>
 
-          <section class="job-section">
-            <h2 class="job-section-title">岗位要求</h2>
-            <p class="job-text">{{ job.requirements }}</p>
-          </section>
+        <BaseCard title="技能关键词" subtitle="可作为目标岗位 JD 的参考关键词。">
+          <div class="job-tag-list">
+            <el-tag v-for="skill in job.requiredSkills" :key="skill" type="success">{{ skill }}</el-tag>
+          </div>
+        </BaseCard>
 
-          <section class="job-match-entry">
+        <BaseCard title="主流程入口" subtitle="岗位库不直接做主流程匹配，避免和目标岗位混淆。">
+          <div class="job-detail-next-action">
             <div>
-              <h2 class="job-section-title">基础匹配</h2>
-              <p class="job-text">从已上传简历中选择一份进行基础匹配；完整 AI 流程请使用匹配与优化。</p>
+              <strong>基于真实 JD 新增目标岗位</strong>
+              <p>复制岗位要求后，到“新增目标岗位”粘贴完整 JD，再解析并进入匹配与优化。</p>
             </div>
-            <div class="job-match-controls">
-              <el-select
-                v-model="selectedResumeId"
-                :loading="loadingResumes"
-                placeholder="选择简历"
-                class="job-resume-select"
-                @change="handleResumeChange"
-              >
-                <el-option
-                  v-for="resume in resumes"
-                  :key="resume.id"
-                  :label="resume.originalFilename"
-                  :value="resume.id"
-                />
-              </el-select>
-              <el-button
-                type="primary"
-                :disabled="!selectedResumeId"
-                :loading="matching"
-                @click="handleMatch"
-              >
-                开始基础匹配
-              </el-button>
-            </div>
-          </section>
-
-          <el-alert
-            v-if="!loadingResumes && resumes.length === 0"
-            class="job-match-alert"
-            title="暂无可用简历，请先上传并解析简历。"
-            type="warning"
-            :closable="false"
-            show-icon
-          />
-
-          <section v-if="selectedResume" v-loading="loadingMatches" class="job-match-result">
-            <header class="job-match-result-header">
-              <div>
-                <h2 class="job-section-title">基础匹配结果</h2>
-                <p class="job-text">{{ selectedResume.originalFilename }}</p>
-              </div>
-              <el-button @click="loadCurrentResumeMatches">刷新结果</el-button>
-            </header>
-
-            <el-empty v-if="!activeMatchResult" description="当前简历还没有该岗位的匹配结果" :image-size="80" />
-
-            <template v-else>
-              <div class="job-match-score-row">
-                <el-progress
-                  class="job-match-score-progress"
-                  type="dashboard"
-                  :percentage="activeMatchResult.matchScore"
-                  :stroke-width="8"
-                  :width="132"
-                  color="#2563eb"
-                />
-                <el-descriptions :column="1" border class="job-match-meta">
-                  <el-descriptions-item label="岗位">{{ activeMatchResult.jobTitle }}</el-descriptions-item>
-                  <el-descriptions-item label="公司">{{ activeMatchResult.companyName }}</el-descriptions-item>
-                  <el-descriptions-item label="更新时间">{{ formatDateTime(activeMatchResult.updatedAt) }}</el-descriptions-item>
-                </el-descriptions>
-              </div>
-
-              <section class="job-section">
-                <h2 class="job-section-title">匹配说明</h2>
-                <p class="job-text">{{ activeMatchResult.matchReason }}</p>
-              </section>
-
-              <section class="job-match-grid">
-                <div>
-                  <h2 class="job-section-title">命中项</h2>
-                  <div v-if="activeMatchResult.matchedItems.length > 0" class="job-tag-list">
-                    <el-tag v-for="item in activeMatchResult.matchedItems" :key="item" type="success">{{ item }}</el-tag>
-                  </div>
-                  <el-empty v-else description="暂无命中项" :image-size="72" />
-                </div>
-
-                <div>
-                  <h2 class="job-section-title">缺失项</h2>
-                  <div v-if="activeMatchResult.missingItems.length > 0" class="job-tag-list">
-                    <el-tag v-for="item in activeMatchResult.missingItems" :key="item" type="danger">{{ item }}</el-tag>
-                  </div>
-                  <el-empty v-else description="暂无缺失项" :image-size="72" />
-                </div>
-              </section>
-
-              <section class="job-section">
-                <h2 class="job-section-title">基础优化建议</h2>
-                <div class="job-suggestion-list">
-                  <article
-                    v-for="(suggestion, index) in activeMatchResult.suggestions"
-                    :key="suggestionKey(suggestion, index)"
-                    class="job-suggestion-item"
-                  >
-                    <div class="job-suggestion-header">
-                      <h3 class="job-suggestion-title">{{ suggestion.title }}</h3>
-                      <el-space>
-                        <el-tag size="small">{{ resolveSuggestionType(suggestion.type) }}</el-tag>
-                        <el-tag size="small" :type="resolvePriorityType(suggestion.priority)">
-                          {{ suggestion.priority }}
-                        </el-tag>
-                      </el-space>
-                    </div>
-                    <p class="job-text">{{ suggestion.content }}</p>
-                  </article>
-                </div>
-              </section>
-            </template>
-          </section>
-        </template>
-      </section>
+            <el-button type="primary" @click="router.push('/job-descriptions/new')">新增目标岗位</el-button>
+          </div>
+        </BaseCard>
+      </template>
     </section>
-  </main>
+  </section>
 </template>
 
 <style scoped>
-.job-page {
-  min-height: 100vh;
-  padding: 40px 28px 56px;
-  background: #f4f7fb;
+.job-detail-page,
+.job-detail-body {
+  display: grid;
+  gap: 18px;
 }
 
-.job-shell {
-  width: min(100%, 960px);
-  margin: 0 auto;
+.job-detail-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
 }
 
-.job-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 24px;
+.job-detail-meta-grid span {
+  display: grid;
+  gap: 6px;
+  padding: 14px;
+  border: 1px solid var(--app-color-border);
+  border-radius: 14px;
+  color: var(--app-color-text-secondary);
+  font-size: 13px;
+  background: var(--app-color-surface-soft);
 }
 
-.job-title {
+.job-detail-meta-grid strong {
+  color: var(--app-color-text);
+}
+
+.job-detail-split {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.job-detail-text {
   margin: 0;
-  color: #111827;
-  font-size: 28px;
-  font-weight: 700;
-}
-
-.job-subtitle {
-  margin: 8px 0 0;
-  color: #667085;
-  font-size: 15px;
-  line-height: 1.7;
-}
-
-.job-detail-panel {
-  min-height: 360px;
-  padding: 28px;
-  border: 1px solid #dde5f0;
-  border-radius: 8px;
-  background: #ffffff;
-}
-
-.job-section {
-  margin-top: 24px;
-}
-
-.job-section-title {
-  margin: 0 0 12px;
-  color: #111827;
-  font-size: 16px;
-  font-weight: 700;
+  color: var(--app-color-text);
+  line-height: 1.8;
+  white-space: pre-wrap;
 }
 
 .job-tag-list {
@@ -376,141 +206,35 @@ onMounted(async () => {
   gap: 8px;
 }
 
-.job-text {
-  margin: 0;
-  color: #344054;
-  line-height: 1.8;
-}
-
-.job-match-entry {
+.job-detail-next-action {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  margin-top: 28px;
-  padding: 20px;
-  border: 1px solid #dde5f0;
-  border-radius: 8px;
-  background: #f8fafc;
-}
-
-.job-match-controls {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.job-resume-select {
-  width: 260px;
-}
-
-.job-match-alert,
-.job-match-result {
-  margin-top: 20px;
-}
-
-.job-match-result {
-  padding: 24px;
-  border: 1px solid #dde5f0;
-  border-radius: 8px;
-  background: #ffffff;
-}
-
-.job-match-result-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.job-match-score-row {
-  display: grid;
-  grid-template-columns: 160px minmax(0, 1fr);
-  gap: 20px;
-  align-items: center;
-  margin-top: 20px;
-}
-
-.job-match-meta {
-  min-width: 0;
-}
-
-.job-match-score-progress {
-  display: block;
-  width: 132px;
-  height: 132px;
-  justify-self: center;
-}
-
-.job-match-score-progress :deep(.el-progress-circle) {
-  width: 132px !important;
-  height: 132px !important;
-}
-
-.job-match-score-progress :deep(.el-progress__text) {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 132px;
-  height: 132px;
-  margin: 0;
-  top: 0;
-  left: 0;
-  line-height: 1;
-  transform: none;
-}
-
-.job-match-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 18px;
-  margin-top: 24px;
 }
 
-.job-suggestion-list {
-  display: grid;
-  gap: 12px;
+.job-detail-next-action strong {
+  color: var(--app-color-text);
+  font-size: 18px;
 }
 
-.job-suggestion-item {
-  padding: 16px;
-  border: 1px solid #dde5f0;
-  border-radius: 8px;
-  background: #f8fafc;
+.job-detail-next-action p {
+  margin: 8px 0 0;
+  color: var(--app-color-text-secondary);
+  line-height: 1.7;
 }
 
-.job-suggestion-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 8px;
-}
-
-.job-suggestion-title {
-  margin: 0;
-  color: #111827;
-  font-size: 15px;
-  font-weight: 700;
+@media (max-width: 960px) {
+  .job-detail-meta-grid,
+  .job-detail-split {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 640px) {
-  .job-header,
-  .job-match-entry,
-  .job-match-controls,
-  .job-match-result-header,
-  .job-suggestion-header {
+  .job-detail-next-action {
     align-items: stretch;
     flex-direction: column;
-  }
-
-  .job-resume-select {
-    width: 100%;
-  }
-
-  .job-match-score-row,
-  .job-match-grid {
-    grid-template-columns: 1fr;
   }
 }
 </style>

@@ -3,6 +3,8 @@ import type { UploadFile, UploadProps, UploadUserFile } from 'element-plus'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import EmptyState from '@/components/common/EmptyState.vue'
+import PageHeader from '@/components/common/PageHeader.vue'
 import {
   deleteResume,
   getResumeAiAnalysis,
@@ -126,6 +128,118 @@ const selectedUploadFiles = computed(() => {
     }
   }
   return files
+})
+
+const selectedUploadSummary = computed(() => {
+  const files = selectedUploadFiles.value
+  if (!files.length) {
+    return '未选择文件'
+  }
+
+  const totalSize = files.reduce((sum, file) => sum + file.size, 0)
+  return `已选择 ${files.length} 份，合计 ${formatFileSize(totalSize)}`
+})
+
+const parseTaskActive = computed(() => {
+  return activeAsyncTask.value?.taskType === 'RESUME_PARSE'
+})
+
+const diagnosisTaskActive = computed(() => {
+  return activeAsyncTask.value?.taskType === 'RESUME_DIAGNOSIS'
+})
+
+const activeAsyncTaskFailed = computed(() => {
+  return activeAsyncTask.value?.status === 'FAILED' || Boolean(asyncTaskError.value)
+})
+
+const canRetryActiveTask = computed(() => {
+  return Boolean(
+    activeAsyncTaskFailed.value
+    && activeAsyncTaskResumeId.value
+    && (parseTaskActive.value || diagnosisTaskActive.value),
+  )
+})
+
+const resumeFlowSteps = computed(() => {
+  const hasSelectedFiles = selectedUploadFiles.value.length > 0
+  const hasUploadedResume = resumes.value.length > 0
+  const hasActiveResume = Boolean(activeResume.value)
+  const parseDone = parseResult.value?.parseStatus === 'SUCCESS'
+  const parseFailed = parseResult.value?.parseStatus === 'FAILED'
+    || (parseTaskActive.value && activeAsyncTask.value?.status === 'FAILED')
+  const diagnosisDone = aiAnalysis.value?.analysisStatus === 'SUCCESS'
+  const diagnosisFailed = aiAnalysis.value?.analysisStatus === 'FAILED'
+    || (diagnosisTaskActive.value && activeAsyncTask.value?.status === 'FAILED')
+
+  return [
+    {
+      title: '选择文件',
+      description: selectedUploadSummary.value,
+      status: hasSelectedFiles || hasUploadedResume ? 'done' : 'current',
+    },
+    {
+      title: '上传简历',
+      description: uploading.value ? uploadProgressText.value || '正在上传简历' : hasUploadedResume ? `${resumes.value.length} 份简历已保存` : '上传后进入解析',
+      status: uploading.value ? 'current' : hasUploadedResume ? 'done' : hasSelectedFiles ? 'current' : 'pending',
+    },
+    {
+      title: '解析简历',
+      description: parseTaskActive.value && isActiveAsyncTaskRunning.value
+        ? activeAsyncTask.value?.message || '解析任务执行中'
+        : parseDone
+          ? '解析成功，可确认结果或生成诊断'
+          : parseFailed
+            ? parseResult.value?.errorMessage || asyncTaskError.value || '解析失败，可重试'
+            : hasActiveResume
+              ? '选择简历后开始解析'
+              : '等待选择简历',
+      status: parseFailed ? 'failed' : parseTaskActive.value && isActiveAsyncTaskRunning.value ? 'current' : parseDone ? 'done' : hasActiveResume ? 'current' : 'pending',
+    },
+    {
+      title: '简历诊断',
+      description: diagnosisTaskActive.value && isActiveAsyncTaskRunning.value
+        ? activeAsyncTask.value?.message || '诊断任务执行中'
+        : diagnosisDone
+          ? '诊断完成，可进入目标岗位'
+          : diagnosisFailed
+            ? aiAnalysis.value?.errorMessage || asyncTaskError.value || '诊断失败，可重试'
+            : parseDone
+              ? '解析成功后生成诊断'
+              : '等待解析成功',
+      status: diagnosisFailed ? 'failed' : diagnosisTaskActive.value && isActiveAsyncTaskRunning.value ? 'current' : diagnosisDone ? 'done' : parseDone ? 'current' : 'pending',
+    },
+    {
+      title: '进入匹配',
+      description: parseDone ? '选择目标岗位后生成匹配报告' : '匹配前需要解析成功的简历',
+      status: parseDone ? 'current' : 'pending',
+    },
+  ]
+})
+
+const activeTaskStages = computed(() => {
+  const task = activeAsyncTask.value
+  const progress = asyncTaskProgress.value
+  const failed = task?.status === 'FAILED' || Boolean(asyncTaskError.value)
+  const success = task?.status === 'SUCCESS'
+
+  return [
+    {
+      title: '提交任务',
+      status: task ? 'done' : 'current',
+    },
+    {
+      title: activeAsyncTaskTitle.value === '简历解析' ? '解析文本与结构' : '生成 AI 诊断',
+      status: failed ? 'failed' : success || progress >= 70 ? 'done' : task ? 'current' : 'pending',
+    },
+    {
+      title: '写入结果',
+      status: failed ? 'pending' : success || progress >= 95 ? 'done' : task ? 'current' : 'pending',
+    },
+    {
+      title: '刷新页面结果',
+      status: success ? 'done' : failed ? 'pending' : 'pending',
+    },
+  ]
 })
 
 const structuredContent = computed<ResumeStructuredContent | null>(() => {
@@ -344,6 +458,65 @@ const displayModelSummary = computed(() => {
 })
 const parseResultConfirmed = computed(() => {
   return parseResult.value?.resumeId ? confirmedParseResultIds.value.has(parseResult.value.resumeId) : false
+})
+
+const aiAnalysisScoreSummary = computed(() => {
+  const score = aiAnalysis.value?.score
+  if (score == null) {
+    return {
+      label: '暂无评分',
+      description: '等待简历诊断结果',
+      level: 'empty',
+    }
+  }
+
+  if (score >= 85) {
+    return {
+      label: '质量较好',
+      description: '可以优先进入目标岗位匹配',
+      level: 'strong',
+    }
+  }
+
+  if (score >= 70) {
+    return {
+      label: '基础可用',
+      description: '建议先处理主要问题再匹配',
+      level: 'normal',
+    }
+  }
+
+  return {
+    label: '需要优化',
+    description: '建议先补齐结构和经历表达',
+    level: 'weak',
+  }
+})
+
+const aiAnalysisResultCards = computed(() => {
+  return [
+    {
+      key: 'strengths',
+      title: '简历优势',
+      tone: 'success',
+      emptyText: '暂无优势信息',
+      items: aiAnalysis.value?.strengths ?? [],
+    },
+    {
+      key: 'problems',
+      title: '主要问题',
+      tone: 'danger',
+      emptyText: '暂无问题信息',
+      items: aiAnalysis.value?.problems ?? [],
+    },
+    {
+      key: 'suggestions',
+      title: '建议摘要',
+      tone: 'warning',
+      emptyText: '暂无建议摘要',
+      items: aiAnalysis.value?.suggestionsSummary ?? [],
+    },
+  ]
 })
 
 const otherHiddenCount = computed(() => {
@@ -1169,6 +1342,30 @@ const handleAiAnalysis = async (resume: ResumeListItem) => {
   }
 }
 
+const retryActiveAsyncTask = async () => {
+  if (!activeAsyncTaskResumeId.value) {
+    return
+  }
+
+  const resume = resumes.value.find((item) => item.id === activeAsyncTaskResumeId.value)
+  if (!resume) {
+    ElMessage.warning('未找到可重试的简历记录')
+    return
+  }
+
+  const taskType = activeAsyncTask.value?.taskType
+  clearAsyncTaskState()
+
+  if (taskType === 'RESUME_PARSE') {
+    await handleParse(resume)
+    return
+  }
+
+  if (taskType === 'RESUME_DIAGNOSIS') {
+    await handleAiAnalysis(resume)
+  }
+}
+
 const handleEmbedding = async (resume: ResumeListItem) => {
   embeddingResumeId.value = resume.id
 
@@ -1298,21 +1495,49 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <main class="resume-page">
+  <section class="resume-page">
     <section class="resume-shell">
-      <header class="resume-header">
-        <div>
-          <h1 class="resume-title">我的简历</h1>
-          <p class="resume-subtitle">上传 PDF、DOC 或 DOCX 简历，并查看已上传记录。</p>
+      <PageHeader
+        eyebrow="我的简历"
+        title="管理简历资产、解析结果和简历诊断"
+        description="本页只处理简历自身的上传、解析和质量诊断；岗位匹配和岗位优化建议进入“匹配与优化”页面。"
+      />
+
+      <section class="resume-flow-panel">
+        <div class="resume-flow-header">
+          <div>
+            <h2 class="resume-section-title">简历处理流程</h2>
+            <p class="resume-section-subtitle">按“选择文件 -> 上传 -> 解析 -> 诊断 -> 匹配”逐步推进。</p>
+          </div>
+          <el-tag type="info">当前页面不写回原始简历</el-tag>
         </div>
-        <el-space>
-          <el-button @click="router.push('/')">返回工作台</el-button>
-          <el-button type="primary" @click="router.push('/history')">AI 历史</el-button>
-        </el-space>
-      </header>
+        <div class="resume-flow-steps">
+          <article
+            v-for="(step, index) in resumeFlowSteps"
+            :key="step.title"
+            class="resume-flow-step"
+            :class="`is-${step.status}`"
+          >
+            <span class="resume-flow-index">{{ step.status === 'done' ? '✓' : index + 1 }}</span>
+            <div>
+              <strong>{{ step.title }}</strong>
+              <span>{{ step.description }}</span>
+            </div>
+          </article>
+        </div>
+      </section>
 
       <section class="resume-upload-panel">
         <div>
+          <div class="resume-upload-heading">
+            <div>
+              <h2 class="resume-section-title">上传简历</h2>
+              <p class="resume-section-subtitle">{{ selectedUploadSummary }}</p>
+            </div>
+            <el-tag :type="selectedUploadFiles.length ? 'success' : 'info'">
+              {{ selectedUploadFiles.length ? '已选择文件' : '等待选择' }}
+            </el-tag>
+          </div>
           <el-upload
             v-model:file-list="uploadFiles"
             accept=".pdf,.doc,.docx"
@@ -1331,6 +1556,14 @@ onUnmounted(() => {
 
           <p class="resume-upload-tip">解析会优先使用规则结果；只有需要 AI 参与时才调用 AI，调用失败后自动降级为规则解析。</p>
           <p v-if="uploadProgressText" class="resume-upload-progress">{{ uploadProgressText }}</p>
+          <el-alert
+            v-if="selectedUploadFiles.length"
+            class="resume-upload-selection-alert"
+            :title="`准备上传 ${selectedUploadFiles.length} 份简历，上传完成后会刷新下方简历列表。`"
+            type="success"
+            :closable="false"
+            show-icon
+          />
           <div class="resume-parse-mode-control">
             <span class="resume-parse-mode-label">解析模式</span>
             <el-select v-model="selectedParseMode" size="small" class="resume-parse-mode-select">
@@ -1359,9 +1592,27 @@ onUnmounted(() => {
             <el-tag v-if="activeAsyncTask" :type="resolveAsyncTaskStatusType(activeAsyncTask.status)">
               {{ resolveAsyncTaskStatusText(activeAsyncTask.status) }}
             </el-tag>
+            <el-button
+              v-if="asyncTaskError && canRetryActiveTask"
+              size="small"
+              type="primary"
+              @click="retryActiveAsyncTask"
+            >
+              重试
+            </el-button>
             <el-button v-if="isActiveAsyncTaskRunning" size="small" @click="clearAsyncTaskState">停止轮询</el-button>
           </el-space>
         </header>
+        <div class="resume-task-steps">
+          <span
+            v-for="stage in activeTaskStages"
+            :key="stage.title"
+            class="resume-task-step"
+            :class="`is-${stage.status}`"
+          >
+            {{ stage.title }}
+          </span>
+        </div>
         <el-progress
           v-if="activeAsyncTask"
           :percentage="asyncTaskProgress"
@@ -1377,7 +1628,16 @@ onUnmounted(() => {
         />
       </section>
 
-      <el-table
+      <section class="resume-list-panel">
+        <header class="resume-list-header">
+          <div>
+            <h2 class="resume-section-title">简历资产列表</h2>
+            <p class="resume-section-subtitle">列表只展示摘要信息，解析结果、质量提示和诊断结果在下方分区查看。</p>
+          </div>
+          <el-tag type="info">{{ resumes.length }} 份简历</el-tag>
+        </header>
+
+        <el-table
         v-loading="loading"
         :data="resumes"
         class="resume-table"
@@ -1392,15 +1652,28 @@ onUnmounted(() => {
             {{ formatFileSize(row.fileSize) }}
           </template>
         </el-table-column>
-        <el-table-column prop="uploadStatus" label="状态" width="120" />
+        <el-table-column label="状态" width="120">
+          <template #default="{ row }: { row: ResumeListItem }">
+            <el-tag type="info">{{ row.uploadStatus }}</el-tag>
+          </template>
+        </el-table-column>
         <el-table-column label="上传时间" width="190">
           <template #default="{ row }: { row: ResumeListItem }">
             {{ formatDateTime(row.createdAt) }}
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="520" fixed="right">
+        <el-table-column label="操作" width="430" fixed="right">
           <template #default="{ row }: { row: ResumeListItem }">
             <div class="resume-actions">
+              <el-button
+                size="small"
+                type="primary"
+                plain
+                :disabled="isRowBusy(row.id)"
+                @click="activeResume = row; activePanel = null"
+              >
+                详情
+              </el-button>
               <el-button
                 size="small"
                 type="primary"
@@ -1421,6 +1694,7 @@ onUnmounted(() => {
               <el-button
                 size="small"
                 type="success"
+                plain
                 :disabled="isRowBusy(row.id)"
                 :loading="analyzingResumeId === row.id"
                 @click="handleAiAnalysis(row)"
@@ -1437,15 +1711,8 @@ onUnmounted(() => {
               </el-button>
               <el-button
                 size="small"
-                :disabled="isRowBusy(row.id)"
-                :loading="embeddingResumeId === row.id"
-                @click="handleEmbedding(row)"
-              >
-                生成向量
-              </el-button>
-              <el-button
-                size="small"
                 type="danger"
+                plain
                 :disabled="isRowBusy(row.id) && deletingResumeId !== row.id"
                 :loading="deletingResumeId === row.id"
                 @click="handleDelete(row)"
@@ -1455,7 +1722,13 @@ onUnmounted(() => {
             </div>
           </template>
         </el-table-column>
-      </el-table>
+        </el-table>
+        <EmptyState
+          v-if="!loading && resumes.length === 0"
+          title="你还没有上传简历"
+          description="上传后可以进行简历解析、简历诊断和后续岗位匹配。"
+        />
+      </section>
 
       <section v-if="activeResume && activePanel === null" class="resume-detail-panel">
         <header class="resume-parse-header">
@@ -2093,63 +2366,88 @@ onUnmounted(() => {
             class="resume-ai-warning"
           />
 
-          <div class="resume-score-row">
-            <el-progress
-              class="resume-score-progress"
-              type="dashboard"
-              :percentage="aiAnalysis.score ?? 0"
-              :stroke-width="8"
-              :width="132"
-              color="#2563eb"
-            />
-            <el-descriptions :column="1" border class="resume-score-detail">
-              <el-descriptions-item label="综合评分">{{ aiAnalysis.score ?? '-' }}</el-descriptions-item>
-              <el-descriptions-item label="Prompt 版本">{{ aiAnalysis.promptVersion || '-' }}</el-descriptions-item>
-              <el-descriptions-item label="更新时间">{{ formatDateTime(aiAnalysis.updatedAt || '') }}</el-descriptions-item>
-            </el-descriptions>
-          </div>
+          <section class="resume-ai-overview">
+            <article class="resume-ai-score-card" :class="`is-${aiAnalysisScoreSummary.level}`">
+              <span class="resume-ai-score-value">{{ aiAnalysis.score ?? '-' }}</span>
+              <span class="resume-ai-score-label">综合评分</span>
+              <strong>{{ aiAnalysisScoreSummary.label }}</strong>
+              <p>{{ aiAnalysisScoreSummary.description }}</p>
+            </article>
 
-          <section class="resume-structured-grid">
-            <div>
-              <h3 class="resume-block-title">简历优势</h3>
-              <ul v-if="hasStructuredList(aiAnalysis.strengths)" class="resume-text-list">
-                <li v-for="item in aiAnalysis.strengths" :key="item">{{ item }}</li>
-              </ul>
-              <el-empty v-else description="暂无优势信息" :image-size="72" />
-            </div>
+            <article class="resume-ai-summary-card">
+              <div class="resume-ai-summary-header">
+                <div>
+                  <h3 class="resume-block-title">AI 诊断摘要</h3>
+                  <p class="resume-muted-text">诊断只分析简历自身质量，不判断具体岗位匹配度。</p>
+                </div>
+                <el-tag :type="resolveAnalysisStatusType(aiAnalysis.analysisStatus)">
+                  {{ resolveAnalysisStatusText(aiAnalysis.analysisStatus) }}
+                </el-tag>
+              </div>
+              <div class="resume-ai-meta-grid">
+                <span>
+                  <strong>{{ aiAnalysis.strengths?.length ?? 0 }}</strong>
+                  优势
+                </span>
+                <span>
+                  <strong>{{ aiAnalysis.problems?.length ?? 0 }}</strong>
+                  问题
+                </span>
+                <span>
+                  <strong>{{ aiAnalysis.suggestionsSummary?.length ?? 0 }}</strong>
+                  建议
+                </span>
+              </div>
+              <el-descriptions :column="1" border class="resume-score-detail">
+                <el-descriptions-item label="Prompt 版本">{{ aiAnalysis.promptVersion || '-' }}</el-descriptions-item>
+                <el-descriptions-item label="更新时间">{{ formatDateTime(aiAnalysis.updatedAt || '') }}</el-descriptions-item>
+              </el-descriptions>
+            </article>
+          </section>
 
-            <div>
-              <h3 class="resume-block-title">主要问题</h3>
-              <ul v-if="hasStructuredList(aiAnalysis.problems)" class="resume-text-list">
-                <li v-for="item in aiAnalysis.problems" :key="item">{{ item }}</li>
-              </ul>
-              <el-empty v-else description="暂无问题信息" :image-size="72" />
-            </div>
+          <section class="resume-ai-result-grid">
+            <article
+              v-for="card in aiAnalysisResultCards"
+              :key="card.key"
+              class="resume-ai-result-card"
+              :class="`is-${card.tone}`"
+            >
+              <div class="resume-ai-result-card-header">
+                <h3 class="resume-block-title">{{ card.title }}</h3>
+                <el-tag size="small" :type="card.tone">{{ card.items.length }} 条</el-tag>
+              </div>
+              <ol v-if="hasStructuredList(card.items)" class="resume-ai-result-list">
+                <li v-for="item in card.items" :key="item">{{ item }}</li>
+              </ol>
+              <el-empty v-else :description="card.emptyText" :image-size="72" />
+            </article>
+          </section>
 
-            <div>
-              <h3 class="resume-block-title">建议摘要</h3>
-              <ul v-if="hasStructuredList(aiAnalysis.suggestionsSummary)" class="resume-text-list">
-                <li v-for="item in aiAnalysis.suggestionsSummary" :key="item">{{ item }}</li>
-              </ul>
-              <el-empty v-else description="暂无建议摘要" :image-size="72" />
-            </div>
+          <section class="resume-ai-next-panel">
+            <h3 class="resume-block-title">下一步</h3>
+            <p>先确认诊断里的真实问题，再选择或新增目标岗位进入匹配分析；岗位相关优化建议会在匹配成功后生成。</p>
+            <el-space wrap>
+              <el-button @click="router.push('/job-descriptions')">选择目标岗位</el-button>
+              <el-button type="primary" @click="router.push('/ai-job-matches')">进入匹配与优化</el-button>
+            </el-space>
           </section>
         </template>
       </section>
     </section>
-  </main>
+  </section>
 </template>
 
 <style scoped>
 .resume-page {
-  min-height: 100vh;
-  padding: 40px 28px 56px;
-  background: #f4f7fb;
+  min-height: 0;
+  padding: 0;
+  background: transparent;
 }
 
 .resume-shell {
-  width: min(100%, 1280px);
-  margin: 0 auto;
+  display: grid;
+  gap: 18px;
+  width: 100%;
 }
 
 .resume-header {
@@ -2162,16 +2460,124 @@ onUnmounted(() => {
 
 .resume-title {
   margin: 0;
-  color: #111827;
+  color: var(--app-color-text);
   font-size: 28px;
   font-weight: 700;
 }
 
 .resume-subtitle {
   margin: 8px 0 0;
-  color: #667085;
+  color: var(--app-color-text-secondary);
   font-size: 15px;
   line-height: 1.7;
+}
+
+.resume-flow-panel {
+  display: grid;
+  gap: 18px;
+  margin-bottom: 20px;
+  padding: 24px;
+  border: 1px solid var(--app-color-border);
+  border-radius: 18px;
+  background: var(--app-color-surface);
+  box-shadow: var(--app-shadow-card);
+}
+
+.resume-list-panel {
+  padding: 24px;
+  border: 1px solid var(--app-color-border);
+  border-radius: 18px;
+  background: var(--app-color-surface);
+  box-shadow: var(--app-shadow-card);
+}
+
+.resume-list-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.resume-flow-header,
+.resume-upload-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.resume-flow-steps {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.resume-flow-step {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  min-height: 96px;
+  padding: 14px;
+  border: 1px solid var(--app-color-border);
+  border-radius: 14px;
+  background: var(--app-color-surface-soft);
+}
+
+.resume-flow-step.is-done {
+  border-color: rgba(63, 143, 104, 0.35);
+  background: #edf7f1;
+}
+
+.resume-flow-step.is-current {
+  border-color: rgba(37, 111, 108, 0.42);
+  background: var(--app-color-primary-soft);
+}
+
+.resume-flow-step.is-failed {
+  border-color: rgba(184, 92, 92, 0.45);
+  background: #fbefef;
+}
+
+.resume-flow-index {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 999px;
+  color: var(--app-color-text-secondary);
+  font-size: 13px;
+  font-weight: 700;
+  background: #eee9e1;
+}
+
+.resume-flow-step.is-done .resume-flow-index {
+  color: #fff;
+  background: var(--app-color-success);
+}
+
+.resume-flow-step.is-current .resume-flow-index {
+  color: #fff;
+  background: var(--app-color-primary);
+}
+
+.resume-flow-step.is-failed .resume-flow-index {
+  color: #fff;
+  background: var(--app-color-danger);
+}
+
+.resume-flow-step strong {
+  display: block;
+  color: var(--app-color-text);
+  font-size: 14px;
+}
+
+.resume-flow-step span:last-child {
+  display: block;
+  margin-top: 4px;
+  color: var(--app-color-text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .resume-upload-panel {
@@ -2181,22 +2587,27 @@ onUnmounted(() => {
   gap: 16px;
   margin-bottom: 20px;
   padding: 24px;
-  border: 1px solid #dde5f0;
-  border-radius: 8px;
-  background: #ffffff;
+  border: 1px solid var(--app-color-border);
+  border-radius: 18px;
+  background: var(--app-color-surface);
+  box-shadow: var(--app-shadow-card);
 }
 
 .resume-upload-tip {
   margin-top: 8px;
-  color: #667085;
+  color: var(--app-color-text-secondary);
   font-size: 13px;
 }
 
 .resume-upload-progress {
   margin: 10px 0 0;
-  color: #2563eb;
+  color: var(--app-color-primary);
   font-size: 13px;
   font-weight: 600;
+}
+
+.resume-upload-selection-alert {
+  margin-top: 12px;
 }
 
 .resume-task-panel {
@@ -2204,9 +2615,10 @@ onUnmounted(() => {
   gap: 14px;
   margin-bottom: 20px;
   padding: 20px 24px;
-  border: 1px solid #dde5f0;
-  border-radius: 8px;
-  background: #ffffff;
+  border: 1px solid var(--app-color-border);
+  border-radius: 18px;
+  background: var(--app-color-surface);
+  box-shadow: var(--app-shadow-card);
 }
 
 .resume-task-header {
@@ -2218,20 +2630,54 @@ onUnmounted(() => {
 
 .resume-task-title {
   margin: 0;
-  color: #111827;
+  color: var(--app-color-text);
   font-size: 17px;
   font-weight: 700;
 }
 
 .resume-task-subtitle {
   margin: 6px 0 0;
-  color: #667085;
+  color: var(--app-color-text-secondary);
   font-size: 13px;
   line-height: 1.6;
 }
 
 .resume-task-alert {
   margin-top: 2px;
+}
+
+.resume-task-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.resume-task-step {
+  padding: 6px 10px;
+  border: 1px solid var(--app-color-border);
+  border-radius: 999px;
+  color: var(--app-color-text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+  background: var(--app-color-surface-soft);
+}
+
+.resume-task-step.is-done {
+  border-color: rgba(63, 143, 104, 0.35);
+  color: var(--app-color-success);
+  background: #edf7f1;
+}
+
+.resume-task-step.is-current {
+  border-color: rgba(37, 111, 108, 0.42);
+  color: var(--app-color-primary);
+  background: var(--app-color-primary-soft);
+}
+
+.resume-task-step.is-failed {
+  border-color: rgba(184, 92, 92, 0.45);
+  color: var(--app-color-danger);
+  background: #fbefef;
 }
 
 .resume-parse-mode-control {
@@ -2247,7 +2693,7 @@ onUnmounted(() => {
 }
 
 .resume-parse-mode-label {
-  color: #344054;
+  color: var(--app-color-text);
   font-size: 13px;
   white-space: nowrap;
 }
@@ -2257,8 +2703,8 @@ onUnmounted(() => {
 }
 
 .resume-table {
-  border: 1px solid #dde5f0;
-  border-radius: 8px;
+  border: 1px solid var(--app-color-border);
+  border-radius: 18px;
 }
 
 .resume-actions {
@@ -2271,15 +2717,16 @@ onUnmounted(() => {
 }
 
 :deep(.resume-row-drop-target td) {
-  background: #eef6ff !important;
+  background: var(--app-color-primary-soft) !important;
 }
 
 .resume-detail-panel {
   margin-top: 24px;
   padding: 28px;
-  border: 1px solid #dde5f0;
-  border-radius: 8px;
-  background: #ffffff;
+  border: 1px solid var(--app-color-border);
+  border-radius: 18px;
+  background: var(--app-color-surface);
+  box-shadow: var(--app-shadow-card);
 }
 
 .resume-detail-actions {
@@ -2292,9 +2739,10 @@ onUnmounted(() => {
 .resume-parse-panel {
   margin-top: 24px;
   padding: 28px;
-  border: 1px solid #dde5f0;
-  border-radius: 8px;
-  background: #ffffff;
+  border: 1px solid var(--app-color-border);
+  border-radius: 18px;
+  background: var(--app-color-surface);
+  box-shadow: var(--app-shadow-card);
 }
 
 .resume-parse-header {
@@ -2307,14 +2755,14 @@ onUnmounted(() => {
 
 .resume-section-title {
   margin: 0;
-  color: #111827;
+  color: var(--app-color-text);
   font-size: 20px;
   font-weight: 700;
 }
 
 .resume-section-subtitle {
   margin: 6px 0 0;
-  color: #667085;
+  color: var(--app-color-text-secondary);
   font-size: 14px;
 }
 
@@ -2329,9 +2777,10 @@ onUnmounted(() => {
 .resume-ai-section {
   margin-top: 24px;
   padding: 28px;
-  border: 1px solid #dde5f0;
-  border-radius: 8px;
-  background: #ffffff;
+  border: 1px solid var(--app-color-border);
+  border-radius: 18px;
+  background: var(--app-color-surface);
+  box-shadow: var(--app-shadow-card);
 }
 
 .resume-ai-header {
@@ -2344,7 +2793,7 @@ onUnmounted(() => {
 
 .resume-ai-meta {
   margin: 0;
-  color: #667085;
+  color: var(--app-color-text-secondary);
   font-size: 13px;
 }
 
@@ -2352,48 +2801,192 @@ onUnmounted(() => {
   margin-bottom: 16px;
 }
 
-.resume-score-row {
+.resume-ai-overview {
   display: grid;
-  grid-template-columns: 160px minmax(0, 1fr);
+  grid-template-columns: 220px minmax(0, 1fr);
   gap: 20px;
-  align-items: center;
   margin-top: 20px;
+  align-items: stretch;
+}
+
+.resume-ai-score-card {
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  min-height: 220px;
+  padding: 24px;
+  border: 1px solid var(--app-color-border);
+  border-radius: 18px;
+  background: var(--app-color-surface-soft);
+  text-align: center;
+}
+
+.resume-ai-score-card.is-strong {
+  border-color: rgba(63, 143, 104, 0.35);
+  background: #edf7f1;
+}
+
+.resume-ai-score-card.is-normal {
+  border-color: rgba(37, 111, 108, 0.35);
+  background: var(--app-color-primary-soft);
+}
+
+.resume-ai-score-card.is-weak {
+  border-color: rgba(201, 138, 46, 0.4);
+  background: #fbf3e5;
+}
+
+.resume-ai-score-value {
+  color: var(--app-color-primary);
+  font-size: 54px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.resume-ai-score-label {
+  margin-top: 8px;
+  color: var(--app-color-text-secondary);
+  font-size: 13px;
+}
+
+.resume-ai-score-card strong {
+  margin-top: 14px;
+  color: var(--app-color-text);
+  font-size: 18px;
+}
+
+.resume-ai-score-card p {
+  margin: 8px 0 0;
+  color: var(--app-color-text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.resume-ai-summary-card {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+  padding: 20px;
+  border: 1px solid var(--app-color-border);
+  border-radius: 18px;
+  background: var(--app-color-surface-soft);
+}
+
+.resume-ai-summary-header,
+.resume-ai-result-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.resume-ai-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.resume-ai-meta-grid span {
+  display: grid;
+  gap: 4px;
+  min-height: 74px;
+  align-content: center;
+  padding: 12px;
+  border: 1px solid var(--app-color-border);
+  border-radius: 14px;
+  color: var(--app-color-text-secondary);
+  font-size: 13px;
+  background: var(--app-color-surface);
+}
+
+.resume-ai-meta-grid strong {
+  color: var(--app-color-text);
+  font-size: 24px;
+  line-height: 1;
 }
 
 .resume-score-detail {
   min-width: 0;
 }
 
-.resume-score-progress {
-  display: block;
-  width: 132px;
-  height: 132px;
-  justify-self: center;
-}
-
-.resume-score-progress :deep(.el-progress-circle) {
-  width: 132px !important;
-  height: 132px !important;
-}
-
-.resume-score-progress :deep(.el-progress__text) {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 132px;
-  height: 132px;
-  margin: 0;
-  top: 0;
-  left: 0;
-  line-height: 1;
-  transform: none;
-}
-
-.resume-structured-grid {
+.resume-ai-result-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 18px;
   margin-top: 20px;
+}
+
+.resume-ai-result-card {
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid var(--app-color-border);
+  border-radius: 18px;
+  background: var(--app-color-surface-soft);
+}
+
+.resume-ai-result-card.is-success {
+  border-color: rgba(63, 143, 104, 0.32);
+}
+
+.resume-ai-result-card.is-danger {
+  border-color: rgba(184, 92, 92, 0.32);
+}
+
+.resume-ai-result-card.is-warning {
+  border-color: rgba(201, 138, 46, 0.34);
+}
+
+.resume-ai-result-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.resume-ai-result-list li {
+  position: relative;
+  padding: 12px 12px 12px 34px;
+  border: 1px solid var(--app-color-border);
+  border-radius: 14px;
+  color: var(--app-color-text);
+  line-height: 1.7;
+  background: var(--app-color-surface);
+}
+
+.resume-ai-result-list li::before {
+  position: absolute;
+  top: 14px;
+  left: 12px;
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  background: var(--app-color-primary);
+  content: '';
+}
+
+.resume-ai-result-card.is-danger .resume-ai-result-list li::before {
+  background: var(--app-color-danger);
+}
+
+.resume-ai-result-card.is-warning .resume-ai-result-list li::before {
+  background: var(--app-color-warning);
+}
+
+.resume-ai-next-panel {
+  display: grid;
+  gap: 12px;
+  margin-top: 20px;
+  padding: 18px;
+  border: 1px solid var(--app-color-border);
+  border-radius: 18px;
+  background: var(--app-color-primary-soft);
+}
+
+.resume-ai-next-panel p {
+  margin: 0;
+  color: var(--app-color-text);
+  line-height: 1.7;
 }
 
 .resume-display-layout {
@@ -2420,9 +3013,9 @@ onUnmounted(() => {
   min-width: 0;
   padding: 16px;
   border: 0;
-  border-left: 3px solid #d8e3f3;
-  border-radius: 8px;
-  background: #f8fbff;
+  border-left: 3px solid var(--app-color-primary);
+  border-radius: 14px;
+  background: var(--app-color-surface-soft);
 }
 
 .resume-info-card.compact {
@@ -2435,18 +3028,18 @@ onUnmounted(() => {
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 8px;
-  color: #111827;
+  color: var(--app-color-text);
   line-height: 1.5;
 }
 
 .resume-card-heading span {
   flex: 0 0 auto;
-  color: #667085;
+  color: var(--app-color-text-secondary);
   font-size: 13px;
 }
 
 .resume-card-placeholder {
-  color: #667085;
+  color: var(--app-color-text-secondary);
   font-weight: 600;
 }
 
@@ -2457,7 +3050,7 @@ onUnmounted(() => {
 
 .resume-card-line {
   margin: 0 0 8px;
-  color: #344054;
+  color: var(--app-color-text);
   font-size: 14px;
   line-height: 1.6;
 }
@@ -2465,7 +3058,7 @@ onUnmounted(() => {
 .resume-compact-list {
   margin: 10px 0 0;
   padding-left: 18px;
-  color: #344054;
+  color: var(--app-color-text);
   line-height: 1.7;
 }
 
@@ -2476,16 +3069,16 @@ onUnmounted(() => {
   white-space: pre-wrap;
   word-break: break-word;
   padding: 12px;
-  border-radius: 8px;
-  color: #344054;
+  border-radius: 14px;
+  color: var(--app-color-text);
   font-size: 13px;
   line-height: 1.7;
-  background: #eef4fb;
+  background: var(--app-color-primary-soft);
 }
 
 .resume-summary-text {
   margin: 0;
-  color: #344054;
+  color: var(--app-color-text);
   line-height: 1.8;
   white-space: pre-wrap;
 }
@@ -2502,7 +3095,7 @@ onUnmounted(() => {
 
 .resume-skill-group-title {
   margin-bottom: 8px;
-  color: #667085;
+  color: var(--app-color-text-secondary);
   font-size: 13px;
   font-weight: 700;
 }
@@ -2524,7 +3117,7 @@ onUnmounted(() => {
 
 .resume-block-title {
   margin: 0 0 12px;
-  color: #111827;
+  color: var(--app-color-text);
   font-size: 15px;
   font-weight: 700;
 }
@@ -2548,9 +3141,9 @@ onUnmounted(() => {
   min-height: 88px;
   margin: 0;
   padding: 14px 16px 14px 28px;
-  border: 1px solid #dde5f0;
-  border-radius: 8px;
-  color: #344054;
+  border: 1px solid var(--app-color-border);
+  border-radius: 14px;
+  color: var(--app-color-text);
   line-height: 1.7;
 }
 
@@ -2563,9 +3156,9 @@ onUnmounted(() => {
 .resume-section-card {
   min-width: 0;
   padding: 16px;
-  border: 1px solid #dde5f0;
-  border-radius: 8px;
-  background: #fbfdff;
+  border: 1px solid var(--app-color-border);
+  border-radius: 14px;
+  background: var(--app-color-surface-soft);
 }
 
 .resume-section-card-header {
@@ -2574,7 +3167,7 @@ onUnmounted(() => {
   justify-content: space-between;
   gap: 10px;
   margin-bottom: 12px;
-  color: #111827;
+  color: var(--app-color-text);
 }
 
 .resume-section-lines {
@@ -2587,21 +3180,21 @@ onUnmounted(() => {
 
 .resume-debug-title {
   margin: 18px 0 10px;
-  color: #344054;
+  color: var(--app-color-text);
   font-size: 14px;
   font-weight: 700;
 }
 
 .resume-muted-text {
   margin: 8px 0 0;
-  color: #667085;
+  color: var(--app-color-text-secondary);
   font-size: 13px;
   line-height: 1.6;
 }
 
 .resume-empty-section-summary {
   margin: 14px 0 0;
-  color: #667085;
+  color: var(--app-color-text-secondary);
   font-size: 13px;
   line-height: 1.6;
 }
@@ -2613,9 +3206,9 @@ onUnmounted(() => {
   white-space: pre-wrap;
   word-break: break-word;
   padding: 16px;
-  border: 1px solid #dde5f0;
-  border-radius: 8px;
-  color: #344054;
+  border: 1px solid var(--app-color-border);
+  border-radius: 14px;
+  color: var(--app-color-text);
   font-family:
     ui-monospace,
     SFMono-Regular,
@@ -2625,16 +3218,23 @@ onUnmounted(() => {
     monospace;
   font-size: 13px;
   line-height: 1.7;
-  background: #f8fafc;
+  background: var(--app-color-surface-soft);
 }
 
 @media (max-width: 640px) {
   .resume-header,
+  .resume-flow-header,
+  .resume-flow-steps,
   .resume-upload-panel,
+  .resume-upload-heading,
   .resume-task-header,
   .resume-parse-header {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .resume-flow-steps {
+    grid-template-columns: 1fr;
   }
 
   .resume-actions {
@@ -2642,13 +3242,14 @@ onUnmounted(() => {
   }
 
   .resume-ai-header,
-  .resume-score-row {
+  .resume-ai-overview {
     grid-template-columns: 1fr;
     align-items: stretch;
     flex-direction: column;
   }
 
-  .resume-structured-grid {
+  .resume-ai-meta-grid,
+  .resume-ai-result-grid {
     grid-template-columns: 1fr;
   }
 

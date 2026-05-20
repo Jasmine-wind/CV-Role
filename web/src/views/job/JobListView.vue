@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { ElMessage } from 'element-plus'
 import { onMounted, ref } from 'vue'
+import { ElMessage } from 'element-plus'
 import { useRouter } from 'vue-router'
+import EmptyState from '@/components/common/EmptyState.vue'
+import PageHeader from '@/components/common/PageHeader.vue'
 import { getJobList } from '@/api/job'
 import type { JobListItem } from '@/types/job'
 
@@ -21,88 +23,103 @@ const loadJobs = async () => {
   }
 }
 
-const goDetail = (job: JobListItem) => {
-  router.push(`/jobs/${job.id}`)
-}
-
 onMounted(() => {
   loadJobs()
 })
 </script>
 
 <template>
-  <main class="job-page">
-    <section class="job-shell">
-      <header class="job-header">
-        <div>
-          <h1 class="job-title">岗位库</h1>
-          <p class="job-subtitle">查看系统预置岗位，作为目标岗位和匹配分析的参考。</p>
-        </div>
-        <el-space>
-          <el-button @click="router.push('/job-descriptions')">目标岗位</el-button>
-          <el-button @click="router.push('/')">返回工作台</el-button>
-        </el-space>
-      </header>
+  <section class="job-page">
+    <PageHeader
+      eyebrow="岗位库参考"
+      title="系统预置岗位只作为参考"
+      description="岗位库不是维护系统岗位的入口，也不是用户真实投递主流程。真实 JD 请从目标岗位新增。"
+    >
+      <template #actions>
+        <el-button type="primary" @click="router.push('/job-descriptions/new')">新增目标岗位</el-button>
+        <el-button @click="router.push('/job-descriptions')">返回目标岗位</el-button>
+      </template>
+    </PageHeader>
 
-      <el-table v-loading="loading" :data="jobs" class="job-table" empty-text="暂无可用岗位">
-        <el-table-column prop="title" label="岗位名称" min-width="180" />
-        <el-table-column prop="companyName" label="公司" min-width="150" />
-        <el-table-column prop="jobCategory" label="方向" width="140" />
-        <el-table-column prop="location" label="地点" width="120" />
-        <el-table-column label="技能要求" min-width="260">
-          <template #default="{ row }: { row: JobListItem }">
-            <div class="job-tag-list">
-              <el-tag v-for="skill in row.requiredSkills" :key="skill" size="small">{{ skill }}</el-tag>
-            </div>
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="120" fixed="right">
-          <template #default="{ row }: { row: JobListItem }">
-            <el-button size="small" type="primary" @click="goDetail(row)">详情</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
+    <section v-loading="loading" class="job-reference-grid">
+      <article
+        v-for="job in jobs"
+        :key="job.id"
+        class="job-reference-card"
+      >
+        <header>
+          <div>
+            <h3>{{ job.title }}</h3>
+            <p>{{ job.companyName }} · {{ job.location }}</p>
+          </div>
+          <el-tag type="info">{{ job.jobCategory || '岗位参考' }}</el-tag>
+        </header>
+        <div class="job-tag-list">
+          <el-tag v-for="skill in job.requiredSkills.slice(0, 8)" :key="skill" size="small">{{ skill }}</el-tag>
+        </div>
+        <footer>
+          <el-button @click="router.push(`/jobs/${job.id}`)">查看参考详情</el-button>
+          <el-button type="primary" plain @click="router.push('/job-descriptions/new')">基于真实 JD 新增</el-button>
+        </footer>
+      </article>
     </section>
-  </main>
+
+    <EmptyState
+      v-if="!loading && jobs.length === 0"
+      title="暂无岗位库参考"
+      description="岗位库只是辅助参考，不影响你从目标岗位粘贴真实 JD。"
+      action-text="新增目标岗位"
+      @action="router.push('/job-descriptions/new')"
+    />
+  </section>
 </template>
 
 <style scoped>
 .job-page {
-  min-height: 100vh;
-  padding: 40px 28px 56px;
-  background: #f4f7fb;
+  display: grid;
+  gap: 18px;
 }
 
-.job-shell {
-  width: min(100%, 1200px);
-  margin: 0 auto;
+.job-reference-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
 }
 
-.job-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+.job-reference-card {
+  display: grid;
   gap: 16px;
-  margin-bottom: 24px;
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid var(--app-color-border);
+  border-radius: 18px;
+  background: var(--app-color-surface);
+  box-shadow: var(--app-shadow-card);
 }
 
-.job-title {
+.job-reference-card header,
+.job-reference-card footer {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.job-reference-card h3 {
   margin: 0;
-  color: #111827;
-  font-size: 28px;
-  font-weight: 700;
+  color: var(--app-color-text);
+  font-size: 18px;
 }
 
-.job-subtitle {
-  margin: 8px 0 0;
-  color: #667085;
-  font-size: 15px;
-  line-height: 1.7;
+.job-reference-card p {
+  margin: 6px 0 0;
+  color: var(--app-color-text-secondary);
+  line-height: 1.6;
 }
 
-.job-table {
-  border: 1px solid #dde5f0;
-  border-radius: 8px;
+.job-reference-card footer {
+  flex-wrap: wrap;
+  justify-content: flex-start;
 }
 
 .job-tag-list {
@@ -111,9 +128,18 @@ onMounted(() => {
   gap: 8px;
 }
 
-@media (max-width: 640px) {
-  .job-header {
-    align-items: stretch;
+@media (max-width: 1200px) {
+  .job-reference-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .job-reference-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .job-reference-card header {
     flex-direction: column;
   }
 }

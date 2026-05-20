@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { ElMessage } from 'element-plus'
 import { reactive, ref } from 'vue'
+import { ElMessage } from 'element-plus'
 import { useRouter } from 'vue-router'
+import BaseCard from '@/components/common/BaseCard.vue'
+import PageHeader from '@/components/common/PageHeader.vue'
 import { submitJobDescription } from '@/api/job-description'
 
 const router = useRouter()
@@ -40,103 +42,70 @@ const handleSubmit = async () => {
 </script>
 
 <template>
-  <main class="job-description-page">
-    <section class="job-description-shell">
-      <header class="job-description-header">
-        <div>
-          <h1 class="job-description-title">新增目标岗位</h1>
-          <p class="job-description-subtitle">提交目标岗位 JD，后续可解析岗位要求并进入匹配与优化。</p>
+  <section class="job-description-create-page">
+    <PageHeader
+      eyebrow="新增目标岗位"
+      title="粘贴真实招聘 JD"
+      description="目标岗位固定来自用户输入，不进入系统预置岗位库，也不依赖岗位爬取。"
+    >
+      <template #actions>
+        <el-button @click="router.push('/job-descriptions')">返回目标岗位</el-button>
+      </template>
+    </PageHeader>
+
+    <BaseCard title="目标岗位信息" subtitle="建议保留职责、要求、加分项和经验要求，解析结果会用于后续匹配分析。">
+      <el-alert
+        class="job-description-alert"
+        title="这里不维护系统预置岗位，只保存你自己的目标 JD。"
+        type="info"
+        :closable="false"
+        show-icon
+      />
+
+      <el-form label-position="top" class="job-description-form">
+        <el-form-item label="标题">
+          <el-input
+            v-model="form.title"
+            maxlength="200"
+            show-word-limit
+            placeholder="例如：Java 后端开发工程师"
+          />
+        </el-form-item>
+
+        <el-form-item label="目标岗位 JD 原文">
+          <el-input
+            v-model="form.rawText"
+            type="textarea"
+            :rows="18"
+            maxlength="10000"
+            show-word-limit
+            placeholder="粘贴招聘 JD 原文，包含职责、要求、加分项等内容。"
+          />
+        </el-form-item>
+
+        <div class="job-description-actions">
+          <el-button @click="router.push('/job-descriptions')">取消</el-button>
+          <el-button type="primary" :loading="submitting" @click="handleSubmit">提交目标岗位</el-button>
         </div>
-        <el-space>
-          <el-button @click="router.push('/job-descriptions')">目标岗位</el-button>
-          <el-button @click="router.push('/jobs')">岗位库</el-button>
-          <el-button @click="router.push('/')">返回工作台</el-button>
-        </el-space>
-      </header>
-
-      <section class="job-description-panel">
-        <el-alert
-          class="job-description-alert"
-          title="目标岗位来源固定为用户粘贴 JD，不进入系统预置岗位库，也不依赖岗位爬取。"
-          type="info"
-          :closable="false"
-          show-icon
-        />
-
-        <el-form label-position="top">
-          <el-form-item label="标题">
-            <el-input
-              v-model="form.title"
-              maxlength="200"
-              show-word-limit
-              placeholder="例如：Java 后端开发工程师"
-            />
-          </el-form-item>
-
-          <el-form-item label="目标岗位 JD 原文">
-            <el-input
-              v-model="form.rawText"
-              type="textarea"
-              :rows="16"
-              maxlength="10000"
-              show-word-limit
-              placeholder="粘贴招聘 JD 原文，包含职责、要求、加分项等内容。"
-            />
-          </el-form-item>
-
-          <div class="job-description-actions">
-            <el-button @click="router.push('/job-descriptions')">取消</el-button>
-            <el-button type="primary" :loading="submitting" @click="handleSubmit">提交</el-button>
-          </div>
-        </el-form>
-      </section>
-    </section>
-  </main>
+      </el-form>
+    </BaseCard>
+  </section>
 </template>
 
 <style scoped>
-.job-description-page {
-  min-height: 100vh;
-  padding: 40px 28px 56px;
-  background: #f4f7fb;
-}
-
-.job-description-shell {
-  width: min(100%, 960px);
-  margin: 0 auto;
-}
-
-.job-description-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 24px;
-}
-
-.job-description-title {
-  margin: 0;
-  color: #111827;
-  font-size: 28px;
-  font-weight: 700;
-}
-
-.job-description-subtitle {
-  margin: 8px 0 0;
-  color: #667085;
-  font-size: 15px;
-  line-height: 1.7;
-}
-
-.job-description-panel {
-  padding: 28px;
-  border: 1px solid #dde5f0;
-  border-radius: 8px;
-  background: #ffffff;
+.job-description-create-page {
+  display: grid;
+  gap: 18px;
+  max-width: 980px;
 }
 
 .job-description-alert {
-  margin-bottom: 20px;
+  margin-bottom: 18px;
+}
+
+.job-description-form {
+  display: grid;
+  gap: 6px;
 }
 
 .job-description-actions {
@@ -146,7 +115,6 @@ const handleSubmit = async () => {
 }
 
 @media (max-width: 640px) {
-  .job-description-header,
   .job-description-actions {
     align-items: stretch;
     flex-direction: column;

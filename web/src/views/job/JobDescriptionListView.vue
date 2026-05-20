@@ -1,14 +1,20 @@
 <script setup lang="ts">
+import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { deleteJobDescription, getJobDescriptionList } from '@/api/job-description'
+import EmptyState from '@/components/common/EmptyState.vue'
+import PageHeader from '@/components/common/PageHeader.vue'
+import JobDescriptionCard from '@/components/job/JobDescriptionCard.vue'
+import { deleteJobDescription, getJobDescriptionList, parseJobDescription } from '@/api/job-description'
 import type { JobDescriptionDetail } from '@/types/job-description'
 
 const router = useRouter()
 const records = ref<JobDescriptionDetail[]>([])
 const loading = ref(false)
 const deletingId = ref<number | null>(null)
+const parsingId = ref<number | null>(null)
+
+const parsedCount = computed(() => records.value.filter((item) => item.parseStatus === 'SUCCESS').length)
 
 const loadRecords = async () => {
   loading.value = true
@@ -22,42 +28,22 @@ const loadRecords = async () => {
   }
 }
 
-const formatDateTime = (value: string | null) => {
-  if (!value) {
-    return '-'
-  }
+const handleParse = async (record: JobDescriptionDetail) => {
+  parsingId.value = record.id
 
-  return value.replace('T', ' ').slice(0, 19)
-}
-
-const statusType = (status: string) => {
-  if (status === 'SUCCESS') {
-    return 'success'
+  try {
+    const next = await parseJobDescription(record.id)
+    records.value = records.value.map((item) => item.id === record.id ? next : item)
+    if (next.parseStatus === 'FAILED') {
+      ElMessage.error(next.errorMessage || '目标岗位解析失败')
+    } else {
+      ElMessage.success('目标岗位解析完成')
+    }
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '目标岗位解析失败')
+  } finally {
+    parsingId.value = null
   }
-  if (status === 'FAILED') {
-    return 'danger'
-  }
-  return 'info'
-}
-
-const statusText = (status: string) => {
-  if (status === 'SUCCESS') {
-    return '已解析'
-  }
-  if (status === 'FAILED') {
-    return '解析失败'
-  }
-  return '未解析'
-}
-
-const sourceTypeText = (sourceType: string | null) => {
-  if (sourceType === 'PRESET') {
-    return '系统预置'
-  }
-  if (sourceType === 'CRAWLED') {
-    return '外部采集'
-  }
-  return '用户粘贴 JD'
 }
 
 const handleDelete = async (record: JobDescriptionDetail) => {
@@ -90,113 +76,110 @@ onMounted(() => {
 </script>
 
 <template>
-  <main class="job-description-page">
-    <section class="job-description-shell">
-      <header class="job-description-header">
-        <div>
-          <h1 class="job-description-title">目标岗位</h1>
-          <p class="job-description-subtitle">管理自己的目标 JD，解析岗位要求后进入匹配与优化。</p>
-        </div>
-        <el-space>
-          <el-button type="primary" @click="router.push('/job-descriptions/new')">新增目标岗位</el-button>
-          <el-button @click="router.push('/ai-job-matches')">匹配与优化</el-button>
-          <el-button @click="router.push('/')">返回工作台</el-button>
-        </el-space>
-      </header>
+  <section class="job-description-page">
+    <PageHeader
+      eyebrow="目标岗位"
+      title="管理你自己的真实目标 JD"
+      description="这里保存用户粘贴的目标岗位，不维护系统预置岗位。解析完成后再进入匹配与优化。"
+    >
+      <template #actions>
+        <el-button @click="router.push('/jobs')">岗位库参考</el-button>
+        <el-button type="primary" @click="router.push('/job-descriptions/new')">新增目标岗位</el-button>
+      </template>
+    </PageHeader>
 
-      <el-table v-loading="loading" :data="records" class="job-description-table" empty-text="暂无目标岗位">
-        <el-table-column prop="title" label="标题" min-width="220" />
-        <el-table-column label="来源" width="130">
-          <template #default="{ row }: { row: JobDescriptionDetail }">
-            <el-tag type="info">{{ sourceTypeText(row.sourceType) }}</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="解析状态" width="120">
-          <template #default="{ row }: { row: JobDescriptionDetail }">
-            <el-tag :type="statusType(row.parseStatus)">{{ statusText(row.parseStatus) }}</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="modelName" label="模型" min-width="140">
-          <template #default="{ row }: { row: JobDescriptionDetail }">
-            {{ row.modelName || '-' }}
-          </template>
-        </el-table-column>
-        <el-table-column label="更新时间" width="180">
-          <template #default="{ row }: { row: JobDescriptionDetail }">
-            {{ formatDateTime(row.updatedAt) }}
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="250" fixed="right">
-          <template #default="{ row }: { row: JobDescriptionDetail }">
-            <el-space>
-              <el-button size="small" type="primary" @click="router.push(`/job-descriptions/${row.id}`)">查看</el-button>
-              <el-button
-                size="small"
-                :disabled="row.parseStatus !== 'SUCCESS'"
-                @click="router.push(`/ai-job-matches?jobDescriptionId=${row.id}`)"
-              >
-                匹配分析
-              </el-button>
-              <el-button
-                size="small"
-                type="danger"
-                :loading="deletingId === row.id"
-                :disabled="deletingId !== null && deletingId !== row.id"
-                @click="handleDelete(row)"
-              >
-                删除
-              </el-button>
-            </el-space>
-          </template>
-        </el-table-column>
-      </el-table>
+    <section v-loading="loading" class="job-description-overview">
+      <article>
+        <span>目标岗位</span>
+        <strong>{{ records.length }}</strong>
+        <small>用户粘贴 JD</small>
+      </article>
+      <article>
+        <span>已解析</span>
+        <strong>{{ parsedCount }}</strong>
+        <small>可用于匹配分析</small>
+      </article>
+      <article>
+        <span>主流程</span>
+        <strong>匹配与优化</strong>
+        <small>从解析成功的目标岗位进入</small>
+      </article>
     </section>
-  </main>
+
+    <section v-loading="loading" class="job-description-card-grid">
+      <JobDescriptionCard
+        v-for="record in records"
+        :key="record.id"
+        :record="record"
+        :class="{ 'is-busy': deletingId === record.id || parsingId === record.id }"
+        @detail="router.push(`/job-descriptions/${record.id}`)"
+        @parse="handleParse"
+        @match="router.push(`/ai-job-matches?jobDescriptionId=${record.id}`)"
+        @delete="handleDelete"
+      />
+    </section>
+
+    <EmptyState
+      v-if="!loading && records.length === 0"
+      title="你还没有目标岗位"
+      description="粘贴一个真实招聘 JD 后，系统可以解析岗位要求并生成匹配分析。"
+      action-text="新增目标岗位"
+      @action="router.push('/job-descriptions/new')"
+    />
+  </section>
 </template>
 
 <style scoped>
 .job-description-page {
-  min-height: 100vh;
-  padding: 40px 28px 56px;
-  background: #f4f7fb;
+  display: grid;
+  gap: 18px;
 }
 
-.job-description-shell {
-  width: min(100%, 1100px);
-  margin: 0 auto;
+.job-description-overview {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
 }
 
-.job-description-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 24px;
+.job-description-overview article {
+  display: grid;
+  gap: 5px;
+  min-height: 116px;
+  align-content: center;
+  padding: 18px;
+  border: 1px solid var(--app-color-border);
+  border-radius: 18px;
+  background: var(--app-color-surface);
+  box-shadow: var(--app-shadow-card);
 }
 
-.job-description-title {
-  margin: 0;
-  color: #111827;
-  font-size: 28px;
-  font-weight: 700;
+.job-description-overview span,
+.job-description-overview small {
+  color: var(--app-color-text-secondary);
+  font-size: 13px;
 }
 
-.job-description-subtitle {
-  margin: 8px 0 0;
-  color: #667085;
-  font-size: 15px;
-  line-height: 1.7;
+.job-description-overview strong {
+  color: var(--app-color-text);
+  font-size: 26px;
+  line-height: 1.1;
 }
 
-.job-description-table {
-  border: 1px solid #dde5f0;
-  border-radius: 8px;
+.job-description-card-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
 }
 
-@media (max-width: 640px) {
-  .job-description-header {
-    align-items: stretch;
-    flex-direction: column;
+.job-description-card-grid .is-busy {
+  opacity: 0.72;
+  pointer-events: none;
+}
+
+@media (max-width: 960px) {
+  .job-description-overview,
+  .job-description-card-grid {
+    grid-template-columns: 1fr;
   }
 }
 </style>

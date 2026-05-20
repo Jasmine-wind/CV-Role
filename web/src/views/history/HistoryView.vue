@@ -2,6 +2,9 @@
 import { ElMessage } from 'element-plus'
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import EmptyState from '@/components/common/EmptyState.vue'
+import PageHeader from '@/components/common/PageHeader.vue'
+import AiHistoryDetailDrawer from '@/components/history/AiHistoryDetailDrawer.vue'
 import { getAiResultDetail, getAiResultPage } from '@/api/history'
 import type { AiResultDetail, AiResultRecord } from '@/types/history'
 
@@ -249,18 +252,17 @@ onMounted(() => {
 </script>
 
 <template>
-  <main class="history-page">
+  <section class="history-page">
     <section class="history-shell">
-      <header class="history-header">
-        <div>
-          <h1 class="history-title">AI 历史</h1>
-          <p class="history-subtitle">回看简历诊断、目标岗位解析、匹配分析、岗位优化建议和局部改写结果。</p>
-        </div>
-        <el-space>
-          <el-button @click="router.push('/')">返回工作台</el-button>
-          <el-button type="primary" @click="loadHistory">刷新</el-button>
-        </el-space>
-      </header>
+      <PageHeader
+        eyebrow="AI 历史"
+        title="回看已保存的 AI 结果"
+        description="历史页只做查询和详情回看，不触发新的 AI 生成。需要继续处理时跳回对应业务页面。"
+      >
+        <template #actions>
+          <el-button type="primary" :loading="loading" @click="loadHistory">刷新</el-button>
+        </template>
+      </PageHeader>
 
       <el-alert
         class="history-boundary-alert"
@@ -307,80 +309,63 @@ onMounted(() => {
         </el-form>
       </section>
 
-      <section class="history-table-panel">
-        <el-table
-          v-loading="loading"
-          :data="records"
-          class="history-table"
-          empty-text="暂无 AI 历史"
-        >
-          <el-table-column label="AI 结果" min-width="260">
-            <template #default="{ row }: { row: AiResultRecord }">
+      <section v-loading="loading" class="history-table-panel">
+        <div v-if="hasRecords" class="history-result-list">
+          <article
+            v-for="row in records"
+            :key="`${row.resultType}-${row.recordId}`"
+            class="history-result-card"
+          >
+            <header>
               <div class="history-cell-stack">
                 <div class="history-title-line">
                   <el-tag size="small" type="primary">{{ resolveResultTypeText(row.resultType) }}</el-tag>
-                  <strong>{{ row.title || '-' }}</strong>
+                  <el-tag size="small" :type="resolveStatusType(row.status)">
+                    {{ resolveStatusText(row.status) }}
+                  </el-tag>
                 </div>
+                <strong>{{ row.title || '-' }}</strong>
                 <span>{{ row.summary || '-' }}</span>
               </div>
-            </template>
-          </el-table-column>
-          <el-table-column label="状态" width="120">
-            <template #default="{ row }: { row: AiResultRecord }">
-              <el-tag :type="resolveStatusType(row.status)">
-                {{ resolveStatusText(row.status) }}
-              </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="关联对象" min-width="220">
-            <template #default="{ row }: { row: AiResultRecord }">
-              <div class="history-cell-stack">
-                <span>简历：{{ row.resumeName || '-' }}</span>
-                <span>目标岗位：{{ row.jobTitle || '-' }}</span>
-              </div>
-            </template>
-          </el-table-column>
-          <el-table-column label="模型" min-width="190">
-            <template #default="{ row }: { row: AiResultRecord }">
-              <div class="history-cell-stack">
-                <span>{{ row.modelName || '-' }}</span>
-                <span>{{ row.promptVersion || '-' }}</span>
-              </div>
-            </template>
-          </el-table-column>
-          <el-table-column label="更新时间" width="180">
-            <template #default="{ row }: { row: AiResultRecord }">
-              {{ formatDateTime(row.updatedAt || row.createdAt) }}
-            </template>
-          </el-table-column>
-          <el-table-column label="操作" width="290" fixed="right">
-            <template #default="{ row }: { row: AiResultRecord }">
-              <div class="history-actions">
-                <el-button size="small" @click="openDetail(row)">详情</el-button>
-                <el-button size="small" :disabled="!row.resumeId" @click="goResume(row.resumeId)">简历</el-button>
-                <el-button
-                  size="small"
-                  :disabled="!row.jobDescriptionId"
-                  @click="goJobDescription(row.jobDescriptionId)"
-                >
-                  目标岗位
-                </el-button>
-                <el-button
-                  size="small"
-                  type="primary"
-                  :disabled="!row.resumeId || !row.jobDescriptionId"
-                  @click="goMatch(row)"
-                >
-                  匹配与优化
-                </el-button>
-              </div>
-            </template>
-          </el-table-column>
-        </el-table>
+              <small>{{ formatDateTime(row.updatedAt || row.createdAt) }}</small>
+            </header>
 
-        <el-empty v-if="!loading && !hasRecords" description="暂无 AI 历史" :image-size="96">
-          <el-button type="primary" @click="router.push('/resumes')">去我的简历</el-button>
-        </el-empty>
+            <div class="history-result-meta">
+              <span>简历：{{ row.resumeName || '-' }}</span>
+              <span>目标岗位：{{ row.jobTitle || '-' }}</span>
+              <span>模型：{{ row.modelName || '-' }}</span>
+              <span>Prompt：{{ row.promptVersion || '-' }}</span>
+            </div>
+
+            <footer class="history-actions">
+              <el-button size="small" @click="openDetail(row)">详情</el-button>
+              <el-button size="small" :disabled="!row.resumeId" @click="goResume(row.resumeId)">简历</el-button>
+              <el-button
+                size="small"
+                :disabled="!row.jobDescriptionId"
+                @click="goJobDescription(row.jobDescriptionId)"
+              >
+                目标岗位
+              </el-button>
+              <el-button
+                size="small"
+                type="primary"
+                :disabled="!row.resumeId || !row.jobDescriptionId"
+                @click="goMatch(row)"
+              >
+                匹配与优化
+              </el-button>
+            </footer>
+          </article>
+        </div>
+
+        <EmptyState
+          v-if="!loading && !hasRecords"
+          title="暂无 AI 历史"
+          description="完成简历诊断、目标岗位解析、匹配分析或局部改写后，会在这里回看。"
+          action-text="去我的简历"
+          @action="router.push('/resumes')"
+        />
 
         <div v-if="total > 0" class="history-pagination">
           <el-pagination
@@ -397,12 +382,7 @@ onMounted(() => {
       </section>
     </section>
 
-    <el-drawer
-      v-model="detailVisible"
-      title="AI 结果详情"
-      size="640px"
-      class="history-detail-drawer"
-    >
+    <AiHistoryDetailDrawer v-model="detailVisible">
       <section v-loading="loadingDetail" class="history-detail">
         <el-empty v-if="!activeDetail" description="暂无详情" :image-size="80" />
 
@@ -452,20 +432,21 @@ onMounted(() => {
           </section>
         </template>
       </section>
-    </el-drawer>
-  </main>
+    </AiHistoryDetailDrawer>
+  </section>
 </template>
 
 <style scoped>
 .history-page {
-  min-height: 100vh;
-  padding: 40px 28px 56px;
-  background: #f4f7fb;
+  min-height: 0;
+  padding: 0;
+  background: transparent;
 }
 
 .history-shell {
-  width: min(100%, 1280px);
-  margin: 0 auto;
+  display: grid;
+  gap: 16px;
+  width: 100%;
 }
 
 .history-header {
@@ -478,14 +459,14 @@ onMounted(() => {
 
 .history-title {
   margin: 0;
-  color: #111827;
+  color: var(--app-color-text);
   font-size: 28px;
   font-weight: 700;
 }
 
 .history-subtitle {
   margin: 8px 0 0;
-  color: #667085;
+  color: var(--app-color-text-secondary);
   font-size: 15px;
   line-height: 1.7;
 }
@@ -497,9 +478,10 @@ onMounted(() => {
 .history-filter-panel,
 .history-table-panel {
   padding: 24px;
-  border: 1px solid #dde5f0;
-  border-radius: 8px;
-  background: #ffffff;
+  border: 1px solid var(--app-color-border);
+  border-radius: 18px;
+  background: var(--app-color-surface);
+  box-shadow: var(--app-shadow-card);
 }
 
 .history-filter-panel {
@@ -522,14 +504,57 @@ onMounted(() => {
 }
 
 .history-table {
-  border: 1px solid #dde5f0;
-  border-radius: 8px;
+  border: 1px solid var(--app-color-border);
+  border-radius: 18px;
+}
+
+.history-result-list {
+  display: grid;
+  gap: 12px;
+}
+
+.history-result-card {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--app-color-border);
+  border-radius: 16px;
+  background: var(--app-color-surface-soft);
+}
+
+.history-result-card header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.history-result-card header small {
+  flex: 0 0 auto;
+  color: var(--app-color-text-secondary);
+}
+
+.history-result-meta {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.history-result-meta span {
+  overflow: hidden;
+  padding: 8px 10px;
+  border-radius: 10px;
+  color: var(--app-color-text-secondary);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: var(--app-color-surface);
 }
 
 .history-cell-stack {
   display: grid;
   gap: 4px;
-  color: #344054;
+  color: var(--app-color-text);
   font-size: 13px;
   line-height: 1.5;
 }
@@ -568,7 +593,7 @@ onMounted(() => {
 
 .history-section-title {
   margin: 0 0 12px;
-  color: #111827;
+  color: var(--app-color-text);
   font-size: 16px;
   font-weight: 700;
 }
@@ -588,21 +613,21 @@ onMounted(() => {
 
 .history-content-item {
   padding: 14px;
-  border: 1px solid #dde5f0;
-  border-radius: 8px;
-  background: #f8fafc;
+  border: 1px solid var(--app-color-border);
+  border-radius: 14px;
+  background: var(--app-color-surface-soft);
 }
 
 .history-content-title {
   margin: 0 0 8px;
-  color: #111827;
+  color: var(--app-color-text);
   font-size: 14px;
   font-weight: 700;
 }
 
 .history-content-value {
   margin: 0;
-  color: #344054;
+  color: var(--app-color-text);
   font-family: inherit;
   font-size: 13px;
   line-height: 1.7;

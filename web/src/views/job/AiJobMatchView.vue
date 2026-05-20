@@ -2,6 +2,8 @@
 import { ElMessage } from 'element-plus'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import PageHeader from '@/components/common/PageHeader.vue'
+import ProcessStepper from '@/components/workflow/ProcessStepper.vue'
 import { getAiJobMatch, getAiJobMatches, triggerAiJobMatch } from '@/api/ai-job-match'
 import { getAiResumeSuggestionByMatchResult, triggerAiResumeSuggestion } from '@/api/ai-resume-suggestion'
 import { getAiRewriteSuggestions, triggerAiRewriteSuggestion, updateAiRewriteAcceptStatus } from '@/api/ai-rewrite-suggestion'
@@ -40,6 +42,7 @@ const rewriteDialogVisible = ref(false)
 const generatingRewrite = ref(false)
 const loadingRewriteSuggestions = ref(false)
 const updatingRewriteAcceptStatus = ref(false)
+const activeMatchStage = ref<'match' | 'suggestion' | 'rewrite' | 'report'>('match')
 
 const rewriteForm = reactive({
   rewriteType: 'PROJECT',
@@ -84,6 +87,178 @@ const canGenerateSuggestion = computed(() => {
 const canGenerateRewrite = computed(() => {
   return Boolean(selectedResumeId.value && rewriteForm.rewriteType && rewriteForm.targetSection.trim() && rewriteForm.originalText.trim())
 })
+
+const matchScoreSummary = computed(() => {
+  const score = selectedMatch.value?.overallScore
+  if (score == null) {
+    return {
+      level: 'empty',
+      label: '暂无评分',
+      description: '完成匹配分析后展示综合匹配度。',
+    }
+  }
+
+  if (score >= 85) {
+    return {
+      level: 'high',
+      label: '高度匹配',
+      description: '可优先基于优势补充项目证据。',
+    }
+  }
+
+  if (score >= 70) {
+    return {
+      level: 'medium',
+      label: '中度匹配',
+      description: '建议先处理弱匹配项和缺失技能。',
+    }
+  }
+
+  return {
+    level: 'low',
+    label: '匹配不足',
+    description: '需要补齐岗位关键要求或调整目标岗位。',
+  }
+})
+
+const matchMetricCards = computed(() => {
+  const match = selectedMatch.value
+  return [
+    {
+      label: '强匹配',
+      value: match?.strongMatches.length ?? 0,
+      note: '简历已体现的岗位要求',
+      tone: 'success',
+    },
+    {
+      label: '弱匹配',
+      value: match?.weakMatches.length ?? 0,
+      note: '出现但证据不足的能力',
+      tone: 'warning',
+    },
+    {
+      label: '缺失技能',
+      value: match?.missingSkills.length ?? 0,
+      note: '岗位要求中未体现的关键词',
+      tone: 'danger',
+    },
+    {
+      label: '风险提示',
+      value: match?.riskNotes.length ?? 0,
+      note: '需要用户确认的匹配风险',
+      tone: 'info',
+    },
+  ]
+})
+
+const matchNextAction = computed(() => {
+  if (!selectedMatch.value) {
+    return {
+      title: '先生成匹配分析',
+      description: '选择已解析简历和目标岗位后，生成匹配分、强弱项和缺失技能。',
+    }
+  }
+
+  if (selectedMatch.value.matchStatus !== 'SUCCESS') {
+    return {
+      title: '处理匹配异常',
+      description: selectedMatch.value.errorMessage || '当前匹配分析未成功，请重试或检查简历和目标岗位解析状态。',
+    }
+  }
+
+  if (!selectedSuggestion.value) {
+    return {
+      title: '生成岗位优化建议',
+      description: '匹配成功后可基于差距生成策略建议，不直接写回简历。',
+    }
+  }
+
+  return {
+    title: '查看岗位优化报告',
+    description: '报告会聚合匹配分析、岗位优化建议和局部改写结果，不重新调用 AI。',
+  }
+})
+
+const matchInsightSections = computed(() => {
+  const match = selectedMatch.value
+  return [
+    {
+      key: 'strong',
+      title: '强匹配项',
+      tone: 'success',
+      emptyText: '暂无强匹配项',
+      items: match?.strongMatches.map((item) => ({
+        title: item.item || '-',
+        description: item.reason || '-',
+      })) ?? [],
+    },
+    {
+      key: 'weak',
+      title: '弱匹配项',
+      tone: 'warning',
+      emptyText: '暂无弱匹配项',
+      items: match?.weakMatches.map((item) => ({
+        title: item.item || '-',
+        description: item.reason || '-',
+      })) ?? [],
+    },
+    {
+      key: 'missing',
+      title: '缺失技能',
+      tone: 'danger',
+      emptyText: '暂无缺失技能',
+      items: match?.missingSkills.map((item) => ({
+        title: item.item || '-',
+        description: item.reason || '-',
+      })) ?? [],
+    },
+    {
+      key: 'experience',
+      title: '表达较弱经历',
+      tone: 'info',
+      emptyText: '暂无表达较弱经历',
+      items: match?.weakExperienceDescriptions.map((item) => ({
+        title: item.section || '-',
+        description: item.issue || '-',
+      })) ?? [],
+    },
+  ]
+})
+
+const matchWorkflowSteps = computed(() => [
+  {
+    title: '选择资产',
+    description: selectedResume.value && selectedJobDescription.value ? '已选择简历和目标岗位' : '先选择简历和目标岗位',
+    status: selectedResume.value && selectedJobDescription.value ? 'done' as const : 'current' as const,
+  },
+  {
+    title: '匹配分析',
+    description: selectedMatch.value?.matchStatus === 'SUCCESS' ? '匹配分析已完成' : '生成匹配分和强弱项',
+    status: selectedMatch.value?.matchStatus === 'SUCCESS' ? 'done' as const : selectedResume.value && selectedJobDescription.value ? 'current' as const : 'pending' as const,
+  },
+  {
+    title: '岗位优化建议',
+    description: selectedSuggestion.value?.suggestionStatus === 'SUCCESS' ? `${selectedSuggestion.value.suggestions.length} 条建议` : '匹配成功后生成',
+    status: selectedSuggestion.value?.suggestionStatus === 'SUCCESS' ? 'done' as const : selectedMatch.value?.matchStatus === 'SUCCESS' ? 'current' as const : 'pending' as const,
+  },
+  {
+    title: '局部改写',
+    description: rewriteSuggestions.value.length ? `${rewriteSuggestions.value.length} 条改写建议` : '从建议中选择片段',
+    status: rewriteSuggestions.value.length ? 'done' as const : selectedSuggestion.value?.suggestionStatus === 'SUCCESS' ? 'current' as const : 'pending' as const,
+  },
+  {
+    title: '优化报告',
+    description: optimizationReport.value ? '报告已加载' : '聚合已有结果',
+    status: optimizationReport.value ? 'done' as const : selectedMatch.value?.matchStatus === 'SUCCESS' ? 'current' as const : 'pending' as const,
+  },
+])
+
+const stageTabs = [
+  { key: 'match', label: '匹配分析' },
+  { key: 'suggestion', label: '岗位优化建议' },
+  { key: 'rewrite', label: '局部改写' },
+  { key: 'report', label: '优化报告' },
+] as const
 
 const highPrioritySuggestions = computed(() => {
   return suggestionsByPriority('HIGH')
@@ -293,7 +468,7 @@ const resolveAcceptStatusText = (status: string | null | undefined) => {
     return '待确认'
   }
   if (status === 'ACCEPTED') {
-    return '已采纳'
+    return '已标记采纳'
   }
   if (status === 'REJECTED') {
     return '已拒绝'
@@ -487,6 +662,7 @@ const handleLoadOptimizationReport = async () => {
 
   try {
     optimizationReport.value = await getJobOptimizationReport(selectedResumeId.value, selectedJobDescriptionId.value)
+    activeMatchStage.value = 'report'
   } catch (error) {
     optimizationReport.value = null
     ElMessage.error(error instanceof Error ? error.message : '获取岗位优化报告失败')
@@ -516,6 +692,7 @@ const handleMatch = async () => {
       ElMessage.error(triggerResult.errorMessage || '匹配分析失败')
     } else {
       ElMessage.success('匹配分析完成')
+      activeMatchStage.value = 'match'
     }
     await loadCurrentMatch()
   } catch (error) {
@@ -547,6 +724,7 @@ const handleGenerateSuggestion = async () => {
       ElMessage.error(triggerResult.errorMessage || '岗位优化建议生成失败')
     } else {
       ElMessage.success('岗位优化建议生成完成')
+      activeMatchStage.value = 'suggestion'
     }
     await loadCurrentSuggestion()
     optimizationReport.value = null
@@ -617,6 +795,7 @@ const handleGenerateRewrite = async () => {
       ElMessage.error(result.errorMessage || 'AI 局部改写生成失败')
     } else {
       ElMessage.success('AI 局部改写生成完成')
+      activeMatchStage.value = 'rewrite'
       rewriteDialogVisible.value = false
     }
     await loadRewriteSuggestions()
@@ -649,7 +828,7 @@ const handleUpdateRewriteAcceptStatus = async (acceptStatus: 'ACCEPTED' | 'REJEC
       rewriteSuggestions.value[index] = result
     }
     optimizationReport.value = null
-    ElMessage.success(acceptStatus === 'ACCEPTED' ? '已采纳改写建议' : '已拒绝改写建议')
+    ElMessage.success(acceptStatus === 'ACCEPTED' ? '已标记采纳改写建议，不会写回原简历' : '已拒绝改写建议')
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '更新采纳状态失败')
   } finally {
@@ -663,19 +842,18 @@ onMounted(() => {
 </script>
 
 <template>
-  <main class="ai-match-page">
+  <section class="ai-match-page">
     <section class="ai-match-shell">
-      <header class="ai-match-header">
-        <div>
-          <h1 class="ai-match-title">匹配与优化</h1>
-          <p class="ai-match-subtitle">选择已解析简历和目标岗位，生成匹配分析、岗位优化建议和 AI 局部改写。</p>
-        </div>
-        <el-space>
+      <PageHeader
+        eyebrow="匹配与优化"
+        title="按流程生成匹配分析、优化建议和岗位优化报告"
+        description="先选择已解析简历和目标岗位，再按匹配分析、岗位优化建议、局部改写、优化报告逐步推进。局部改写只记录采纳状态，不写回原始简历。"
+      >
+        <template #actions>
           <el-button @click="router.push('/resumes')">我的简历</el-button>
-          <el-button @click="router.push('/job-descriptions')">目标岗位</el-button>
-          <el-button @click="router.push('/')">返回工作台</el-button>
-        </el-space>
-      </header>
+          <el-button type="primary" @click="router.push('/job-descriptions')">目标岗位</el-button>
+        </template>
+      </PageHeader>
 
       <section v-loading="loading" class="ai-match-panel">
         <section class="ai-match-selectors">
@@ -771,26 +949,52 @@ onMounted(() => {
           </el-button>
         </div>
 
+        <section class="ai-match-workflow">
+          <ProcessStepper :steps="matchWorkflowSteps" />
+        </section>
+
         <section v-loading="loadingResult" class="ai-match-result">
           <el-empty v-if="!selectedMatch" description="暂无匹配分析结果" :image-size="88" />
 
           <template v-else>
-            <div class="ai-match-summary">
-              <div class="ai-match-score">
+            <section class="ai-match-report-hero">
+              <article class="ai-match-score" :class="`is-${matchScoreSummary.level}`">
                 <span class="ai-match-score-value">{{ selectedMatch.overallScore ?? '-' }}</span>
                 <span class="ai-match-score-label">总体匹配分</span>
-              </div>
-              <el-descriptions :column="2" border class="ai-match-descriptions">
-                <el-descriptions-item label="匹配状态">
+                <strong>{{ matchScoreSummary.label }}</strong>
+                <p>{{ matchScoreSummary.description }}</p>
+              </article>
+
+              <article class="ai-match-report-summary-card">
+                <div class="ai-match-report-summary-header">
+                  <div>
+                    <h2 class="ai-match-section-title">匹配分析概览</h2>
+                    <p class="ai-match-suggestion-note">匹配分析只判断简历和目标岗位是否匹配，不生成改写文本，不自动修改简历。</p>
+                  </div>
                   <el-tag :type="resolveMatchStatusType(selectedMatch.matchStatus)">
                     {{ resolveMatchStatusText(selectedMatch.matchStatus) }}
                   </el-tag>
-                </el-descriptions-item>
-                <el-descriptions-item label="模型">{{ selectedMatch.modelName || '-' }}</el-descriptions-item>
-                <el-descriptions-item label="Prompt 版本">{{ selectedMatch.promptVersion || '-' }}</el-descriptions-item>
-                <el-descriptions-item label="更新时间">{{ formatDateTime(selectedMatch.updatedAt) }}</el-descriptions-item>
-              </el-descriptions>
-            </div>
+                </div>
+                <div class="ai-match-metric-grid">
+                  <article
+                    v-for="metric in matchMetricCards"
+                    :key="metric.label"
+                    class="ai-match-metric-card"
+                    :class="`is-${metric.tone}`"
+                  >
+                    <span>{{ metric.label }}</span>
+                    <strong>{{ metric.value }}</strong>
+                    <small>{{ metric.note }}</small>
+                  </article>
+                </div>
+                <el-descriptions :column="2" border class="ai-match-descriptions">
+                  <el-descriptions-item label="模型">{{ selectedMatch.modelName || '-' }}</el-descriptions-item>
+                  <el-descriptions-item label="Prompt 版本">{{ selectedMatch.promptVersion || '-' }}</el-descriptions-item>
+                  <el-descriptions-item label="更新时间">{{ formatDateTime(selectedMatch.updatedAt) }}</el-descriptions-item>
+                  <el-descriptions-item label="目标岗位">{{ selectedJobDescription?.title || '-' }}</el-descriptions-item>
+                </el-descriptions>
+              </article>
+            </section>
 
             <el-alert
               v-if="selectedMatch.matchStatus === 'FAILED'"
@@ -801,7 +1005,43 @@ onMounted(() => {
               show-icon
             />
 
-            <section class="ai-match-report-panel">
+            <section class="ai-match-next-action">
+              <div>
+                <h3 class="ai-match-section-title">{{ matchNextAction.title }}</h3>
+                <p>{{ matchNextAction.description }}</p>
+              </div>
+              <el-space wrap>
+                <el-button
+                  type="primary"
+                  :loading="generatingSuggestion"
+                  :disabled="!canGenerateSuggestion"
+                  @click="handleGenerateSuggestion"
+                >
+                  生成岗位优化建议
+                </el-button>
+                <el-button
+                  :loading="loadingOptimizationReport"
+                  :disabled="!selectedResumeId || !selectedJobDescriptionId"
+                  @click="handleLoadOptimizationReport"
+                >
+                  查看优化报告
+                </el-button>
+              </el-space>
+            </section>
+
+            <div class="ai-match-stage-tabs">
+              <button
+                v-for="tab in stageTabs"
+                :key="tab.key"
+                type="button"
+                :class="{ 'is-active': activeMatchStage === tab.key }"
+                @click="activeMatchStage = tab.key"
+              >
+                {{ tab.label }}
+              </button>
+            </div>
+
+            <section v-show="activeMatchStage === 'report'" class="ai-match-report-panel">
               <div class="ai-match-suggestion-header">
                 <div>
                   <h2 class="ai-match-section-title">岗位优化报告</h2>
@@ -1024,7 +1264,7 @@ onMounted(() => {
                     />
                     <div v-else class="ai-match-report-columns">
                       <div class="ai-match-report-card">
-                        <h4>已采纳</h4>
+                        <h4>已标记采纳</h4>
                         <div v-if="optimizationReport.acceptedRewriteSuggestions.length" class="ai-match-suggestion-list">
                           <article
                             v-for="(suggestion, index) in optimizationReport.acceptedRewriteSuggestions"
@@ -1044,7 +1284,7 @@ onMounted(() => {
                             <p v-if="suggestion.caution" class="ai-match-suggestion-caution"><strong>注意：</strong>{{ suggestion.caution }}</p>
                           </article>
                         </div>
-                        <el-empty v-else description="暂无已采纳改写" :image-size="56" />
+                        <el-empty v-else description="暂无已标记采纳改写" :image-size="56" />
                       </div>
                       <div class="ai-match-report-card">
                         <h4>待确认</h4>
@@ -1104,7 +1344,7 @@ onMounted(() => {
               </section>
             </section>
 
-            <section class="ai-match-suggestion-panel">
+            <section v-show="activeMatchStage === 'suggestion'" class="ai-match-suggestion-panel">
               <div class="ai-match-suggestion-header">
                 <div>
                   <h2 class="ai-match-section-title">岗位优化建议</h2>
@@ -1290,11 +1530,11 @@ onMounted(() => {
               </section>
             </section>
 
-            <section class="ai-match-rewrite-panel">
+            <section v-show="activeMatchStage === 'rewrite'" class="ai-match-rewrite-panel">
               <div class="ai-match-suggestion-header">
                 <div>
                   <h2 class="ai-match-section-title">AI 局部改写</h2>
-                  <p class="ai-match-suggestion-note">AI 改写建议需用户确认，只能作为表达优化参考，不应直接写入未发生的经历或指标。</p>
+                  <p class="ai-match-suggestion-note">局部改写建议需用户确认，只记录采纳状态，不会自动写回原简历。</p>
                 </div>
                 <el-space>
                   <el-button type="primary" :disabled="!selectedResumeId" @click="openRewriteDialog()">进行局部改写</el-button>
@@ -1332,7 +1572,7 @@ onMounted(() => {
                       :disabled="selectedRewriteSuggestion.acceptStatus === 'ACCEPTED' || selectedRewriteSuggestion.rewriteStatus !== 'SUCCESS'"
                       @click="handleUpdateRewriteAcceptStatus('ACCEPTED')"
                     >
-                      采纳
+                      标记采纳
                     </el-button>
                     <el-button
                       type="danger"
@@ -1401,74 +1641,48 @@ onMounted(() => {
               </section>
             </section>
 
-            <section class="ai-match-grid">
-              <div class="ai-match-block">
-                <h2 class="ai-match-section-title">强匹配项</h2>
-                <div v-if="selectedMatch.strongMatches.length" class="ai-match-list">
-                  <p v-for="item in selectedMatch.strongMatches" :key="`${item.item}-${item.reason}`">
-                    <strong>{{ item.item || '-' }}</strong>
-                    <span>{{ item.reason || '-' }}</span>
+            <section v-show="activeMatchStage === 'match'" class="ai-match-insight-grid">
+              <article
+                v-for="section in matchInsightSections"
+                :key="section.key"
+                class="ai-match-insight-card"
+                :class="`is-${section.tone}`"
+              >
+                <div class="ai-match-insight-card-header">
+                  <h2 class="ai-match-section-title">{{ section.title }}</h2>
+                  <el-tag size="small" :type="section.tone">{{ section.items.length }} 条</el-tag>
+                </div>
+                <div v-if="section.items.length" class="ai-match-insight-list">
+                  <p v-for="item in section.items" :key="`${section.key}-${item.title}-${item.description}`">
+                    <strong>{{ item.title }}</strong>
+                    <span>{{ item.description }}</span>
                   </p>
                 </div>
-                <el-empty v-else description="暂无强匹配项" :image-size="72" />
-              </div>
-
-              <div class="ai-match-block">
-                <h2 class="ai-match-section-title">弱匹配项</h2>
-                <div v-if="selectedMatch.weakMatches.length" class="ai-match-list">
-                  <p v-for="item in selectedMatch.weakMatches" :key="`${item.item}-${item.reason}`">
-                    <strong>{{ item.item || '-' }}</strong>
-                    <span>{{ item.reason || '-' }}</span>
-                  </p>
-                </div>
-                <el-empty v-else description="暂无弱匹配项" :image-size="72" />
-              </div>
-
-              <div class="ai-match-block">
-                <h2 class="ai-match-section-title">缺失技能</h2>
-                <div v-if="selectedMatch.missingSkills.length" class="ai-match-list">
-                  <p v-for="item in selectedMatch.missingSkills" :key="`${item.item}-${item.reason}`">
-                    <strong>{{ item.item || '-' }}</strong>
-                    <span>{{ item.reason || '-' }}</span>
-                  </p>
-                </div>
-                <el-empty v-else description="暂无缺失技能" :image-size="72" />
-              </div>
-
-              <div class="ai-match-block">
-                <h2 class="ai-match-section-title">表达较弱经历</h2>
-                <div v-if="selectedMatch.weakExperienceDescriptions.length" class="ai-match-list">
-                  <p
-                    v-for="item in selectedMatch.weakExperienceDescriptions"
-                    :key="`${item.section}-${item.issue}`"
-                  >
-                    <strong>{{ item.section || '-' }}</strong>
-                    <span>{{ item.issue || '-' }}</span>
-                  </p>
-                </div>
-                <el-empty v-else description="暂无表达较弱经历" :image-size="72" />
-              </div>
+                <el-empty v-else :description="section.emptyText" :image-size="72" />
+              </article>
             </section>
 
-            <section class="ai-match-block ai-match-wide">
-              <h2 class="ai-match-section-title">匹配依据</h2>
-              <div v-if="selectedMatch.evidence.length" class="ai-match-list">
-                <p v-for="item in selectedMatch.evidence" :key="`${item.source}-${item.content}`">
-                  <el-tag size="small" :type="item.source === 'job' ? 'warning' : 'success'">
-                    {{ item.source === 'job' ? '岗位' : '简历' }}
-                  </el-tag>
-                  <span>{{ item.content || '-' }}</span>
-                </p>
-              </div>
-              <el-empty v-else description="暂无匹配依据" :image-size="72" />
-            </section>
+            <section v-show="activeMatchStage === 'match'" class="ai-match-evidence-layout">
+              <article class="ai-match-block">
+                <h2 class="ai-match-section-title">匹配依据</h2>
+                <div v-if="selectedMatch.evidence.length" class="ai-match-evidence-list">
+                  <p v-for="item in selectedMatch.evidence" :key="`${item.source}-${item.content}`">
+                    <el-tag size="small" :type="item.source === 'job' ? 'warning' : 'success'">
+                      {{ item.source === 'job' ? '岗位' : '简历' }}
+                    </el-tag>
+                    <span>{{ item.content || '-' }}</span>
+                  </p>
+                </div>
+                <el-empty v-else description="暂无匹配依据" :image-size="72" />
+              </article>
 
-            <section class="ai-match-block ai-match-wide">
-              <h2 class="ai-match-section-title">风险提示</h2>
-              <div v-if="selectedMatch.riskNotes.length" class="ai-match-list">
-                <p v-for="item in selectedMatch.riskNotes" :key="item">{{ item }}</p>
-              </div>
-              <el-empty v-else description="暂无风险提示" :image-size="72" />
+              <article class="ai-match-block">
+                <h2 class="ai-match-section-title">风险提示</h2>
+                <div v-if="selectedMatch.riskNotes.length" class="ai-match-risk-list">
+                  <p v-for="item in selectedMatch.riskNotes" :key="item">{{ item }}</p>
+                </div>
+                <el-empty v-else description="暂无风险提示" :image-size="72" />
+              </article>
             </section>
           </template>
         </section>
@@ -1483,7 +1697,7 @@ onMounted(() => {
     >
       <el-alert
         class="ai-match-dialog-alert"
-        title="AI 改写只优化表达，采用前请确认内容真实，不要补写不存在的经历、技能或量化指标。"
+        title="局部改写只优化表达，只记录采纳状态，不会自动写回原简历。"
         type="warning"
         :closable="false"
         show-icon
@@ -1532,19 +1746,20 @@ onMounted(() => {
         </el-button>
       </template>
     </el-dialog>
-  </main>
+  </section>
 </template>
 
 <style scoped>
 .ai-match-page {
-  min-height: 100vh;
-  padding: 40px 28px 56px;
-  background: #f4f7fb;
+  min-height: 0;
+  padding: 0;
+  background: transparent;
 }
 
 .ai-match-shell {
-  width: min(100%, 1180px);
-  margin: 0 auto;
+  display: grid;
+  gap: 18px;
+  width: 100%;
 }
 
 .ai-match-header {
@@ -1557,14 +1772,14 @@ onMounted(() => {
 
 .ai-match-title {
   margin: 0;
-  color: #111827;
+  color: var(--app-color-text);
   font-size: 28px;
   font-weight: 700;
 }
 
 .ai-match-subtitle {
   margin: 8px 0 0;
-  color: #667085;
+  color: var(--app-color-text-secondary);
   font-size: 15px;
   line-height: 1.7;
 }
@@ -1572,9 +1787,10 @@ onMounted(() => {
 .ai-match-panel {
   min-height: 520px;
   padding: 28px;
-  border: 1px solid #dde5f0;
-  border-radius: 8px;
-  background: #ffffff;
+  border: 1px solid var(--app-color-border);
+  border-radius: 18px;
+  background: var(--app-color-surface);
+  box-shadow: var(--app-shadow-card);
 }
 
 .ai-match-selectors {
@@ -1586,14 +1802,14 @@ onMounted(() => {
 .ai-match-selector,
 .ai-match-block {
   padding: 18px;
-  border: 1px solid #e5ebf3;
-  border-radius: 8px;
-  background: #ffffff;
+  border: 1px solid var(--app-color-border);
+  border-radius: 16px;
+  background: var(--app-color-surface);
 }
 
 .ai-match-section-title {
   margin: 0 0 12px;
-  color: #111827;
+  color: var(--app-color-text);
   font-size: 16px;
   font-weight: 700;
 }
@@ -1604,7 +1820,7 @@ onMounted(() => {
 
 .ai-match-option-status {
   float: right;
-  color: #98a2b3;
+  color: var(--app-color-text-secondary);
   font-size: 13px;
 }
 
@@ -1613,7 +1829,7 @@ onMounted(() => {
   align-items: center;
   gap: 8px;
   margin-top: 12px;
-  color: #667085;
+  color: var(--app-color-text-secondary);
   font-size: 14px;
 }
 
@@ -1623,28 +1839,61 @@ onMounted(() => {
   margin-top: 24px;
 }
 
+.ai-match-workflow {
+  margin-top: 18px;
+}
+
+.ai-match-stage-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 20px 0 16px;
+  padding: 8px;
+  border: 1px solid var(--app-color-border);
+  border-radius: 16px;
+  background: var(--app-color-surface-soft);
+}
+
+.ai-match-stage-tabs button {
+  min-height: 38px;
+  padding: 0 14px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  color: var(--app-color-text-secondary);
+  background: transparent;
+  cursor: pointer;
+}
+
+.ai-match-stage-tabs button.is-active {
+  border-color: rgba(37, 111, 108, 0.24);
+  color: var(--app-color-primary);
+  font-weight: 700;
+  background: var(--app-color-surface);
+  box-shadow: 0 8px 20px rgba(35, 32, 29, 0.05);
+}
+
 .ai-match-suggestion-panel {
   margin-top: 24px;
   padding: 18px;
-  border: 1px solid #e5ebf3;
-  border-radius: 8px;
-  background: #f8fafc;
+  border: 1px solid var(--app-color-border);
+  border-radius: 18px;
+  background: var(--app-color-surface-soft);
 }
 
 .ai-match-rewrite-panel {
   margin-top: 24px;
   padding: 18px;
-  border: 1px solid #d6e3f8;
-  border-radius: 8px;
-  background: #f9fbff;
+  border: 1px solid #ead7c5;
+  border-radius: 18px;
+  background: var(--app-color-accent-soft);
 }
 
 .ai-match-report-panel {
   margin-top: 24px;
   padding: 18px;
   border: 1px solid #cfe7dc;
-  border-radius: 8px;
-  background: #f8fffb;
+  border-radius: 18px;
+  background: var(--app-color-primary-soft);
 }
 
 .ai-match-suggestion-header {
@@ -1656,7 +1905,7 @@ onMounted(() => {
 
 .ai-match-suggestion-note {
   margin: 0;
-  color: #667085;
+  color: var(--app-color-text-secondary);
   font-size: 14px;
   line-height: 1.7;
 }
@@ -1690,12 +1939,12 @@ onMounted(() => {
   justify-content: center;
   min-height: 132px;
   border: 1px solid #a7d7c5;
-  border-radius: 8px;
-  background: #ecfdf3;
+  border-radius: 16px;
+  background: var(--app-color-primary-soft);
 }
 
 .ai-match-report-score span {
-  color: #067647;
+  color: var(--app-color-success);
   font-size: 42px;
   font-weight: 700;
   line-height: 1;
@@ -1703,7 +1952,7 @@ onMounted(() => {
 
 .ai-match-report-score small {
   margin-top: 10px;
-  color: #344054;
+  color: var(--app-color-text);
   font-size: 14px;
 }
 
@@ -1726,14 +1975,14 @@ onMounted(() => {
 .ai-match-report-card {
   min-width: 0;
   padding: 14px;
-  border: 1px solid #e5ebf3;
-  border-radius: 8px;
-  background: #ffffff;
+  border: 1px solid var(--app-color-border);
+  border-radius: 14px;
+  background: var(--app-color-surface);
 }
 
 .ai-match-report-card h4 {
   margin: 0 0 12px;
-  color: #111827;
+  color: var(--app-color-text);
   font-size: 15px;
   font-weight: 700;
 }
@@ -1752,7 +2001,7 @@ onMounted(() => {
 .ai-match-report-rewrite p,
 .ai-match-report-step-list p {
   margin: 0;
-  color: #344054;
+  color: var(--app-color-text);
   line-height: 1.7;
   white-space: pre-wrap;
   word-break: break-word;
@@ -1760,7 +2009,7 @@ onMounted(() => {
 
 .ai-match-report-suggestion strong,
 .ai-match-report-rewrite strong {
-  color: #111827;
+  color: var(--app-color-text);
 }
 
 .ai-match-report-step-list {
@@ -1778,7 +2027,7 @@ onMounted(() => {
   align-items: flex-start;
   gap: 8px;
   margin: 0;
-  color: #344054;
+  color: var(--app-color-text);
   line-height: 1.7;
   word-break: break-word;
 }
@@ -1800,16 +2049,16 @@ onMounted(() => {
   align-items: center;
   gap: 10px;
   padding: 12px;
-  border: 1px solid #e5ebf3;
-  border-radius: 8px;
-  background: #ffffff;
-  color: #344054;
+  border: 1px solid var(--app-color-border);
+  border-radius: 14px;
+  background: var(--app-color-surface);
+  color: var(--app-color-text);
   line-height: 1.6;
 }
 
-.ai-match-summary {
+.ai-match-report-hero {
   display: grid;
-  grid-template-columns: 180px minmax(0, 1fr);
+  grid-template-columns: 220px minmax(0, 1fr);
   gap: 20px;
   align-items: stretch;
 }
@@ -1819,23 +2068,134 @@ onMounted(() => {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  min-height: 132px;
-  border: 1px solid #c7d7fe;
-  border-radius: 8px;
-  background: #eef4ff;
+  min-height: 220px;
+  padding: 24px;
+  border: 1px solid #b7d6d1;
+  border-radius: 18px;
+  background: var(--app-color-primary-soft);
+  text-align: center;
+}
+
+.ai-match-score.is-high {
+  border-color: rgba(63, 143, 104, 0.35);
+  background: #edf7f1;
+}
+
+.ai-match-score.is-medium {
+  border-color: rgba(37, 111, 108, 0.35);
+  background: var(--app-color-primary-soft);
+}
+
+.ai-match-score.is-low {
+  border-color: rgba(201, 138, 46, 0.4);
+  background: #fbf3e5;
 }
 
 .ai-match-score-value {
-  color: #175cd3;
-  font-size: 44px;
+  color: var(--app-color-primary);
+  font-size: 54px;
   font-weight: 700;
   line-height: 1;
 }
 
 .ai-match-score-label {
-  margin-top: 10px;
-  color: #344054;
+  margin-top: 8px;
+  color: var(--app-color-text-secondary);
   font-size: 14px;
+}
+
+.ai-match-score strong {
+  margin-top: 14px;
+  color: var(--app-color-text);
+  font-size: 18px;
+}
+
+.ai-match-score p {
+  margin: 8px 0 0;
+  color: var(--app-color-text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.ai-match-report-summary-card {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+  padding: 20px;
+  border: 1px solid var(--app-color-border);
+  border-radius: 18px;
+  background: var(--app-color-surface-soft);
+}
+
+.ai-match-report-summary-header,
+.ai-match-insight-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ai-match-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.ai-match-metric-card {
+  display: grid;
+  gap: 4px;
+  min-height: 92px;
+  align-content: center;
+  padding: 14px;
+  border: 1px solid var(--app-color-border);
+  border-radius: 14px;
+  background: var(--app-color-surface);
+}
+
+.ai-match-metric-card span {
+  color: var(--app-color-text-secondary);
+  font-size: 13px;
+}
+
+.ai-match-metric-card strong {
+  color: var(--app-color-text);
+  font-size: 28px;
+  line-height: 1;
+}
+
+.ai-match-metric-card small {
+  color: var(--app-color-text-secondary);
+  line-height: 1.5;
+}
+
+.ai-match-metric-card.is-success {
+  border-color: rgba(63, 143, 104, 0.32);
+}
+
+.ai-match-metric-card.is-warning {
+  border-color: rgba(201, 138, 46, 0.34);
+}
+
+.ai-match-metric-card.is-danger {
+  border-color: rgba(184, 92, 92, 0.32);
+}
+
+.ai-match-next-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 20px;
+  padding: 18px;
+  border: 1px solid var(--app-color-border);
+  border-radius: 18px;
+  background: var(--app-color-primary-soft);
+}
+
+.ai-match-next-action p {
+  margin: 0;
+  color: var(--app-color-text);
+  line-height: 1.7;
 }
 
 .ai-match-descriptions {
@@ -1847,6 +2207,54 @@ onMounted(() => {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 20px;
   margin-top: 24px;
+}
+
+.ai-match-insight-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+  margin-top: 24px;
+}
+
+.ai-match-insight-card {
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid var(--app-color-border);
+  border-radius: 18px;
+  background: var(--app-color-surface-soft);
+}
+
+.ai-match-insight-card.is-success {
+  border-color: rgba(63, 143, 104, 0.32);
+}
+
+.ai-match-insight-card.is-warning {
+  border-color: rgba(201, 138, 46, 0.34);
+}
+
+.ai-match-insight-card.is-danger {
+  border-color: rgba(184, 92, 92, 0.32);
+}
+
+.ai-match-insight-list {
+  display: grid;
+  gap: 12px;
+}
+
+.ai-match-insight-list p {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 14px;
+  border: 1px solid var(--app-color-border);
+  border-radius: 14px;
+  color: var(--app-color-text);
+  line-height: 1.7;
+  background: var(--app-color-surface);
+}
+
+.ai-match-insight-list strong {
+  color: var(--app-color-text);
 }
 
 .ai-match-wide {
@@ -1862,13 +2270,40 @@ onMounted(() => {
   display: grid;
   gap: 6px;
   margin: 0;
-  color: #344054;
+  color: var(--app-color-text);
   line-height: 1.7;
 }
 
 .ai-match-list strong {
-  color: #111827;
+  color: var(--app-color-text);
   font-weight: 700;
+}
+
+.ai-match-evidence-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
+  gap: 20px;
+  margin-top: 20px;
+}
+
+.ai-match-evidence-list,
+.ai-match-risk-list {
+  display: grid;
+  gap: 10px;
+}
+
+.ai-match-evidence-list p,
+.ai-match-risk-list p {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--app-color-border);
+  border-radius: 14px;
+  color: var(--app-color-text);
+  line-height: 1.7;
+  background: var(--app-color-surface);
 }
 
 .ai-match-suggestion-groups {
@@ -1887,19 +2322,19 @@ onMounted(() => {
   display: grid;
   gap: 10px;
   padding: 14px;
-  border: 1px solid #e5ebf3;
-  border-radius: 8px;
-  background: #ffffff;
+  border: 1px solid var(--app-color-border);
+  border-radius: 14px;
+  background: var(--app-color-surface);
 }
 
 .ai-match-suggestion-item p {
   margin: 0;
-  color: #344054;
+  color: var(--app-color-text);
   line-height: 1.7;
 }
 
 .ai-match-suggestion-item strong {
-  color: #111827;
+  color: var(--app-color-text);
 }
 
 .ai-match-suggestion-tags,
@@ -1917,17 +2352,17 @@ onMounted(() => {
 .ai-match-suggestion-evidence {
   display: grid;
   gap: 6px;
-  color: #344054;
+  color: var(--app-color-text);
   line-height: 1.7;
 }
 
 .ai-match-suggestion-evidence span {
   padding-left: 10px;
-  border-left: 3px solid #d0d5dd;
+  border-left: 3px solid var(--app-color-border);
 }
 
 .ai-match-suggestion-caution {
-  color: #b42318 !important;
+  color: var(--app-color-danger) !important;
 }
 
 .ai-match-rewrite-compare {
@@ -1940,14 +2375,14 @@ onMounted(() => {
 .ai-match-rewrite-card {
   min-height: 180px;
   padding: 16px;
-  border: 1px solid #e5ebf3;
-  border-radius: 8px;
-  background: #ffffff;
+  border: 1px solid var(--app-color-border);
+  border-radius: 14px;
+  background: var(--app-color-surface);
 }
 
 .ai-match-rewrite-card h3 {
   margin: 0 0 10px;
-  color: #111827;
+  color: var(--app-color-text);
   font-size: 15px;
   font-weight: 700;
 }
@@ -1955,7 +2390,7 @@ onMounted(() => {
 .ai-match-rewrite-card p,
 .ai-match-rewrite-detail p {
   margin: 0;
-  color: #344054;
+  color: var(--app-color-text);
   line-height: 1.8;
   white-space: pre-wrap;
   word-break: break-word;
@@ -1966,9 +2401,9 @@ onMounted(() => {
   gap: 10px;
   margin-top: 16px;
   padding: 16px;
-  border: 1px solid #e5ebf3;
-  border-radius: 8px;
-  background: #ffffff;
+  border: 1px solid var(--app-color-border);
+  border-radius: 14px;
+  background: var(--app-color-surface);
 }
 
 .ai-match-rewrite-actions {
@@ -1994,17 +2429,17 @@ onMounted(() => {
   gap: 12px;
   width: 100%;
   padding: 12px 14px;
-  border: 1px solid #e5ebf3;
-  border-radius: 8px;
-  background: #ffffff;
-  color: #344054;
+  border: 1px solid var(--app-color-border);
+  border-radius: 14px;
+  background: var(--app-color-surface);
+  color: var(--app-color-text);
   cursor: pointer;
   text-align: left;
 }
 
 .ai-match-rewrite-history-item.is-active {
-  border-color: #409eff;
-  background: #eef6ff;
+  border-color: var(--app-color-primary);
+  background: var(--app-color-primary-soft);
 }
 
 .ai-match-dialog-alert,
@@ -2014,7 +2449,7 @@ onMounted(() => {
 
 @media (max-width: 760px) {
   .ai-match-header,
-  .ai-match-summary,
+  .ai-match-report-hero,
   .ai-match-report-overview {
     align-items: stretch;
     grid-template-columns: 1fr;
@@ -2023,12 +2458,16 @@ onMounted(() => {
 
   .ai-match-selectors,
   .ai-match-grid,
+  .ai-match-metric-grid,
+  .ai-match-insight-grid,
+  .ai-match-evidence-layout,
   .ai-match-suggestion-groups,
   .ai-match-report-columns,
   .ai-match-rewrite-compare {
     grid-template-columns: 1fr;
   }
 
+  .ai-match-next-action,
   .ai-match-suggestion-header,
   .ai-match-rewrite-history-item {
     flex-direction: column;
