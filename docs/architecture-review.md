@@ -593,14 +593,14 @@ deploy/
 
 | 配置 | 当前来源 | 结论 |
 |---|---|---|
-| 数据库密码 | `application-dev.yaml` 使用 `${DB_PASSWORD}` | 主开发配置未硬编码真实密码 |
+| 数据库密码 | `application-local.yaml` / `application-dev.yaml` 使用 `${DB_PASSWORD}` | 主开发配置未硬编码真实密码 |
 | JWT Secret | `application.yaml` 使用 `${jwt.secret}` | 主配置未硬编码真实密钥 |
 | AI API Key | `app.ai.openai-compatible.api-key` 使用环境变量 | 未硬编码真实 Key |
 | Embedding API Key | `app.ai.embedding-compatible.api-key` 使用环境变量 | 未硬编码真实 Key |
 | 测试配置 | `application-test.yaml` 有测试默认值 | 测试环境可接受 |
 | 示例配置 | `.env.example` 使用占位符和本地默认值 | 可接受，但需要提醒部署时替换 |
 
-当前 `.env.example` 和 `docker-compose.yml` 已使用明显的本地占位值替代易被照抄的默认密码。这些配置仍只适合本地快速启动，不能作为生产部署配置。后续 v3.7 需要整理生产 Profile 和部署环境变量清单。
+当前 `.env.example` 和 `docker-compose.yml` 已使用明显的本地占位值替代易被照抄的默认密码。这些配置仍只适合本地快速启动，不能作为生产部署配置。v3.7 已开始整理 `local` / `dev` / `prod` Profile 和部署环境变量清单。
 
 ### 5. 日志与错误信息
 
@@ -620,7 +620,7 @@ deploy/
 |---|---|---|
 | `docker-compose.yml` | 提供 PostgreSQL / pgvector 和 MinIO 本地依赖 | 适合本地开发 |
 | `deploy/` | 当前为空 | 尚未形成部署配置 |
-| Profile | 有 `application.yaml`、`application-dev.yaml`、`application-test.yaml` | 缺少生产 Profile |
+| Profile | 有 `application.yaml`、`application-local.yaml`、`application-dev.yaml`、`application-prod.yaml`、`application-test.yaml` | 已有基础 Profile 分层，仍需在 v3.7 继续补齐部署细节 |
 | 反向代理 | 未发现 Nginx 或同类配置 | 后续 v3.7 / v3.8 补充 |
 | 后端镜像 | 未发现 Dockerfile | 后续部署阶段补充 |
 | 前端构建部署 | 未发现部署脚本或静态资源部署说明 | 后续部署阶段补充 |
@@ -632,7 +632,7 @@ deploy/
 | 优先级 | 位置 | 问题 | 影响 | 建议阶段 |
 |---|---|---|---|---|
 | 高 | `SecurityConfig` | `anyRequest().permitAll()` 默认放行未显式声明的接口 | 新增接口可能意外公开 | v3.6 |
-| 高 | 配置 / 部署 | 缺少生产 Profile、部署环境变量清单和部署检查清单 | 难以安全部署 | v3.7 |
+| 高 | 配置 / 部署 | 生产 Profile 已有基础草案，但部署环境变量清单和部署检查清单仍未完成 | 难以安全部署 | v3.7 |
 | 中 | 存储 | MinIO 已出现在 compose / env 示例中，但后端没有对象存储实现 | 配置和能力不一致 | v3.3 |
 | 中 | 简历删除 | 先删物理文件再删数据库记录 | DB 删除失败时可能产生缺失文件记录 | v3.3 |
 | 中 | CORS | 允许源硬编码本地端口 | 部署环境需要改代码或重新打包 | v3.6 / v3.7 |
@@ -672,7 +672,7 @@ deploy/
 | P0 | `ResumeServiceImpl`、简历解析 / 展示相关 Service 体量过大 | 后端核心流程继续演进成本高 | v3.2 |
 | P0 | Embedding、简历解析和 AI 分析仍是同步请求内执行 | 用户等待时间长，超时和失败体验不稳定 | v3.4 / v3.5 |
 | P1 | 默认授权策略过宽 | 新增接口可能意外公开 | v3.6 |
-| P1 | 缺少生产 Profile 和部署检查清单 | 无法稳定进入部署阶段 | v3.7 |
+| P1 | 生产 Profile 细节和部署检查清单仍需完善 | 无法稳定进入部署阶段 | v3.7 |
 | P1 | MinIO 配置存在但后端实现缺失 | 存储演进边界不完整 | v3.3 |
 | P2 | 历史、报告、VO 组装存在局部重复 | 后续扩展时容易变重 | v3.2 / v3.5 |
 | P2 | 部分日志和错误信息仍需统一脱敏规范 | 排查和安全之间的边界还需收敛 | v3.6 |

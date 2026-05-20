@@ -1,0 +1,36 @@
+spring:
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/ai_resume_optimizer}
+    username: ${DB_USERNAME:dawn}
+    password: ${DB_PASSWORD}
+    driver-class-name: org.postgresql.Driver
+
+jwt:
+  secret: ${JWT_SECRET}
+  expiration-minutes: ${JWT_EXPIRATION_MINUTES:120}
+
+app:
+  storage:
+    type: ${APP_STORAGE_TYPE:local}
+    local:
+      base-dir: ${APP_STORAGE_LOCAL_BASE_DIR:${LOCAL_STORAGE_BASE_DIR:uploads}}
+  ai:
+    openai-compatible:
+      api-key: ${AI_API_KEY:${DASHSCOPE_API_KEY:}}
+      base-url: ${AI_BASE_URL:${OPENAI_BASE_URL:https://api.deepseek.com}}
+      model: ${AI_MODEL:${OPENAI_MODEL:deepseek-v4-flash}}
+      timeout-seconds: ${AI_TIMEOUT_SECONDS:${OPENAI_TIMEOUT_SECONDS:90}}
+      temperature: ${AI_TEMPERATURE:${OPENAI_TEMPERATURE:0.2}}
+      max-tokens: ${AI_MAX_TOKENS:${OPENAI_MAX_TOKENS:4000}}
+    embedding-compatible:
+      api-key: ${EMBEDDING_API_KEY:}
+      base-url: ${EMBEDDING_BASE_URL:}
+      model: ${EMBEDDING_MODEL:Qwen3-Embedding-0.6B}
+      dimension: ${EMBEDDING_DIMENSION:1024}
+      timeout: ${EMBEDDING_TIMEOUT_SECONDS:${EMBEDDING_TIMEOUT:30}}
+      max-input-length: ${EMBEDDING_MAX_INPUT_LENGTH:8192}
+
+logging:
+  level:
+    root: ${LOG_LEVEL_ROOT:info}
+    com.winter.airesumeoptimizer: ${LOG_LEVEL_APP:info}

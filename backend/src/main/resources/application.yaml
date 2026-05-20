@@ -9,15 +9,15 @@ spring:
   application:
     name: ai-resume-optimizer-backend
   profiles:
-    default: dev
+    default: local
   ai:
     openai:
-      api-key: ${DASHSCOPE_API_KEY:}
-      base-url: ${OPENAI_BASE_URL:https://api.deepseek.com}
+      api-key: ${AI_API_KEY:${DASHSCOPE_API_KEY:}}
+      base-url: ${AI_BASE_URL:${OPENAI_BASE_URL:https://api.deepseek.com}}
       chat:
         options:
-          model: ${OPENAI_MODEL:deepseek-v4-flash}
-          temperature: ${OPENAI_TEMPERATURE:0.2}
+          model: ${AI_MODEL:${OPENAI_MODEL:deepseek-v4-flash}}
+          temperature: ${AI_TEMPERATURE:${OPENAI_TEMPERATURE:0.2}}
   servlet:
     multipart:
       max-file-size: 10MB
@@ -38,11 +38,11 @@ logging:
   pattern:
     console: "%d{yyyy-MM-dd'T'HH:mm:ss.SSSXXX} %-5level [%X{requestId:-no-request-id}] %logger{36} - %msg%n"
   level:
-    root: info
+    root: ${LOG_LEVEL_ROOT:info}
 
 jwt:
   secret: ${JWT_SECRET}
-  expiration-minutes: 120
+  expiration-minutes: ${JWT_EXPIRATION_MINUTES:120}
 
 app:
   async:
@@ -76,13 +76,13 @@ app:
       api-key: ${spring.ai.openai.api-key}
       base-url: ${spring.ai.openai.base-url}
       model: ${spring.ai.openai.chat.options.model}
-      timeout-seconds: ${OPENAI_TIMEOUT_SECONDS:90}
-      temperature: ${OPENAI_TEMPERATURE:0.2}
-      max-tokens: ${OPENAI_MAX_TOKENS:4000}
+      timeout-seconds: ${AI_TIMEOUT_SECONDS:${OPENAI_TIMEOUT_SECONDS:90}}
+      temperature: ${AI_TEMPERATURE:${OPENAI_TEMPERATURE:0.2}}
+      max-tokens: ${AI_MAX_TOKENS:${OPENAI_MAX_TOKENS:4000}}
     embedding-compatible:
       api-key: ${EMBEDDING_API_KEY:}
       base-url: ${EMBEDDING_BASE_URL:}
       model: ${EMBEDDING_MODEL:Qwen3-Embedding-0.6B}
       dimension: ${EMBEDDING_DIMENSION:1024}
-      timeout: ${EMBEDDING_TIMEOUT:30}
+      timeout: ${EMBEDDING_TIMEOUT_SECONDS:${EMBEDDING_TIMEOUT:30}}
       max-input-length: ${EMBEDDING_MAX_INPUT_LENGTH:8192}

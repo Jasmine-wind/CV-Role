@@ -138,16 +138,28 @@ backend/src/main/java/com/winter/airesumeoptimizer/module/
 
 ## 环境变量
 
-后端默认使用 `dev` profile。公共配置位于：
+后端默认使用 `local` profile，也可以通过 `SPRING_PROFILES_ACTIVE` 切换到 `dev`、`prod` 或 `test`。公共配置位于：
 
 ```text
 backend/src/main/resources/application.yaml
 ```
 
-开发环境配置位于：
+本地开发配置位于：
+
+```text
+backend/src/main/resources/application-local.yaml
+```
+
+开发测试环境配置位于：
 
 ```text
 backend/src/main/resources/application-dev.yaml
+```
+
+生产部署配置位于：
+
+```text
+backend/src/main/resources/application-prod.yaml
 ```
 
 测试环境预留配置位于：
@@ -163,8 +175,9 @@ backend/src/main/resources/application-test.yaml
 - 不要提交 `.env`。
 - `.env.example` 只保留本地示例值和占位符，可以提交。
 - 示例密码仅用于本地开发，不要用于共享环境或生产部署。
-- `DASHSCOPE_API_KEY` 当前被用作 AI 客户端 API Key 环境变量名。
-- AI base URL 可通过 `OPENAI_BASE_URL` 覆盖，默认是 `https://api.deepseek.com`。
+- `AI_API_KEY` 是推荐的 AI 客户端 API Key 环境变量名，旧的 `DASHSCOPE_API_KEY` 仍作为兼容 fallback。
+- AI base URL 推荐通过 `AI_BASE_URL` 覆盖，旧的 `OPENAI_BASE_URL` 仍作为兼容 fallback，默认是 `https://api.deepseek.com`。
+- AI 模型、温度、超时和输出长度推荐使用 `AI_MODEL`、`AI_TEMPERATURE`、`AI_TIMEOUT_SECONDS`、`AI_MAX_TOKENS`。
 - Embedding 使用独立的 `EMBEDDING_*` 配置；当前默认模型为 `Qwen3-Embedding-0.6B`，默认向量维度为 `1024`。
 - `EMBEDDING_BASE_URL` 不绑定具体服务商，需要按实际 OpenAI-compatible Embedding 服务地址配置，例如本地服务 `http://localhost:8000/v1` 或第三方平台提供的 base-url。
 - `EMBEDDING_API_KEY` 需要用户在本地 `.env` 中自行配置，不要提交真实密钥。
@@ -202,22 +215,27 @@ VITE_API_BASE_URL=http://localhost:8080
 推荐先使用 Compose 启动本地依赖服务：
 
 ```bash
-docker compose up -d postgres minio
+docker compose up -d postgres redis minio
 ```
 
 如果使用 Podman：
 
 ```bash
-podman compose up -d postgres minio
+podman compose up -d postgres redis minio
 ```
 
 服务端口：
 
 ```text
 PostgreSQL: localhost:5433
+Redis:      localhost:6379
 MinIO API:  http://localhost:9000
 MinIO 控制台: http://localhost:9001
 ```
+
+当前 `docker-compose.yml` 只编排本地依赖服务，不包含后端和前端应用镜像。后端仍通过 `cd backend && ./mvnw spring-boot:run` 启动，前端仍通过 `cd web && npm run dev` 启动；应用容器化和反向代理配置会在后续部署任务中继续整理。
+
+Nginx 反向代理草案位于 `deploy/nginx/ai-resume.conf`。该文件仅用于后续部署准备，需要替换域名、前端静态文件路径并单独配置 HTTPS 后再用于真实服务器。
 
 默认 PostgreSQL 配置与 `.env.example` 一致：
 
@@ -431,7 +449,7 @@ CI 会执行：
 
 ### AI 分析失败
 
-检查 `.env` 中的 `DASHSCOPE_API_KEY`、`OPENAI_MODEL` 和后端 `application.yaml` 中的 AI base URL 是否匹配当前服务商。
+检查 `.env` 中的 `AI_API_KEY`、`AI_BASE_URL`、`AI_MODEL` 是否匹配当前服务商；旧变量 `DASHSCOPE_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_MODEL` 仍可兼容，但新环境优先使用 `AI_*`。
 
 ### AI 输出限制
 

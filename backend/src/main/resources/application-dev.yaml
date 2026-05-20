@@ -7,6 +7,5 @@ spring:
 
 logging:
   level:
-    root: info
-    com.winter.airesumeoptimizer: info
-
+    root: ${LOG_LEVEL_ROOT:info}
+    com.winter.airesumeoptimizer: ${LOG_LEVEL_APP:info}
