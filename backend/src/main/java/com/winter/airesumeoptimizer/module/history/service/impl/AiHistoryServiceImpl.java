@@ -26,6 +26,7 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -281,17 +282,17 @@ public class AiHistoryServiceImpl implements AiHistoryService {
             throw new BusinessException(404, "AI 结果不存在");
         }
         Resume resume = getOwnedResume(userId, rewrite.getResumeId());
-        JobDescription jobDescription = getOwnedJobDescription(userId, rewrite.getJobDescriptionId());
+        JobDescription jobDescription = getOptionalOwnedJobDescriptionForHistory(userId, rewrite.getJobDescriptionId());
+        AiResumeSuggestion relatedSuggestion = getRelatedSuggestion(rewrite.getAiResumeSuggestionId());
         return AiResultDetailVO.builder()
                 .recordId(rewrite.getId())
                 .resultType(TYPE_LOCAL_REWRITE)
                 .title("局部改写 - " + safeSection(rewrite.getTargetSection()))
                 .status(rewrite.getRewriteStatus())
                 .content(contentMap(
-                        "aiJobMatchResultId", nullableValue(rewrite.getAiJobMatchResultId()),
-                        "aiResumeSuggestionId", nullableValue(rewrite.getAiResumeSuggestionId()),
                         "rewriteType", nullableValue(rewrite.getRewriteType()),
                         "targetSection", nullableValue(rewrite.getTargetSection()),
+                        "relatedSuggestion", relatedSuggestionContent(relatedSuggestion),
                         "originalText", nullableValue(rewrite.getOriginalText()),
                         "rewrittenText", nullableValue(rewrite.getRewrittenText()),
                         "rewriteReason", nullableValue(rewrite.getRewriteReason()),
@@ -422,7 +423,7 @@ public class AiHistoryServiceImpl implements AiHistoryService {
                             .recordId(suggestion.getId())
                             .resultType(TYPE_JOB_OPTIMIZATION_SUGGESTION)
                             .title("岗位优化建议 - " + safeJobTitle(jobDescription))
-                            .summary(preview(suggestion.getSuggestions()))
+                            .summary(previewSuggestionSummary(suggestion.getSuggestions()))
                             .status(suggestion.getSuggestionStatus())
                             .resumeId(suggestion.getResumeId())
                             .resumeName(safeResumeName(resume))
@@ -445,13 +446,18 @@ public class AiHistoryServiceImpl implements AiHistoryService {
             Long jobDescriptionId,
             String status) {
         if (resumeMap.isEmpty() || jobDescriptionMap.isEmpty()) {
+            if (resumeMap.isEmpty() || jobDescriptionId != null) {
+                return List.of();
+            }
+        }
+        if (jobDescriptionId != null && jobDescriptionMap.isEmpty()) {
             return List.of();
         }
         return aiRewriteSuggestionMapper.selectList(new LambdaQueryWrapper<AiRewriteSuggestion>()
-                        .in(AiRewriteSuggestion::getResumeId, filterIds(resumeMap, resumeId))
-                        .in(AiRewriteSuggestion::getJobDescriptionId, filterIds(jobDescriptionMap, jobDescriptionId)))
+                        .in(AiRewriteSuggestion::getResumeId, filterIds(resumeMap, resumeId)))
                 .stream()
                 .filter(rewrite -> statusMatches(status, rewrite.getRewriteStatus()))
+                .filter(rewrite -> rewriteJobMatches(rewrite, jobDescriptionMap, jobDescriptionId))
                 .map(rewrite -> {
                     Resume resume = resumeMap.get(rewrite.getResumeId());
                     JobDescription jobDescription = jobDescriptionMap.get(rewrite.getJobDescriptionId());
@@ -510,6 +516,45 @@ public class AiHistoryServiceImpl implements AiHistoryService {
             throw new BusinessException(404, "AI 结果不存在");
         }
         return jobDescription;
+    }
+
+    private JobDescription getOptionalOwnedJobDescriptionForHistory(Long userId, Long jobDescriptionId) {
+        if (jobDescriptionId == null) {
+            return null;
+        }
+        return getOwnedJobDescription(userId, jobDescriptionId);
+    }
+
+    private boolean rewriteJobMatches(
+            AiRewriteSuggestion rewrite,
+            Map<Long, JobDescription> jobDescriptionMap,
+            Long requestedJobDescriptionId) {
+        if (requestedJobDescriptionId != null) {
+            return Objects.equals(rewrite.getJobDescriptionId(), requestedJobDescriptionId);
+        }
+        return rewrite.getJobDescriptionId() == null || jobDescriptionMap.containsKey(rewrite.getJobDescriptionId());
+    }
+
+    private AiResumeSuggestion getRelatedSuggestion(Long aiResumeSuggestionId) {
+        if (aiResumeSuggestionId == null) {
+            return null;
+        }
+        return aiResumeSuggestionMapper.selectById(aiResumeSuggestionId);
+    }
+
+    private Map<String, Object> relatedSuggestionContent(AiResumeSuggestion suggestion) {
+        if (suggestion == null) {
+            return null;
+        }
+        Object parsedSuggestions = readJsonValue(suggestion.getSuggestions());
+        if (parsedSuggestions instanceof List<?> suggestions && !suggestions.isEmpty()
+                && suggestions.get(0) instanceof Map<?, ?> first) {
+            return contentMap(
+                    "targetSection", first.get("targetSection"),
+                    "issue", first.get("issue"),
+                    "suggestion", first.get("suggestion"));
+        }
+        return contentMap("summary", previewSuggestionSummary(suggestion.getSuggestions()));
     }
 
     private boolean shouldIncludeType(String requestedType, String candidateType) {
@@ -628,6 +673,33 @@ public class AiHistoryServiceImpl implements AiHistoryService {
 
     private Object nullableValue(Object value) {
         return value;
+    }
+
+    private String previewSuggestionSummary(String suggestions) {
+        Object parsedSuggestions = readJsonValue(suggestions);
+        if (parsedSuggestions instanceof List<?> items && !items.isEmpty()) {
+            List<String> readableItems = items.stream()
+                    .limit(3)
+                    .map(item -> {
+                        if (item instanceof Map<?, ?> map) {
+                            Object issue = map.get("issue");
+                            Object suggestion = map.get("suggestion");
+                            if (suggestion != null) {
+                                return String.valueOf(suggestion);
+                            }
+                            if (issue != null) {
+                                return String.valueOf(issue);
+                            }
+                        }
+                        return null;
+                    })
+                    .filter(value -> value != null && !value.isBlank())
+                    .toList();
+            if (!readableItems.isEmpty()) {
+                return preview(String.join("；", readableItems));
+            }
+        }
+        return preview(suggestions);
     }
 
     private String preview(String value) {

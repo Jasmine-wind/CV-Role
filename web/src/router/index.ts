@@ -6,6 +6,7 @@ declare module 'vue-router' {
     requiresAuth?: boolean
     guestOnly?: boolean
     title?: string
+    layoutWidth?: 'default' | 'wide' | 'reading'
   }
 }
 
@@ -14,11 +15,20 @@ const router = createRouter({
   routes: [
     {
       path: '/',
+      name: 'landing',
+      component: () => import('@/views/landing/LandingView.vue'),
+      meta: {
+        title: 'AI 简历优化与岗位匹配系统',
+      },
+    },
+    {
+      path: '/app',
       name: 'home',
       component: () => import('@/views/HomeView.vue'),
       meta: {
         requiresAuth: true,
         title: '工作台',
+        layoutWidth: 'wide',
       },
     },
     {
@@ -82,6 +92,7 @@ const router = createRouter({
       meta: {
         requiresAuth: true,
         title: '匹配与优化',
+        layoutWidth: 'wide',
       },
     },
     {
@@ -91,6 +102,7 @@ const router = createRouter({
       meta: {
         requiresAuth: true,
         title: 'AI 历史',
+        layoutWidth: 'wide',
       },
     },
     {

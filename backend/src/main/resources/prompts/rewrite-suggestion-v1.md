@@ -1,6 +1,6 @@
 promptName: rewrite-suggestion
 promptVersion: rewrite_suggestion_v1
-input: originalText, rewriteType, targetSection, jobStructuredContent, aiMatchResult, aiSuggestion
+input: originalText, rewriteType, targetSection, jobStructuredContent, aiMatchResult, aiSuggestion, rewriteGoal, jobKeywords, tone, lengthLimit
 output: JSON object with rewrittenText, rewriteReason, caution, needUserSupplement, supplementQuestions
 constraints: only rewrite the selected text fragment; do not write back to the original resume; do not fabricate facts or metrics
 
@@ -24,6 +24,7 @@ Prompt 版本：rewrite_suggestion_v1
 6. needUserSupplement 是布尔值；当原文太短、缺少职责、缺少技术动作、缺少真实成果或缺少上下文时必须为 true。
 7. supplementQuestions 是字符串数组；needUserSupplement 为 true 时至少 1 条，最多 5 条；否则返回空数组。
 8. 如果要补充量化指标，只能在 supplementQuestions 中询问用户真实数据，不能直接生成数字。
+9. 岗位关键词只能作为表达方向参考；如果原文没有对应事实证据，只能在 caution 或 supplementQuestions 中提醒用户确认，不能写成已掌握能力。
 
 输出 JSON 示例：
 {"rewrittenText":"负责 AI 简历优化系统中简历上传与解析模块的后端开发，基于 Spring Boot 实现文件上传接口、用户权限校验和解析结果持久化，并完成前后端联调。","rewriteReason":"在保留原文事实的基础上，补充模块职责、技术栈和工作内容，使表达更具体。","caution":"如果没有实际完成权限校验或持久化功能，不应直接采用该表述。","needUserSupplement":false,"supplementQuestions":[]}
@@ -36,6 +37,18 @@ Prompt 版本：rewrite_suggestion_v1
 
 目标简历部分：
 {{targetSection}}
+
+改写目标：
+{{rewriteGoal}}
+
+岗位关键词：
+{{jobKeywords}}
+
+表达风格：
+{{tone}}
+
+期望长度：
+{{lengthLimit}}
 
 目标岗位结构化结果：
 {{jobStructuredContent}}

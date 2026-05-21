@@ -1,0 +1,76 @@
+:root {
+  --el-color-primary: var(--app-primary);
+  --el-color-primary-light-3: #60a5fa;
+  --el-color-primary-light-5: #93c5fd;
+  --el-color-primary-light-7: #bfdbfe;
+  --el-color-primary-light-8: #dbeafe;
+  --el-color-primary-light-9: var(--app-primary-soft);
+  --el-color-primary-dark-2: var(--app-primary-hover);
+
+  --el-border-radius-base: 10px;
+  --el-border-color: var(--app-border);
+  --el-border-color-light: var(--app-border-soft);
+  --el-fill-color-light: var(--app-bg-soft);
+  --el-fill-color-lighter: var(--app-surface-soft);
+
+  --el-text-color-primary: var(--app-text);
+  --el-text-color-regular: var(--app-text-secondary);
+  --el-text-color-secondary: var(--app-text-muted);
+}
+
+.el-button {
+  font-weight: 600;
+}
+
+.el-button--primary {
+  --el-button-bg-color: var(--app-primary);
+  --el-button-border-color: var(--app-primary);
+  --el-button-hover-bg-color: var(--app-primary-hover);
+  --el-button-hover-border-color: var(--app-primary-hover);
+  --el-button-active-bg-color: #1e40af;
+  --el-button-active-border-color: #1e40af;
+}
+
+.el-button--success {
+  --el-button-bg-color: var(--app-success);
+  --el-button-border-color: var(--app-success);
+  --el-button-hover-bg-color: #15803d;
+  --el-button-hover-border-color: #15803d;
+}
+
+.el-button--warning {
+  --el-button-bg-color: var(--app-warning);
+  --el-button-border-color: var(--app-warning);
+  --el-button-hover-bg-color: #b45309;
+  --el-button-hover-border-color: #b45309;
+}
+
+.el-button--danger {
+  --el-button-bg-color: var(--app-danger);
+  --el-button-border-color: var(--app-danger);
+  --el-button-hover-bg-color: #b91c1c;
+  --el-button-hover-border-color: #b91c1c;
+}
+
+.el-card {
+  --el-card-border-color: var(--app-border);
+  border-radius: var(--app-radius-lg);
+  box-shadow: var(--app-shadow-card);
+}
+
+.el-tag {
+  border-radius: 999px;
+  font-weight: 600;
+}
+
+.el-table {
+  --el-table-header-bg-color: var(--app-surface-soft);
+  --el-table-header-text-color: var(--app-text);
+  color: var(--app-text-secondary);
+}
+
+.el-input__wrapper,
+.el-textarea__inner,
+.el-select__wrapper {
+  box-shadow: 0 0 0 1px var(--app-border) inset;
+}

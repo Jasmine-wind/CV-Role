@@ -41,7 +41,7 @@ const handleSubmit = async () => {
   try {
     await authStore.login(form)
     ElMessage.success('登录成功')
-    const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : '/'
+    const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : '/app'
     await router.push(redirect)
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '登录失败')
@@ -52,6 +52,10 @@ const handleSubmit = async () => {
 <template>
   <main class="auth-page">
     <section class="auth-panel">
+      <RouterLink to="/" class="auth-brand">
+        <span>AI</span>
+        <strong>简历优化</strong>
+      </RouterLink>
       <h1 class="auth-title">登录</h1>
       <p class="auth-subtitle">使用用户名或邮箱登录，继续完成简历优化流程。</p>
 

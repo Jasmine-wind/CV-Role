@@ -517,9 +517,9 @@ class Phase1ApiIntegrationTest {
                 .thenReturn(buildAiResumeSuggestion("SUCCESS"));
         when(aiResumeSuggestionService.getByResumeAndJobDescription(1L, 100L, 99L))
                 .thenThrow(new BusinessException(404, "AI 优化建议结果不存在"));
-        when(aiRewriteSuggestionService.generate(1L, 100L, "PROJECT", "项目经历", "做了一个 AI 简历优化系统，负责后端开发。", 10L, 400L, 500L))
+        when(aiRewriteSuggestionService.generate(1L, 100L, "PROJECT", "项目经历", "做了一个 AI 简历优化系统，负责后端开发。", 10L, 400L, 500L, null, null, null, null))
                 .thenReturn(buildAiRewriteSuggestion("SUCCESS"));
-        when(aiRewriteSuggestionService.generate(1L, 100L, "PROJECT", "项目经历", "触发失败", 10L, 400L, 500L))
+        when(aiRewriteSuggestionService.generate(1L, 100L, "PROJECT", "项目经历", "触发失败", 10L, 400L, 500L, null, null, null, null))
                 .thenReturn(buildFailedAiRewriteSuggestion());
         when(aiRewriteSuggestionService.listByResume(1L, 100L, null, null)).thenReturn(List.of(
                 buildAiRewriteSuggestion("SUCCESS"),

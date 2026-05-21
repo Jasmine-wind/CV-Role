@@ -1,6 +1,7 @@
 package com.winter.airesumeoptimizer.module.analysis.service;
 
 import com.winter.airesumeoptimizer.module.analysis.dto.AiRewriteSuggestionPromptDTO;
+import java.util.List;
 
 public interface AiRewriteSuggestionPromptService {
 
@@ -12,5 +13,9 @@ public interface AiRewriteSuggestionPromptService {
             String targetSection,
             String jobStructuredContent,
             String aiMatchResult,
-            String aiSuggestion);
+            String aiSuggestion,
+            String rewriteGoal,
+            List<String> jobKeywords,
+            String tone,
+            Integer lengthLimit);
 }

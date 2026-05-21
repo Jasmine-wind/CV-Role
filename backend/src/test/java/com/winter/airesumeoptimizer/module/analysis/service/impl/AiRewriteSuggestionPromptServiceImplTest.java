@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.winter.airesumeoptimizer.common.exception.BusinessException;
 import com.winter.airesumeoptimizer.module.analysis.dto.AiRewriteSuggestionPromptDTO;
 import com.winter.airesumeoptimizer.module.analysis.service.AiRewriteSuggestionPromptService;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 
 class AiRewriteSuggestionPromptServiceImplTest {
@@ -20,7 +21,11 @@ class AiRewriteSuggestionPromptServiceImplTest {
                 "项目经历",
                 "{\"requiredSkills\":[\"Spring Boot\"]}",
                 "{\"missingSkills\":[]}",
-                "{\"suggestions\":[{\"type\":\"PROJECT_DESCRIPTION\"}]}");
+                "{\"suggestions\":[{\"type\":\"PROJECT_DESCRIPTION\"}]}",
+                "突出岗位关键词并补充技术细节",
+                List.of("Spring Boot", "Redis"),
+                "简洁专业",
+                180);
 
         assertThat(result.getPromptVersion()).isEqualTo(AiRewriteSuggestionPromptService.PROMPT_VERSION);
         assertThat(result.getPrompt()).contains("Prompt 版本：rewrite_suggestion_v1");
@@ -34,6 +39,9 @@ class AiRewriteSuggestionPromptServiceImplTest {
         assertThat(result.getPrompt()).contains("不得编造原文中不存在的项目");
         assertThat(result.getPrompt()).contains("不得代填接口调用量");
         assertThat(result.getPrompt()).contains("不得生成完整简历");
+        assertThat(result.getPrompt()).contains("突出岗位关键词并补充技术细节");
+        assertThat(result.getPrompt()).contains("Spring Boot、Redis");
+        assertThat(result.getPrompt()).contains("简洁专业");
     }
 
     @Test
@@ -44,7 +52,11 @@ class AiRewriteSuggestionPromptServiceImplTest {
                 "技能",
                 null,
                 "",
-                "   ");
+                "   ",
+                null,
+                List.of(),
+                null,
+                null);
 
         assertThat(result.getPrompt()).contains("目标岗位结构化结果：\n未提供");
         assertThat(result.getPrompt()).contains("匹配分析结果：\n未提供");
@@ -53,15 +65,15 @@ class AiRewriteSuggestionPromptServiceImplTest {
 
     @Test
     void buildPromptShouldRejectMissingRequiredInputs() {
-        assertThatThrownBy(() -> service.buildPrompt("", "PROJECT", "项目经历", null, null, null))
+        assertThatThrownBy(() -> service.buildPrompt("", "PROJECT", "项目经历", null, null, null, null, null, null, null))
                 .isInstanceOf(BusinessException.class)
                 .hasMessage("原文片段不能为空");
 
-        assertThatThrownBy(() -> service.buildPrompt("负责接口开发", "", "项目经历", null, null, null))
+        assertThatThrownBy(() -> service.buildPrompt("负责接口开发", "", "项目经历", null, null, null, null, null, null, null))
                 .isInstanceOf(BusinessException.class)
                 .hasMessage("改写对象类型不能为空");
 
-        assertThatThrownBy(() -> service.buildPrompt("负责接口开发", "PROJECT", "", null, null, null))
+        assertThatThrownBy(() -> service.buildPrompt("负责接口开发", "PROJECT", "", null, null, null, null, null, null, null))
                 .isInstanceOf(BusinessException.class)
                 .hasMessage("目标简历部分不能为空");
     }

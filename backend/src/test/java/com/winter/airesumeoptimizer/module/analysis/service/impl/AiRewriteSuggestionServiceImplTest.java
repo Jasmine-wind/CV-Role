@@ -26,6 +26,7 @@ import com.winter.airesumeoptimizer.module.job.entity.JobDescription;
 import com.winter.airesumeoptimizer.module.job.mapper.JobDescriptionMapper;
 import com.winter.airesumeoptimizer.module.resume.entity.Resume;
 import com.winter.airesumeoptimizer.module.resume.mapper.ResumeMapper;
+import com.winter.airesumeoptimizer.module.resume.mapper.ResumeParseResultMapper;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -37,6 +38,7 @@ class AiRewriteSuggestionServiceImplTest {
     private final AiJobMatchResultMapper aiJobMatchResultMapper = mock(AiJobMatchResultMapper.class);
     private final AiResumeSuggestionMapper aiResumeSuggestionMapper = mock(AiResumeSuggestionMapper.class);
     private final AiRewriteSuggestionMapper aiRewriteSuggestionMapper = mock(AiRewriteSuggestionMapper.class);
+    private final ResumeParseResultMapper resumeParseResultMapper = mock(ResumeParseResultMapper.class);
     private final AiRewriteSuggestionPromptService aiRewriteSuggestionPromptService = mock(AiRewriteSuggestionPromptService.class);
     private final AiRewriteSuggestionOutputParser aiRewriteSuggestionOutputParser = mock(AiRewriteSuggestionOutputParser.class);
     private final AiClientService aiClientService = mock(AiClientService.class);
@@ -47,6 +49,7 @@ class AiRewriteSuggestionServiceImplTest {
             aiJobMatchResultMapper,
             aiResumeSuggestionMapper,
             aiRewriteSuggestionMapper,
+            resumeParseResultMapper,
             aiRewriteSuggestionPromptService,
             aiRewriteSuggestionOutputParser,
             aiClientService,
@@ -55,7 +58,7 @@ class AiRewriteSuggestionServiceImplTest {
     @Test
     void generateShouldSaveSuccessRewriteSuggestion() {
         mockValidInputs();
-        when(aiRewriteSuggestionPromptService.buildPrompt(any(), any(), any(), any(), any(), any()))
+        when(aiRewriteSuggestionPromptService.buildPrompt(any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(AiRewriteSuggestionPromptDTO.builder()
                         .promptVersion("rewrite_suggestion_v1")
                         .prompt("prompt")
@@ -94,7 +97,7 @@ class AiRewriteSuggestionServiceImplTest {
     @Test
     void generateShouldAppendSupplementQuestionsToCaution() {
         when(resumeMapper.selectOne(any(Wrapper.class))).thenReturn(buildResume());
-        when(aiRewriteSuggestionPromptService.buildPrompt(any(), any(), any(), any(), any(), any()))
+        when(aiRewriteSuggestionPromptService.buildPrompt(any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(AiRewriteSuggestionPromptDTO.builder()
                         .promptVersion("rewrite_suggestion_v1")
                         .prompt("prompt")
@@ -117,7 +120,7 @@ class AiRewriteSuggestionServiceImplTest {
     @Test
     void generateShouldSaveFailedSuggestionWhenAiOutputInvalid() {
         when(resumeMapper.selectOne(any(Wrapper.class))).thenReturn(buildResume());
-        when(aiRewriteSuggestionPromptService.buildPrompt(any(), any(), any(), any(), any(), any()))
+        when(aiRewriteSuggestionPromptService.buildPrompt(any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(AiRewriteSuggestionPromptDTO.builder()
                         .promptVersion("rewrite_suggestion_v1")
                         .prompt("prompt")
@@ -136,6 +139,32 @@ class AiRewriteSuggestionServiceImplTest {
         assertThat(captor.getValue().getRewriteReason()).isNull();
         assertThat(captor.getValue().getCaution()).isNull();
         assertThat(captor.getValue().getErrorMessage()).isEqualTo("AI 局部改写结果不是合法 JSON");
+    }
+
+    @Test
+    void generateShouldNotRetryInsertWhenPersistenceFails() {
+        when(resumeMapper.selectOne(any(Wrapper.class))).thenReturn(buildResume());
+        when(aiRewriteSuggestionPromptService.buildPrompt(any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(AiRewriteSuggestionPromptDTO.builder()
+                        .promptVersion("rewrite_suggestion_v1")
+                        .prompt("prompt")
+                        .build());
+        when(aiClientService.modelName()).thenReturn("qwen-plus");
+        when(aiClientService.complete("prompt")).thenReturn("{}");
+        when(aiRewriteSuggestionOutputParser.parse("{}")).thenReturn(AiRewriteSuggestionResultDTO.builder()
+                .rewrittenText("负责后端接口设计与开发。")
+                .rewriteReason("强化职责表达。")
+                .caution("确认职责真实。")
+                .needUserSupplement(false)
+                .supplementQuestions(List.of())
+                .build());
+        when(aiRewriteSuggestionMapper.insert(any(AiRewriteSuggestion.class)))
+                .thenThrow(new RuntimeException("insert failed"));
+
+        assertThatThrownBy(() -> service.generate(1L, 10L, "PROJECT", "项目经历", "负责接口开发", null, null, null))
+                .isInstanceOf(RuntimeException.class)
+                .hasMessage("insert failed");
+        verify(aiRewriteSuggestionMapper).insert(any(AiRewriteSuggestion.class));
     }
 
     @Test

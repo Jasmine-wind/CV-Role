@@ -4,6 +4,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { useRouter } from 'vue-router'
 import EmptyState from '@/components/common/EmptyState.vue'
 import PageHeader from '@/components/common/PageHeader.vue'
+import SkeletonBlock from '@/components/common/SkeletonBlock.vue'
 import JobDescriptionCard from '@/components/job/JobDescriptionCard.vue'
 import { deleteJobDescription, getJobDescriptionList, parseJobDescription } from '@/api/job-description'
 import type { JobDescriptionDetail } from '@/types/job-description'
@@ -79,8 +80,8 @@ onMounted(() => {
   <section class="job-description-page">
     <PageHeader
       eyebrow="目标岗位"
-      title="管理你自己的真实目标 JD"
-      description="这里保存用户粘贴的目标岗位，不维护系统预置岗位。解析完成后再进入匹配与优化。"
+      title="保存你自己的真实目标 JD"
+      description="这里保存用户粘贴的投递岗位，不维护系统预置岗位。解析完成后再进入匹配与优化。"
     >
       <template #actions>
         <el-button @click="router.push('/jobs')">岗位库参考</el-button>
@@ -106,7 +107,9 @@ onMounted(() => {
       </article>
     </section>
 
-    <section v-loading="loading" class="job-description-card-grid">
+    <SkeletonBlock v-if="loading" title :rows="6" />
+
+    <section v-else-if="records.length" class="job-description-card-grid">
       <JobDescriptionCard
         v-for="record in records"
         :key="record.id"
@@ -120,12 +123,16 @@ onMounted(() => {
     </section>
 
     <EmptyState
-      v-if="!loading && records.length === 0"
-      title="你还没有目标岗位"
-      description="粘贴一个真实招聘 JD 后，系统可以解析岗位要求并生成匹配分析。"
+      v-else
+      title="你还没有添加目标岗位"
+      description="粘贴一份真实 JD 后，系统可以分析岗位要求并与你的简历进行匹配。"
+      secondary-text="下一步建议：复制目标招聘 JD，新增后先完成解析。"
       action-text="新增目标岗位"
       @action="router.push('/job-descriptions/new')"
     />
+    <div v-if="!loading && records.length === 0" class="job-description-empty-secondary">
+      <el-button @click="router.push('/jobs')">查看岗位库参考</el-button>
+    </div>
   </section>
 </template>
 
@@ -174,6 +181,12 @@ onMounted(() => {
 .job-description-card-grid .is-busy {
   opacity: 0.72;
   pointer-events: none;
+}
+
+.job-description-empty-secondary {
+  display: flex;
+  justify-content: center;
+  margin-top: -6px;
 }
 
 @media (max-width: 960px) {

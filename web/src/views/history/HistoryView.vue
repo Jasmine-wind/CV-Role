@@ -1,53 +1,72 @@
 <script setup lang="ts">
 import { ElMessage } from 'element-plus'
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import EmptyState from '@/components/common/EmptyState.vue'
 import PageHeader from '@/components/common/PageHeader.vue'
-import AiHistoryDetailDrawer from '@/components/history/AiHistoryDetailDrawer.vue'
+import SkeletonBlock from '@/components/common/SkeletonBlock.vue'
+import AiHistoryDetailPanel from '@/components/history/AiHistoryDetailPanel.vue'
 import { getAiResultDetail, getAiResultPage } from '@/api/history'
 import type { AiResultDetail, AiResultRecord } from '@/types/history'
+import { truncateText } from '@/utils/display'
 
 const router = useRouter()
 
 const records = ref<AiResultRecord[]>([])
+const activeRecord = ref<AiResultRecord | null>(null)
 const activeDetail = ref<AiResultDetail | null>(null)
 const loading = ref(false)
 const loadingDetail = ref(false)
-const detailVisible = ref(false)
+const detailDrawerVisible = ref(false)
+const compactDetailMode = ref(false)
 const page = ref(1)
 const size = ref(10)
 const total = ref(0)
 const resultType = ref('')
 const status = ref('')
-const resumeIdInput = ref('')
-const jobDescriptionIdInput = ref('')
+const keyword = ref('')
 
 const resultTypeOptions = [
-  { label: '全部类型', value: '' },
+  { label: '全部', value: '' },
   { label: '简历诊断', value: 'RESUME_DIAGNOSIS' },
   { label: '目标岗位解析', value: 'TARGET_JOB_PARSE' },
   { label: '匹配分析', value: 'MATCH_ANALYSIS' },
-  { label: '岗位优化建议', value: 'JOB_OPTIMIZATION_SUGGESTION' },
+  { label: '优化建议', value: 'JOB_OPTIMIZATION_SUGGESTION' },
   { label: '局部改写', value: 'LOCAL_REWRITE' },
 ]
 
 const statusOptions = [
   { label: '全部状态', value: '' },
-  { label: '处理中', value: 'PENDING' },
   { label: '成功', value: 'SUCCESS' },
   { label: '失败', value: 'FAILED' },
+  { label: '处理中', value: 'PENDING' },
 ]
 
-const hasRecords = computed(() => records.value.length > 0)
-
-const detailEntries = computed(() => {
-  if (!activeDetail.value?.content) {
-    return []
+const normalizedKeyword = computed(() => keyword.value.trim().toLowerCase())
+const displayedRecords = computed(() => {
+  if (!normalizedKeyword.value) {
+    return records.value
   }
 
-  return Object.entries(activeDetail.value.content)
+  return records.value.filter((item) => {
+    const searchableText = [
+      item.title,
+      item.summary,
+      item.resumeName,
+      item.jobTitle,
+      resolveResultTypeText(item.resultType),
+      resolveStatusText(item.status),
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase()
+
+    return searchableText.includes(normalizedKeyword.value)
+  })
 })
+const hasRecords = computed(() => records.value.length > 0)
+const hasDisplayedRecords = computed(() => displayedRecords.value.length > 0)
+const inlineDetailVisible = computed(() => !compactDetailMode.value)
 
 const formatDateTime = (value: string | null | undefined) => {
   if (!value) {
@@ -57,14 +76,17 @@ const formatDateTime = (value: string | null | undefined) => {
   return value.replace('T', ' ').slice(0, 19)
 }
 
-const parseOptionalId = (value: string) => {
-  const trimmed = value.trim()
-  if (!trimmed) {
-    return undefined
+const normalizeSummary = (summary: string | null | undefined, fallback = '暂无摘要') => {
+  const value = summary?.trim()
+  if (!value) {
+    return fallback
   }
 
-  const parsed = Number(trimmed)
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined
+  if (value.startsWith('{') || value.startsWith('[')) {
+    return '已生成结构化结果，进入详情查看。'
+  }
+
+  return truncateText(value, 96) || fallback
 }
 
 const resolveResultTypeText = (type: string | null | undefined) => {
@@ -105,48 +127,6 @@ const resolveStatusType = (value: string | null | undefined) => {
   return 'info'
 }
 
-const formatContentKey = (key: string) => {
-  const keyMap: Record<string, string> = {
-    score: '评分',
-    strengths: '优势',
-    problems: '问题',
-    suggestionsSummary: '建议摘要',
-    rawTextPreview: '原文摘要',
-    structuredContent: '解析结果',
-    overallScore: '匹配分数',
-    strongMatches: '强匹配',
-    weakMatches: '弱匹配',
-    missingSkills: '缺失技能',
-    weakExperienceDescriptions: '表达较弱经历',
-    evidence: '依据',
-    riskNotes: '风险提示',
-    aiJobMatchResultId: '匹配结果 ID',
-    suggestions: '优化建议',
-    aiResumeSuggestionId: '优化建议 ID',
-    rewriteType: '改写类型',
-    targetSection: '目标章节',
-    originalText: '原文',
-    rewrittenText: '改写文本',
-    rewriteReason: '改写理由',
-    caution: '注意事项',
-    acceptStatus: '采纳状态',
-  }
-
-  return keyMap[key] ?? key
-}
-
-const formatContentValue = (value: unknown) => {
-  if (value === null || value === undefined || value === '') {
-    return '-'
-  }
-
-  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
-    return String(value)
-  }
-
-  return JSON.stringify(value, null, 2)
-}
-
 const loadHistory = async () => {
   loading.value = true
 
@@ -154,13 +134,15 @@ const loadHistory = async () => {
     const result = await getAiResultPage({
       resultType: resultType.value || undefined,
       status: status.value || undefined,
-      resumeId: parseOptionalId(resumeIdInput.value),
-      jobDescriptionId: parseOptionalId(jobDescriptionIdInput.value),
       page: page.value,
       size: size.value,
     })
     records.value = result.records
     total.value = result.total
+    if (activeRecord.value && !records.value.some((item) => item.recordId === activeRecord.value?.recordId && item.resultType === activeRecord.value?.resultType)) {
+      activeRecord.value = null
+      activeDetail.value = null
+    }
   } catch (error) {
     records.value = []
     total.value = 0
@@ -171,15 +153,6 @@ const loadHistory = async () => {
 }
 
 const search = async () => {
-  page.value = 1
-  await loadHistory()
-}
-
-const resetFilters = async () => {
-  resultType.value = ''
-  status.value = ''
-  resumeIdInput.value = ''
-  jobDescriptionIdInput.value = ''
   page.value = 1
   await loadHistory()
 }
@@ -197,20 +170,33 @@ const handleSizeChange = async (nextSize: number) => {
 
 const openDetail = async (record: AiResultRecord) => {
   loadingDetail.value = true
-  detailVisible.value = true
+  activeRecord.value = record
+  if (compactDetailMode.value) {
+    detailDrawerVisible.value = true
+  }
 
   try {
     activeDetail.value = await getAiResultDetail(record.resultType, record.recordId)
   } catch (error) {
     activeDetail.value = null
-    detailVisible.value = false
     ElMessage.error(error instanceof Error ? error.message : '获取 AI 结果详情失败')
   } finally {
     loadingDetail.value = false
   }
 }
 
-const goResume = (resumeId: number | null) => {
+let compactDetailMediaQuery: MediaQueryList | null = null
+
+const syncCompactDetailMode = () => {
+  compactDetailMode.value = Boolean(compactDetailMediaQuery?.matches)
+  if (compactDetailMode.value) {
+    detailDrawerVisible.value = Boolean(activeDetail.value)
+  } else {
+    detailDrawerVisible.value = false
+  }
+}
+
+const openResume = (resumeId: number | null) => {
   if (!resumeId) {
     return
   }
@@ -223,7 +209,7 @@ const goResume = (resumeId: number | null) => {
   })
 }
 
-const goJobDescription = (jobDescriptionId: number | null) => {
+const openJobDescription = (jobDescriptionId: number | null) => {
   if (!jobDescriptionId) {
     return
   }
@@ -231,8 +217,8 @@ const goJobDescription = (jobDescriptionId: number | null) => {
   router.push(`/job-descriptions/${jobDescriptionId}`)
 }
 
-const goMatch = (record: AiResultRecord) => {
-  if (!record.resumeId || !record.jobDescriptionId) {
+const openMatch = (resumeId: number | null, jobDescriptionId: number | null) => {
+  if (!resumeId || !jobDescriptionId) {
     ElMessage.warning('当前 AI 结果缺少简历或目标岗位关联')
     return
   }
@@ -240,14 +226,33 @@ const goMatch = (record: AiResultRecord) => {
   router.push({
     path: '/ai-job-matches',
     query: {
-      resumeId: String(record.resumeId),
-      jobDescriptionId: String(record.jobDescriptionId),
+      resumeId: String(resumeId),
+      jobDescriptionId: String(jobDescriptionId),
     },
   })
 }
 
+const handleGoResume = () => {
+  openResume(activeDetail.value?.resumeId ?? null)
+}
+
+const handleGoJob = () => {
+  openJobDescription(activeDetail.value?.jobDescriptionId ?? null)
+}
+
+const handleGoMatch = () => {
+  openMatch(activeDetail.value?.resumeId ?? null, activeDetail.value?.jobDescriptionId ?? null)
+}
+
 onMounted(() => {
+  compactDetailMediaQuery = window.matchMedia('(max-width: 1199px)')
+  syncCompactDetailMode()
+  compactDetailMediaQuery.addEventListener('change', syncCompactDetailMode)
   loadHistory()
+})
+
+onUnmounted(() => {
+  compactDetailMediaQuery?.removeEventListener('change', syncCompactDetailMode)
 })
 </script>
 
@@ -257,35 +262,26 @@ onMounted(() => {
       <PageHeader
         eyebrow="AI 历史"
         title="回看已保存的 AI 结果"
-        description="历史页只做查询和详情回看，不触发新的 AI 生成。需要继续处理时跳回对应业务页面。"
-      >
-        <template #actions>
-          <el-button type="primary" :loading="loading" @click="loadHistory">刷新</el-button>
-        </template>
-      </PageHeader>
-
-      <el-alert
-        class="history-boundary-alert"
-        title="AI 历史只回看已保存结果，不会触发新的 AI 生成。"
-        type="info"
-        :closable="false"
-        show-icon
+        description="继续处理未完成的优化任务。"
       />
 
-      <section class="history-filter-panel">
-        <el-form class="history-filter-form" label-position="top">
-          <el-form-item label="结果类型">
-            <el-select v-model="resultType" class="history-filter-control">
-              <el-option
-                v-for="item in resultTypeOptions"
-                :key="item.value"
-                :label="item.label"
-                :value="item.value"
-              />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="状态">
-            <el-select v-model="status" class="history-filter-control">
+      <section class="history-toolbar" aria-label="AI 历史筛选">
+        <div class="history-toolbar-main">
+          <el-radio-group v-model="resultType" class="history-type-tabs" @change="search">
+            <el-radio-button
+              v-for="item in resultTypeOptions"
+              :key="item.value"
+              :label="item.value"
+            >
+              {{ item.label }}
+            </el-radio-button>
+          </el-radio-group>
+        </div>
+
+        <div class="history-toolbar-actions">
+          <label class="history-status-filter">
+            <span>状态</span>
+            <el-select v-model="status" class="history-status-select" @change="search">
               <el-option
                 v-for="item in statusOptions"
                 :key="item.value"
@@ -293,146 +289,121 @@ onMounted(() => {
                 :value="item.value"
               />
             </el-select>
-          </el-form-item>
-          <el-form-item label="简历 ID">
-            <el-input v-model="resumeIdInput" class="history-filter-control" placeholder="可选" clearable />
-          </el-form-item>
-          <el-form-item label="目标岗位 ID">
-            <el-input v-model="jobDescriptionIdInput" class="history-filter-control" placeholder="可选" clearable />
-          </el-form-item>
-          <el-form-item label="操作">
-            <el-space>
-              <el-button type="primary" @click="search">筛选</el-button>
-              <el-button @click="resetFilters">重置</el-button>
-            </el-space>
-          </el-form-item>
-        </el-form>
-      </section>
-
-      <section v-loading="loading" class="history-table-panel">
-        <div v-if="hasRecords" class="history-result-list">
-          <article
-            v-for="row in records"
-            :key="`${row.resultType}-${row.recordId}`"
-            class="history-result-card"
-          >
-            <header>
-              <div class="history-cell-stack">
-                <div class="history-title-line">
-                  <el-tag size="small" type="primary">{{ resolveResultTypeText(row.resultType) }}</el-tag>
-                  <el-tag size="small" :type="resolveStatusType(row.status)">
-                    {{ resolveStatusText(row.status) }}
-                  </el-tag>
-                </div>
-                <strong>{{ row.title || '-' }}</strong>
-                <span>{{ row.summary || '-' }}</span>
-              </div>
-              <small>{{ formatDateTime(row.updatedAt || row.createdAt) }}</small>
-            </header>
-
-            <div class="history-result-meta">
-              <span>简历：{{ row.resumeName || '-' }}</span>
-              <span>目标岗位：{{ row.jobTitle || '-' }}</span>
-              <span>模型：{{ row.modelName || '-' }}</span>
-              <span>Prompt：{{ row.promptVersion || '-' }}</span>
-            </div>
-
-            <footer class="history-actions">
-              <el-button size="small" @click="openDetail(row)">详情</el-button>
-              <el-button size="small" :disabled="!row.resumeId" @click="goResume(row.resumeId)">简历</el-button>
-              <el-button
-                size="small"
-                :disabled="!row.jobDescriptionId"
-                @click="goJobDescription(row.jobDescriptionId)"
-              >
-                目标岗位
-              </el-button>
-              <el-button
-                size="small"
-                type="primary"
-                :disabled="!row.resumeId || !row.jobDescriptionId"
-                @click="goMatch(row)"
-              >
-                匹配与优化
-              </el-button>
-            </footer>
-          </article>
-        </div>
-
-        <EmptyState
-          v-if="!loading && !hasRecords"
-          title="暂无 AI 历史"
-          description="完成简历诊断、目标岗位解析、匹配分析或局部改写后，会在这里回看。"
-          action-text="去我的简历"
-          @action="router.push('/resumes')"
-        />
-
-        <div v-if="total > 0" class="history-pagination">
-          <el-pagination
-            background
-            layout="total, sizes, prev, pager, next"
-            :current-page="page"
-            :page-size="size"
-            :page-sizes="[10, 20, 50]"
-            :total="total"
-            @current-change="handlePageChange"
-            @size-change="handleSizeChange"
+          </label>
+          <el-input
+            v-model="keyword"
+            class="history-search-input"
+            clearable
+            placeholder="搜索标题 / 简历 / 岗位"
           />
+          <el-button type="primary" :loading="loading" @click="loadHistory">刷新</el-button>
         </div>
       </section>
-    </section>
 
-    <AiHistoryDetailDrawer v-model="detailVisible">
-      <section v-loading="loadingDetail" class="history-detail">
-        <el-empty v-if="!activeDetail" description="暂无详情" :image-size="80" />
-
-        <template v-else>
-          <section class="history-detail-section">
-            <div class="history-detail-header">
-              <div>
-                <h2 class="history-section-title">{{ activeDetail.title || '-' }}</h2>
-                <el-space wrap>
-                  <el-tag type="primary">{{ resolveResultTypeText(activeDetail.resultType) }}</el-tag>
-                  <el-tag :type="resolveStatusType(activeDetail.status)">
-                    {{ resolveStatusText(activeDetail.status) }}
-                  </el-tag>
-                </el-space>
-              </div>
+      <section class="history-workspace">
+        <section class="history-list-panel">
+          <header class="history-panel-header">
+            <div>
+              <h2 class="history-section-title">历史结果</h2>
+              <p>{{ keyword ? `本页匹配 ${displayedRecords.length} 条，全部结果 ${total} 条。` : `共 ${total} 条结果。` }}</p>
             </div>
-            <el-descriptions :column="1" border class="history-meta">
-              <el-descriptions-item label="关联简历">{{ activeDetail.resumeName || '-' }}</el-descriptions-item>
-              <el-descriptions-item label="目标岗位">{{ activeDetail.jobTitle || '-' }}</el-descriptions-item>
-              <el-descriptions-item label="模型">{{ activeDetail.modelName || '-' }}</el-descriptions-item>
-              <el-descriptions-item label="Prompt 版本">{{ activeDetail.promptVersion || '-' }}</el-descriptions-item>
-              <el-descriptions-item label="创建时间">{{ formatDateTime(activeDetail.createdAt) }}</el-descriptions-item>
-              <el-descriptions-item label="更新时间">{{ formatDateTime(activeDetail.updatedAt) }}</el-descriptions-item>
-            </el-descriptions>
-            <el-alert
-              v-if="activeDetail.errorMessage"
-              :title="activeDetail.errorMessage"
-              type="error"
-              :closable="false"
-              show-icon
-              class="history-error"
-            />
-          </section>
+            <el-button v-if="keyword" text type="primary" @click="keyword = ''">清空搜索</el-button>
+          </header>
 
-          <section class="history-detail-section">
-            <h2 class="history-section-title">结构化内容</h2>
-            <div class="history-content-list">
+          <section class="history-list-scroll">
+            <SkeletonBlock v-if="loading" title :rows="6" />
+
+            <div v-else-if="hasDisplayedRecords" class="history-result-list">
               <article
-                v-for="[key, value] in detailEntries"
-                :key="key"
-                class="history-content-item"
+                v-for="row in displayedRecords"
+                :key="`${row.resultType}-${row.recordId}`"
+                class="history-result-card"
+                :class="{ 'is-active': activeRecord?.recordId === row.recordId && activeRecord?.resultType === row.resultType }"
               >
-                <h3 class="history-content-title">{{ formatContentKey(key) }}</h3>
-                <pre class="history-content-value">{{ formatContentValue(value) }}</pre>
+                <button type="button" class="history-result-main" @click="openDetail(row)">
+                  <div class="history-cell-stack">
+                    <div class="history-title-line">
+                      <el-tag size="small" type="primary">{{ resolveResultTypeText(row.resultType) }}</el-tag>
+                      <el-tag size="small" :type="resolveStatusType(row.status)">
+                        {{ resolveStatusText(row.status) }}
+                      </el-tag>
+                    </div>
+                    <strong>{{ row.title || '-' }}</strong>
+                    <span class="history-card-summary">{{ normalizeSummary(row.summary) }}</span>
+                  </div>
+                  <small>{{ formatDateTime(row.updatedAt || row.createdAt) }}</small>
+                </button>
+
+                <div class="history-result-meta">
+                  <span>简历：{{ row.resumeName || '-' }}</span>
+                  <span>目标岗位：{{ row.jobTitle || '-' }}</span>
+                </div>
               </article>
             </div>
+
+            <EmptyState
+              v-else-if="hasRecords"
+              title="没有匹配结果"
+              description="换一个关键词，或清空搜索后继续查看本页结果。"
+              secondary-text="搜索只在当前页结果中筛选。"
+              action-text="清空搜索"
+              @action="keyword = ''"
+            />
+
+            <EmptyState
+              v-else
+              title="暂无 AI 历史"
+              description="完成简历诊断、目标岗位解析、匹配分析或局部改写后，会在这里回看。"
+              secondary-text="下一步建议：先上传并解析一份简历。"
+              action-text="去我的简历"
+              @action="router.push('/resumes')"
+            />
+
+            <div v-if="total > 0" class="history-pagination">
+              <el-pagination
+                background
+                layout="total, sizes, prev, pager, next"
+                :current-page="page"
+                :page-size="size"
+                :page-sizes="[10, 20, 50]"
+                :total="total"
+                @current-change="handlePageChange"
+                @size-change="handleSizeChange"
+              />
+            </div>
           </section>
-        </template>
+        </section>
+
+        <section v-if="inlineDetailVisible" class="history-detail-panel">
+          <section class="history-detail-scroll">
+            <AiHistoryDetailPanel
+              :detail="activeDetail"
+              :loading="loadingDetail"
+              :compact="false"
+              @go-resume="handleGoResume"
+              @go-job="handleGoJob"
+              @go-match="handleGoMatch"
+            />
+          </section>
+        </section>
       </section>
-    </AiHistoryDetailDrawer>
+
+      <el-drawer
+        v-model="detailDrawerVisible"
+        title="AI 结果详情"
+        size="min(520px, 92vw)"
+        destroy-on-close
+      >
+        <AiHistoryDetailPanel
+          :detail="activeDetail"
+          :loading="loadingDetail"
+          :compact="true"
+          @go-resume="handleGoResume"
+          @go-job="handleGoJob"
+          @go-match="handleGoMatch"
+        />
+      </el-drawer>
+    </section>
   </section>
 </template>
 
@@ -445,104 +416,198 @@ onMounted(() => {
 
 .history-shell {
   display: grid;
-  gap: 16px;
-  width: 100%;
+  gap: 18px;
+  width: min(100%, 1480px);
+  margin: 0 auto;
+  min-width: 0;
 }
 
-.history-header {
+.history-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 24px;
+  gap: 12px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--app-color-border);
+  border-radius: 18px;
+  background: var(--app-color-surface);
+  box-shadow: var(--app-shadow-soft);
 }
 
-.history-title {
-  margin: 0;
-  color: var(--app-color-text);
-  font-size: 28px;
-  font-weight: 700;
+.history-toolbar-main,
+.history-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
 }
 
-.history-subtitle {
-  margin: 8px 0 0;
+.history-toolbar-main {
+  flex: 1 1 auto;
+  overflow-x: auto;
+  padding-bottom: 1px;
+}
+
+.history-toolbar-actions {
+  flex: 0 0 auto;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.history-type-tabs {
+  min-width: max-content;
+}
+
+.history-type-tabs :deep(.el-radio-button__inner) {
+  min-width: 68px;
+  border-color: var(--app-color-border);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.history-status-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
   color: var(--app-color-text-secondary);
-  font-size: 15px;
-  line-height: 1.7;
+  font-size: 13px;
+  font-weight: 650;
 }
 
-.history-boundary-alert {
-  margin-bottom: 16px;
+.history-status-select {
+  width: 132px;
 }
 
-.history-filter-panel,
-.history-table-panel {
-  padding: 24px;
+.history-search-input {
+  width: clamp(220px, 20vw, 300px);
+}
+
+.history-workspace {
+  display: grid;
+  grid-template-columns: 460px minmax(620px, 1fr);
+  gap: 20px;
+  min-width: 0;
+  min-height: 620px;
+  height: calc(100dvh - 236px);
+  align-items: stretch;
+}
+
+.history-list-panel,
+.history-detail-panel {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
   border: 1px solid var(--app-color-border);
   border-radius: 18px;
   background: var(--app-color-surface);
   box-shadow: var(--app-shadow-card);
 }
 
-.history-filter-panel {
-  margin-bottom: 16px;
+.history-list-panel {
+  grid-template-rows: auto minmax(0, 1fr);
 }
 
-.history-filter-form {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(150px, 1fr));
-  gap: 14px;
-  align-items: end;
+.history-detail-panel {
+  align-self: stretch;
 }
 
-.history-filter-form :deep(.el-form-item) {
-  margin-bottom: 0;
+.history-panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  padding: 18px 18px 14px;
+  border-bottom: 1px solid var(--app-color-border);
 }
 
-.history-filter-control {
-  width: 100%;
+.history-panel-header p {
+  margin: 4px 0 0;
+  color: var(--app-color-text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
 }
 
-.history-table {
-  border: 1px solid var(--app-color-border);
-  border-radius: 18px;
+.history-section-title {
+  margin: 0;
+  color: var(--app-color-text);
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.history-list-scroll,
+.history-detail-scroll {
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.history-list-scroll {
+  padding: 14px 14px 0;
+}
+
+.history-detail-scroll {
+  padding: 18px;
 }
 
 .history-result-list {
   display: grid;
-  gap: 12px;
+  gap: 10px;
 }
 
 .history-result-card {
   display: grid;
-  gap: 14px;
-  padding: 16px;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px;
   border: 1px solid var(--app-color-border);
-  border-radius: 16px;
+  border-radius: 14px;
   background: var(--app-color-surface-soft);
 }
 
-.history-result-card header {
+.history-result-card.is-active {
+  border-color: rgba(37, 99, 235, 0.28);
+  background: var(--app-color-primary-soft);
+}
+
+.history-result-main {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 16px;
+  gap: 12px;
+  min-width: 0;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
 }
 
-.history-result-card header small {
+.history-result-main small {
   flex: 0 0 auto;
   color: var(--app-color-text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: nowrap;
 }
 
 .history-result-meta {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
 }
 
 .history-result-meta span {
   overflow: hidden;
-  padding: 8px 10px;
+  min-width: 0;
+  padding: 7px 9px;
   border-radius: 10px;
   color: var(--app-color-text-secondary);
   font-size: 12px;
@@ -553,112 +618,132 @@ onMounted(() => {
 
 .history-cell-stack {
   display: grid;
-  gap: 4px;
+  gap: 5px;
+  min-width: 0;
   color: var(--app-color-text);
   font-size: 13px;
   line-height: 1.5;
 }
 
+.history-cell-stack strong,
+.history-cell-stack span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.history-cell-stack strong {
+  white-space: nowrap;
+}
+
 .history-title-line {
   display: flex;
   align-items: center;
-  gap: 8px;
-}
-
-.history-actions {
-  display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  min-width: 0;
+}
+
+.history-card-summary {
+  display: -webkit-box;
+  color: var(--app-color-text-secondary);
+  line-height: 1.55;
+  white-space: normal;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
 
 .history-pagination {
   display: flex;
+  position: sticky;
+  bottom: 0;
   justify-content: flex-end;
-  margin-top: 18px;
+  margin: 14px -14px 0;
+  padding: 12px 14px;
+  border-top: 1px solid var(--app-color-border);
+  background: rgba(255, 255, 255, 0.94);
+  backdrop-filter: blur(8px);
 }
 
-.history-detail {
-  min-height: 360px;
-}
-
-.history-detail-section + .history-detail-section {
-  margin-top: 24px;
-}
-
-.history-detail-header {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.history-section-title {
-  margin: 0 0 12px;
-  color: var(--app-color-text);
-  font-size: 16px;
-  font-weight: 700;
-}
-
-.history-meta {
-  margin-top: 16px;
-}
-
-.history-error {
-  margin-top: 16px;
-}
-
-.history-content-list {
-  display: grid;
-  gap: 12px;
-}
-
-.history-content-item {
-  padding: 14px;
-  border: 1px solid var(--app-color-border);
-  border-radius: 14px;
-  background: var(--app-color-surface-soft);
-}
-
-.history-content-title {
-  margin: 0 0 8px;
-  color: var(--app-color-text);
-  font-size: 14px;
-  font-weight: 700;
-}
-
-.history-content-value {
-  margin: 0;
-  color: var(--app-color-text);
-  font-family: inherit;
-  font-size: 13px;
-  line-height: 1.7;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-@media (max-width: 960px) {
-  .history-filter-form {
-    grid-template-columns: repeat(2, minmax(150px, 1fr));
+@media (max-width: 1439px) {
+  .history-workspace {
+    grid-template-columns: 400px minmax(0, 1fr);
+    gap: 18px;
   }
 }
 
-@media (max-width: 760px) {
-  .history-header {
+@media (max-width: 1199px) {
+  .history-workspace {
+    grid-template-columns: 1fr;
+    height: calc(100dvh - 246px);
+  }
+
+  .history-detail-panel {
+    display: none;
+  }
+}
+
+@media (max-width: 960px) {
+  .history-toolbar {
     align-items: stretch;
     flex-direction: column;
   }
 
-  .history-filter-panel,
-  .history-table-panel {
-    padding: 16px;
+  .history-toolbar-main,
+  .history-toolbar-actions {
+    width: 100%;
   }
 
-  .history-filter-form {
+  .history-toolbar-actions {
+    justify-content: flex-start;
+  }
+
+  .history-search-input {
+    flex: 1 1 260px;
+    width: auto;
+  }
+}
+
+@media (max-width: 768px) {
+  .history-toolbar-actions,
+  .history-status-filter {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .history-status-filter {
+    width: 100%;
+  }
+
+  .history-status-select,
+  .history-search-input {
+    width: 100%;
+  }
+
+  .history-workspace {
+    min-height: 560px;
+    height: calc(100dvh - 300px);
+  }
+
+  .history-result-main {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .history-result-main small {
+    white-space: normal;
+  }
+
+  .history-result-meta {
     grid-template-columns: 1fr;
   }
 
   .history-pagination {
     justify-content: flex-start;
     overflow-x: auto;
+  }
+
+  .history-list-scroll {
+    padding: 12px 12px 0;
   }
 }
 </style>

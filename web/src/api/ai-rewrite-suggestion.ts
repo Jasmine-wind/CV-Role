@@ -3,6 +3,7 @@ import type {
   AiRewriteAcceptStatusUpdateRequest,
   AiRewriteSuggestionRequest,
   AiRewriteSuggestionResult,
+  RewriteContext,
 } from '@/types/ai-rewrite-suggestion'
 
 const AI_REWRITE_SUGGESTION_TIMEOUT_MS = 120000
@@ -22,6 +23,15 @@ export const getAiRewriteSuggestions = (
 ) => {
   return request.get<AiRewriteSuggestionResult[]>(`/api/resumes/${resumeId}/rewrite-suggestions`, {
     params,
+  })
+}
+
+export const getAiRewriteContext = (suggestionId: number, suggestionIndex?: number) => {
+  return request.get<RewriteContext>('/api/rewrite-suggestions/context', {
+    params: {
+      suggestionId,
+      suggestionIndex,
+    },
   })
 }
 

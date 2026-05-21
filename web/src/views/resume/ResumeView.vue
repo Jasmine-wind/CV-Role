@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import type { UploadFile, UploadProps, UploadUserFile } from 'element-plus'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, h, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import EmptyState from '@/components/common/EmptyState.vue'
 import PageHeader from '@/components/common/PageHeader.vue'
+import ProcessStepper from '@/components/common/ProcessStepper.vue'
+import SkeletonBlock from '@/components/common/SkeletonBlock.vue'
+import StatusTag from '@/components/common/StatusTag.vue'
 import {
   deleteResume,
   getResumeAiAnalysis,
@@ -41,6 +44,12 @@ const RESUME_ORDER_STORAGE_KEY = 'ai-resume-optimizer:resume-order'
 const ASYNC_TASK_PROGRESS_CAP = 95
 const ASYNC_TASK_PROGRESS_INTERVAL_MS = 500
 
+interface ProcessStep {
+  title: string
+  description?: string
+  status?: 'done' | 'current' | 'pending' | 'failed'
+}
+
 const resumes = ref<ResumeListItem[]>([])
 const uploadFiles = ref<UploadUserFile[]>([])
 const loading = ref(false)
@@ -58,6 +67,8 @@ const activeResume = ref<ResumeListItem | null>(null)
 const parseResult = ref<ResumeParseResult | null>(null)
 const aiAnalysis = ref<ResumeAiAnalysis | null>(null)
 const activePanel = ref<'parse' | 'analysis' | null>(null)
+const activeDetailTab = ref<'overview' | 'parse' | 'raw' | 'analysis'>('overview')
+const uploadPanelRef = ref<HTMLElement | null>(null)
 const confirmedParseResultIds = ref<Set<number>>(new Set())
 const debugCollapseActive = ref<string[]>([])
 const selectedParseMode = ref<ResumeParseMode>('BALANCED')
@@ -140,6 +151,29 @@ const selectedUploadSummary = computed(() => {
   return `已选择 ${files.length} 份，合计 ${formatFileSize(totalSize)}`
 })
 
+const resumeOverviewStats = computed(() => [
+  {
+    label: '简历资产',
+    value: resumes.value.length,
+    note: resumes.value.length > 0 ? '已保存到我的简历' : '等待上传',
+  },
+  {
+    label: '当前文件',
+    value: activeResume.value?.fileType || '-',
+    note: activeResume.value ? formatFileSize(activeResume.value.fileSize) : '先选择一份简历',
+  },
+  {
+    label: '解析状态',
+    value: activeResume.value ? resolveParseStatusText(parseResult.value?.parseStatus) : '-',
+    note: parseResult.value?.updatedAt ? formatDateTime(parseResult.value.updatedAt) : '查看或发起解析后更新',
+  },
+  {
+    label: '诊断状态',
+    value: activeResume.value ? resolveAnalysisStatusText(aiAnalysis.value?.analysisStatus) : '-',
+    note: aiAnalysis.value?.updatedAt ? formatDateTime(aiAnalysis.value.updatedAt) : '生成诊断后更新',
+  },
+])
+
 const parseTaskActive = computed(() => {
   return activeAsyncTask.value?.taskType === 'RESUME_PARSE'
 })
@@ -160,7 +194,7 @@ const canRetryActiveTask = computed(() => {
   )
 })
 
-const resumeFlowSteps = computed(() => {
+const resumeFlowSteps = computed<ProcessStep[]>(() => {
   const hasSelectedFiles = selectedUploadFiles.value.length > 0
   const hasUploadedResume = resumes.value.length > 0
   const hasActiveResume = Boolean(activeResume.value)
@@ -292,7 +326,9 @@ const parseMeta = computed<ResumeParseMeta | null>(() => {
   return buildLegacyParseMeta(content)
 })
 const parseModeText = computed(() => resolveParseModeText(parseMeta.value?.parseMode ?? structuredContent.value?.parseMode))
-const parserVersionText = computed(() => parseMeta.value?.parserVersion || structuredContent.value?.parserVersion || '-')
+const cleanedResumeFullText = computed(() => {
+  return parseResult.value?.cleanedText?.trim() || parseResult.value?.extractedText?.trim() || ''
+})
 const basicInfoDebugRows = computed(() => {
   return Object.entries(structuredContent.value?.basicInfoDebug ?? {}).map(([field, detail]) => ({
     field,
@@ -400,62 +436,6 @@ const indexedLineDebugRows = computed(() => {
     text: line.text || '',
   }))
 })
-const aiParseSummary = computed(() => {
-  const meta = parseMeta.value
-  const aiStatus = meta?.aiStatus || 'DISABLED'
-  const used = aiStatus === 'USED' || aiStatus === 'FALLBACK' || Boolean(meta?.aiUsed)
-  const applied = aiStatus === 'USED'
-  const downgraded = aiStatus === 'FALLBACK'
-  const totalDurationMs = meta?.totalParseDurationMs ?? structuredContent.value?.totalParseDurationMs ?? null
-  const aiDurationMs = sumDurations(
-    meta?.aiSectionClassifyDurationMs ?? structuredContent.value?.aiSectionClassifyDurationMs,
-    meta?.aiStructuredParseDurationMs ?? structuredContent.value?.aiStructuredParseDurationMs,
-  )
-  const cacheHit = Boolean(meta?.aiCacheHit)
-  const showCache = aiStatus === 'USED' || aiStatus === 'FALLBACK'
-  const reason = aiStatus === 'SKIPPED'
-    ? resolveAiSkippedReason(meta?.aiSkippedReason)
-    : aiStatus === 'FALLBACK'
-      ? (meta?.aiFallbackReason || '-')
-      : aiStatus === 'DISABLED'
-        ? 'AI 解析未启用'
-        : '-'
-
-  return {
-    status: aiStatus,
-    used,
-    applied,
-    downgraded,
-    text: resolveAiStatusText(aiStatus),
-    appliedText: applied ? '已应用' : '未应用',
-    downgradeText: downgraded ? 'AI 失败后已降级' : '未发生 AI 失败降级',
-    reason,
-    fallbackOccurred: downgraded,
-    fallbackOccurredText: downgraded ? '是' : '否',
-    totalDurationText: formatDuration(totalDurationMs),
-    aiDurationText: formatDuration(aiDurationMs),
-    cacheText: showCache ? (cacheHit ? '命中缓存' : '未命中缓存') : 'AI 未调用，不读写缓存',
-    cacheHit,
-    showCache,
-  }
-})
-const displayModelSummary = computed(() => {
-  const meta = displaySections.value.debugInfo.displayMeta
-  const generatedBy = meta?.generatedBy || (structuredContent.value?.displayModel ? 'AI' : 'RULE')
-  const fallback = Boolean(meta?.aiDisplayFallback)
-  const aiUsed = Boolean(meta?.aiDisplayUsed)
-  const cacheHit = Boolean(meta?.cacheHit)
-  return {
-    generatedBy,
-    aiUsed,
-    fallback,
-    text: aiUsed ? 'AI 展示优化已启用' : fallback ? '展示优化已降级' : '规则展示模型',
-    tagType: fallback ? 'warning' : aiUsed ? 'success' : 'info',
-    cacheText: aiUsed ? (cacheHit ? '命中缓存' : '未命中缓存') : '未调用 AI 展示优化，不读写缓存',
-    durationText: formatDuration(meta?.aiDisplayDurationMs ?? null),
-    errorMessage: meta?.aiDisplayErrorMessage || '',
-  }
-})
 const parseResultConfirmed = computed(() => {
   return parseResult.value?.resumeId ? confirmedParseResultIds.value.has(parseResult.value.resumeId) : false
 })
@@ -499,24 +479,21 @@ const aiAnalysisResultCards = computed(() => {
       key: 'strengths',
       title: '简历优势',
       tone: 'success',
-      emptyText: '暂无优势信息',
       items: aiAnalysis.value?.strengths ?? [],
     },
     {
       key: 'problems',
       title: '主要问题',
       tone: 'danger',
-      emptyText: '暂无问题信息',
       items: aiAnalysis.value?.problems ?? [],
     },
     {
       key: 'suggestions',
       title: '建议摘要',
       tone: 'warning',
-      emptyText: '暂无建议摘要',
       items: aiAnalysis.value?.suggestionsSummary ?? [],
     },
-  ]
+  ].filter((card) => card.items.length > 0)
 })
 
 const otherHiddenCount = computed(() => {
@@ -599,28 +576,6 @@ const looksLikeAiFailureReason = (reason: string) => {
   return /失败|JSON|超时|timeout|未返回|结果为空|校验/.test(reason)
 }
 
-const resolveAiStatusText = (status: string | null | undefined) => {
-  const map: Record<string, string> = {
-    USED: 'AI 已参与解析',
-    SKIPPED: 'AI 未调用',
-    FALLBACK: 'AI 失败后已降级',
-    DISABLED: 'AI 已关闭',
-  }
-  return status ? (map[status] ?? status) : 'AI 已关闭'
-}
-
-const resolveAiSkippedReason = (reason: string | null | undefined) => {
-  const map: Record<string, string> = {
-    ALL_BLOCKS_RULE_CONFIRMED: '规则解析已高置信度覆盖所有文本块',
-    STABLE_FIELDS_RULE_CONFIRMED: '规则解析已覆盖稳定字段',
-    NO_CLASSIFIABLE_BLOCKS: '没有可归类的文本块',
-    NO_STRUCTURED_PARSE_BLOCKS: '没有可用于 AI 结构化解析的文本块',
-    AI_BLOCK_LIMIT_EXCEEDED: '文本块过多，已跳过 AI 结构化解析',
-    LEGACY_AI_NOT_APPLIED: '旧解析结果未记录详细原因',
-  }
-  return reason ? (map[reason] ?? reason) : '-'
-}
-
 const formatFileSize = (size: number) => {
   if (size >= 1024 * 1024) {
     return `${(size / 1024 / 1024).toFixed(2)} MB`
@@ -637,25 +592,18 @@ const formatDateTime = (value: string) => {
   return value.replace('T', ' ').slice(0, 19)
 }
 
-const formatDuration = (value: number | null | undefined) => {
-  if (value == null || !Number.isFinite(value)) {
-    return '-'
+const copyFullResumeText = async () => {
+  if (!cleanedResumeFullText.value) {
+    ElMessage.warning('当前没有可复制的简历原文')
+    return
   }
 
-  if (value < 1000) {
-    return `${Math.max(value, 0)} ms`
+  try {
+    await navigator.clipboard.writeText(cleanedResumeFullText.value)
+    ElMessage.success('完整原文已复制')
+  } catch (error) {
+    ElMessage.error('复制失败，请手动选择文本复制')
   }
-
-  return `${(value / 1000).toFixed(2)} s`
-}
-
-const sumDurations = (...values: Array<number | null | undefined>) => {
-  const validValues = values.filter((value): value is number => value != null && Number.isFinite(value))
-  if (!validValues.length) {
-    return null
-  }
-
-  return validValues.reduce((total, value) => total + value, 0)
 }
 
 const getFileExtension = (filename: string) => {
@@ -1059,6 +1007,11 @@ const selectResume = (resume: ResumeListItem) => {
   parseResult.value = null
   aiAnalysis.value = null
   activePanel.value = null
+  activeDetailTab.value = 'overview'
+}
+
+const openResumeOverview = (resume: ResumeListItem) => {
+  selectResume(resume)
 }
 
 const selectResumeFromRoute = () => {
@@ -1256,6 +1209,7 @@ const startRouteAsyncTaskPolling = () => {
 const loadParseResult = async (resume: ResumeListItem) => {
   selectResume(resume)
   activePanel.value = 'parse'
+  activeDetailTab.value = 'parse'
   loadingParseResult.value = true
 
   try {
@@ -1273,6 +1227,7 @@ const loadParseResult = async (resume: ResumeListItem) => {
 const handleParse = async (resume: ResumeListItem) => {
   selectResume(resume)
   activePanel.value = 'parse'
+  activeDetailTab.value = 'parse'
   parsingResumeId.value = resume.id
 
   try {
@@ -1293,6 +1248,7 @@ const loadAiAnalysis = async (resume: ResumeListItem) => {
   }
 
   activePanel.value = 'analysis'
+  activeDetailTab.value = 'analysis'
   loadingAiAnalysis.value = true
 
   try {
@@ -1323,6 +1279,7 @@ const handleAiAnalysis = async (resume: ResumeListItem) => {
   }
 
   activePanel.value = 'analysis'
+  activeDetailTab.value = 'analysis'
 
   if (parseResult.value && parseResult.value.parseStatus !== 'SUCCESS') {
     ElMessage.warning('请先完成简历解析')
@@ -1386,10 +1343,23 @@ const handleDelete = async (resume: ResumeListItem) => {
   }
 
   try {
-    await ElMessageBox.confirm(`确认删除「${resume.originalFilename}」吗？`, '删除简历', {
+    await ElMessageBox.confirm(
+      h('div', { class: 'resume-delete-confirm' }, [
+        h('p', { class: 'resume-delete-confirm-title' }, `确认删除「${resume.originalFilename}」吗？`),
+        h('p', { class: 'resume-delete-confirm-desc' }, '删除后不可恢复，以下关联内容也会一起删除：'),
+        h('ul', { class: 'resume-delete-confirm-list' }, [
+          h('li', '简历解析结果和完整原文记录'),
+          h('li', '简历诊断结果和 AI 历史中的相关记录'),
+          h('li', '匹配分析、岗位优化建议和局部改写记录'),
+          h('li', '已生成的向量索引和上传文件'),
+        ]),
+      ]),
+      '删除简历',
+      {
       confirmButtonText: '删除',
       cancelButtonText: '取消',
       type: 'warning',
+      confirmButtonClass: 'el-button--danger',
     })
   } catch (error) {
     return
@@ -1407,6 +1377,7 @@ const handleDelete = async (resume: ResumeListItem) => {
       parseResult.value = null
       aiAnalysis.value = null
       activePanel.value = null
+      activeDetailTab.value = 'overview'
     }
 
     await loadResumes()
@@ -1434,7 +1405,35 @@ const handleConfirmParseResult = () => {
   const nextConfirmedIds = new Set(confirmedParseResultIds.value)
   nextConfirmedIds.add(parseResult.value.resumeId)
   confirmedParseResultIds.value = nextConfirmedIds
-  ElMessage.success('已确认当前解析结果')
+  ElMessage.success('已确认当前结构化结果')
+}
+
+const scrollToUpload = () => {
+  uploadPanelRef.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
+
+const resolveResumeCardParseStatus = (resume: ResumeListItem) => {
+  if (parsingResumeId.value === resume.id || (parseTaskActive.value && activeAsyncTaskResumeId.value === resume.id)) {
+    return 'PROCESSING'
+  }
+
+  if (activeResume.value?.id === resume.id && parseResult.value?.parseStatus) {
+    return parseResult.value.parseStatus
+  }
+
+  return 'PENDING'
+}
+
+const resolveResumeCardAnalysisStatus = (resume: ResumeListItem) => {
+  if (analyzingResumeId.value === resume.id || (diagnosisTaskActive.value && activeAsyncTaskResumeId.value === resume.id)) {
+    return 'PROCESSING'
+  }
+
+  if (activeResume.value?.id === resume.id && aiAnalysis.value?.analysisStatus) {
+    return aiAnalysis.value.analysisStatus
+  }
+
+  return 'PENDING'
 }
 
 const toggleSetValue = (source: Set<string>, id: string) => {
@@ -1499,9 +1498,13 @@ onUnmounted(() => {
     <section class="resume-shell">
       <PageHeader
         eyebrow="我的简历"
-        title="管理简历资产、解析结果和简历诊断"
+        title="管理简历资产、结构化结果和简历诊断"
         description="本页只处理简历自身的上传、解析和质量诊断；岗位匹配和岗位优化建议进入“匹配与优化”页面。"
-      />
+      >
+        <template #actions>
+          <el-button type="primary" @click="scrollToUpload">上传新简历</el-button>
+        </template>
+      </PageHeader>
 
       <section class="resume-flow-panel">
         <div class="resume-flow-header">
@@ -1511,23 +1514,10 @@ onUnmounted(() => {
           </div>
           <el-tag type="info">当前页面不写回原始简历</el-tag>
         </div>
-        <div class="resume-flow-steps">
-          <article
-            v-for="(step, index) in resumeFlowSteps"
-            :key="step.title"
-            class="resume-flow-step"
-            :class="`is-${step.status}`"
-          >
-            <span class="resume-flow-index">{{ step.status === 'done' ? '✓' : index + 1 }}</span>
-            <div>
-              <strong>{{ step.title }}</strong>
-              <span>{{ step.description }}</span>
-            </div>
-          </article>
-        </div>
+        <ProcessStepper :steps="resumeFlowSteps" />
       </section>
 
-      <section class="resume-upload-panel">
+      <section ref="uploadPanelRef" class="resume-upload-panel">
         <div>
           <div class="resume-upload-heading">
             <div>
@@ -1628,116 +1618,131 @@ onUnmounted(() => {
         />
       </section>
 
-      <section class="resume-list-panel">
-        <header class="resume-list-header">
-          <div>
-            <h2 class="resume-section-title">简历资产列表</h2>
-            <p class="resume-section-subtitle">列表只展示摘要信息，解析结果、质量提示和诊断结果在下方分区查看。</p>
-          </div>
-          <el-tag type="info">{{ resumes.length }} 份简历</el-tag>
-        </header>
-
-        <el-table
-        v-loading="loading"
-        :data="resumes"
-        class="resume-table"
-        empty-text="暂无简历"
-        row-key="id"
-        :row-class-name="resolveResumeRowClass"
-      >
-        <el-table-column prop="originalFilename" label="文件名" min-width="220" />
-        <el-table-column prop="fileType" label="类型" width="100" />
-        <el-table-column label="大小" width="130">
-          <template #default="{ row }: { row: ResumeListItem }">
-            {{ formatFileSize(row.fileSize) }}
-          </template>
-        </el-table-column>
-        <el-table-column label="状态" width="120">
-          <template #default="{ row }: { row: ResumeListItem }">
-            <el-tag type="info">{{ row.uploadStatus }}</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="上传时间" width="190">
-          <template #default="{ row }: { row: ResumeListItem }">
-            {{ formatDateTime(row.createdAt) }}
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="430" fixed="right">
-          <template #default="{ row }: { row: ResumeListItem }">
-            <div class="resume-actions">
-              <el-button
-                size="small"
-                type="primary"
-                plain
-                :disabled="isRowBusy(row.id)"
-                @click="activeResume = row; activePanel = null"
-              >
-                详情
-              </el-button>
-              <el-button
-                size="small"
-                type="primary"
-                :disabled="isRowBusy(row.id)"
-                :loading="parsingResumeId === row.id"
-                @click="handleParse(row)"
-              >
-                开始解析
-              </el-button>
-              <el-button
-                size="small"
-                :disabled="isRowBusy(row.id)"
-                :loading="loadingParseResult && activeResume?.id === row.id"
-                @click="loadParseResult(row)"
-              >
-                查看结果
-              </el-button>
-              <el-button
-                size="small"
-                type="success"
-                plain
-                :disabled="isRowBusy(row.id)"
-                :loading="analyzingResumeId === row.id"
-                @click="handleAiAnalysis(row)"
-              >
-                简历诊断
-              </el-button>
-              <el-button
-                size="small"
-                :disabled="isRowBusy(row.id)"
-                :loading="loadingAiAnalysis && activeResume?.id === row.id"
-                @click="loadAiAnalysis(row)"
-              >
-                查看诊断
-              </el-button>
-              <el-button
-                size="small"
-                type="danger"
-                plain
-                :disabled="isRowBusy(row.id) && deletingResumeId !== row.id"
-                :loading="deletingResumeId === row.id"
-                @click="handleDelete(row)"
-              >
-                删除
-              </el-button>
+      <section class="resume-workbench-grid">
+        <section class="resume-list-panel">
+          <header class="resume-list-header">
+            <div>
+              <h2 class="resume-section-title">简历资产</h2>
+              <p class="resume-section-subtitle">先选择简历，再在右侧查看解析和诊断结果。</p>
             </div>
-          </template>
-        </el-table-column>
-        </el-table>
-        <EmptyState
-          v-if="!loading && resumes.length === 0"
-          title="你还没有上传简历"
-          description="上传后可以进行简历解析、简历诊断和后续岗位匹配。"
-        />
-      </section>
+            <el-tag type="info">{{ resumes.length }} 份</el-tag>
+          </header>
 
-      <section v-if="activeResume && activePanel === null" class="resume-detail-panel">
+          <div class="resume-asset-list">
+            <SkeletonBlock v-if="loading" compact title :rows="6" />
+
+            <article
+              v-else
+              v-for="resume in resumes"
+              :key="resume.id"
+              class="resume-asset-card"
+              :class="{ 'is-active': activeResume?.id === resume.id }"
+            >
+              <button type="button" class="resume-asset-main" @click="openResumeOverview(resume)">
+                <strong>{{ resume.originalFilename }}</strong>
+                <span>{{ formatDateTime(resume.createdAt) }} · {{ resume.fileType }} · {{ formatFileSize(resume.fileSize) }}</span>
+              </button>
+              <div class="resume-asset-status">
+                <span>
+                  上传
+                  <StatusTag :status="resume.uploadStatus" />
+                </span>
+                <span>
+                  解析
+                  <StatusTag :status="resolveResumeCardParseStatus(resume)" />
+                </span>
+                <span>
+                  诊断
+                  <StatusTag :status="resolveResumeCardAnalysisStatus(resume)" />
+                </span>
+              </div>
+              <div class="resume-actions">
+                <el-button size="small" type="primary" plain :disabled="isRowBusy(resume.id)" @click="openResumeOverview(resume)">
+                  查看
+                </el-button>
+                <el-button
+                  size="small"
+                  type="primary"
+                  :disabled="isRowBusy(resume.id)"
+                  :loading="parsingResumeId === resume.id"
+                  @click="handleParse(resume)"
+                >
+                  解析
+                </el-button>
+                <el-button
+                  size="small"
+                  type="success"
+                  plain
+                  :disabled="isRowBusy(resume.id)"
+                  :loading="analyzingResumeId === resume.id"
+                  @click="handleAiAnalysis(resume)"
+                >
+                  诊断
+                </el-button>
+                <el-button
+                  size="small"
+                  type="danger"
+                  plain
+                  :disabled="isRowBusy(resume.id) && deletingResumeId !== resume.id"
+                  :loading="deletingResumeId === resume.id"
+                  @click="handleDelete(resume)"
+                >
+                  删除
+                </el-button>
+              </div>
+            </article>
+
+            <EmptyState
+              v-if="!loading && resumes.length === 0"
+              title="你还没有上传简历"
+              description="上传后可以进行简历解析、简历诊断和后续岗位匹配。"
+              action-text="上传第一份简历"
+              @action="scrollToUpload"
+            />
+          </div>
+        </section>
+
+        <section class="resume-detail-workspace">
+          <template v-if="activeResume">
+            <header class="resume-detail-topbar">
+              <div>
+                <h2 class="resume-section-title">{{ activeResume.originalFilename }}</h2>
+                <p class="resume-section-subtitle">
+                  {{ activeResume.fileType }} · {{ formatFileSize(activeResume.fileSize) }} · {{ formatDateTime(activeResume.createdAt) }}
+                </p>
+              </div>
+              <el-tag>{{ activeResume.uploadStatus }}</el-tag>
+            </header>
+            <el-tabs v-model="activeDetailTab" class="resume-detail-tabs">
+              <el-tab-pane label="概览" name="overview" />
+              <el-tab-pane label="结构化结果" name="parse" />
+              <el-tab-pane label="完整原文" name="raw" />
+              <el-tab-pane label="简历诊断" name="analysis" />
+            </el-tabs>
+          </template>
+          <EmptyState
+            v-else
+            title="先选择一份简历"
+            description="左侧选择简历后，右侧会显示概览、结构化结果、完整原文和简历诊断。"
+            action-text="上传新简历"
+            @action="scrollToUpload"
+          />
+
+      <section v-if="activeResume && activeDetailTab === 'overview'" class="resume-detail-panel">
         <header class="resume-parse-header">
           <div>
-            <h2 class="resume-section-title">简历详情</h2>
-            <p class="resume-section-subtitle">{{ activeResume.originalFilename }}</p>
+            <h2 class="resume-section-title">概览</h2>
+            <p class="resume-section-subtitle">文件信息和当前处理状态。</p>
           </div>
           <el-tag>{{ activeResume.uploadStatus }}</el-tag>
         </header>
+        <div class="resume-overview-grid">
+          <article v-for="item in resumeOverviewStats" :key="item.label">
+            <span>{{ item.label }}</span>
+            <strong>{{ item.value }}</strong>
+            <small>{{ item.note }}</small>
+          </article>
+        </div>
         <el-descriptions :column="2" border>
           <el-descriptions-item label="文件名">{{ activeResume.originalFilename }}</el-descriptions-item>
           <el-descriptions-item label="类型">{{ activeResume.fileType }}</el-descriptions-item>
@@ -1745,21 +1750,23 @@ onUnmounted(() => {
           <el-descriptions-item label="上传时间">{{ formatDateTime(activeResume.createdAt) }}</el-descriptions-item>
         </el-descriptions>
         <div class="resume-detail-actions">
-          <el-button type="primary" @click="loadParseResult(activeResume)">查看解析</el-button>
-          <el-button type="success" @click="loadAiAnalysis(activeResume)">查看简历诊断</el-button>
+          <el-button type="primary" @click="handleParse(activeResume)">开始解析</el-button>
+          <el-button @click="loadParseResult(activeResume)">查看结构化结果</el-button>
+          <el-button type="success" plain @click="handleAiAnalysis(activeResume)">生成简历诊断</el-button>
+          <el-button @click="loadAiAnalysis(activeResume)">查看诊断</el-button>
           <el-button @click="router.push('/job-descriptions')">选择目标岗位</el-button>
         </div>
       </section>
 
       <section
-        v-if="activeResume && parseResult && activePanel === 'parse'"
+        v-if="activeResume && parseResult && activeDetailTab === 'parse'"
         v-loading="loadingParseResult"
         class="resume-parse-panel"
       >
         <header class="resume-parse-header">
           <div>
-            <h2 class="resume-section-title">解析结果</h2>
-            <p class="resume-section-subtitle">{{ activeResume.originalFilename }}</p>
+            <h2 class="resume-section-title">结构化结果</h2>
+            <p class="resume-section-subtitle">核对基础信息、技能和经历是否完整，再确认结构化结果。</p>
           </div>
           <el-space wrap>
             <div class="resume-parse-mode-control compact">
@@ -1782,7 +1789,7 @@ onUnmounted(() => {
               :disabled="parseResult.parseStatus !== 'SUCCESS' || parseResultConfirmed"
               @click="handleConfirmParseResult"
             >
-              确认解析结果
+              确认结构化结果
             </el-button>
             <el-button
               :loading="parsingResumeId === activeResume.id"
@@ -1823,60 +1830,6 @@ onUnmounted(() => {
               </el-descriptions-item>
               <el-descriptions-item label="质量分数">{{ parseResult.parseQualityScore ?? '-' }}</el-descriptions-item>
               <el-descriptions-item label="解析模式">{{ parseModeText }}</el-descriptions-item>
-              <el-descriptions-item label="解析器版本">{{ parserVersionText }}</el-descriptions-item>
-              <el-descriptions-item label="AI 状态">
-                <el-tag :type="aiParseSummary.status === 'FALLBACK' ? 'warning' : aiParseSummary.used ? 'success' : 'info'">
-                  {{ aiParseSummary.text }}
-                </el-tag>
-              </el-descriptions-item>
-              <el-descriptions-item label="AI 应用结果">
-                <el-tag :type="aiParseSummary.applied ? 'success' : 'info'">{{ aiParseSummary.appliedText }}</el-tag>
-              </el-descriptions-item>
-              <el-descriptions-item label="AI 失败降级">
-                <el-tag :type="aiParseSummary.downgraded ? 'warning' : 'info'">{{ aiParseSummary.downgradeText }}</el-tag>
-              </el-descriptions-item>
-              <el-descriptions-item label="fallbackOccurred">
-                <el-tag :type="aiParseSummary.fallbackOccurred ? 'warning' : 'info'">
-                  {{ aiParseSummary.fallbackOccurredText }}
-                </el-tag>
-              </el-descriptions-item>
-              <el-descriptions-item label="AI 原因">
-                {{ aiParseSummary.reason || '-' }}
-              </el-descriptions-item>
-              <el-descriptions-item label="总耗时">
-                {{ aiParseSummary.totalDurationText }}
-              </el-descriptions-item>
-              <el-descriptions-item label="AI 总耗时">
-                {{ aiParseSummary.aiDurationText }}
-              </el-descriptions-item>
-              <el-descriptions-item label="AI 分类耗时">
-                {{ structuredContent?.aiSectionClassifyDurationMs != null ? `${structuredContent.aiSectionClassifyDurationMs} ms` : '-' }}
-              </el-descriptions-item>
-              <el-descriptions-item label="AI 结构化耗时">
-                {{ structuredContent?.aiStructuredParseDurationMs != null ? `${structuredContent.aiStructuredParseDurationMs} ms` : '-' }}
-              </el-descriptions-item>
-              <el-descriptions-item v-if="aiParseSummary.showCache" label="AI 缓存">
-                <el-tag :type="aiParseSummary.cacheHit ? 'success' : 'info'">
-                  {{ aiParseSummary.cacheText }}
-                </el-tag>
-              </el-descriptions-item>
-              <el-descriptions-item v-else label="AI 缓存">
-                {{ aiParseSummary.cacheText }}
-              </el-descriptions-item>
-              <el-descriptions-item label="展示模型">
-                <el-tag :type="displayModelSummary.tagType">
-                  {{ displayModelSummary.text }}
-                </el-tag>
-              </el-descriptions-item>
-              <el-descriptions-item label="展示缓存">
-                {{ displayModelSummary.cacheText }}
-              </el-descriptions-item>
-              <el-descriptions-item label="展示耗时">
-                {{ displayModelSummary.durationText }}
-              </el-descriptions-item>
-              <el-descriptions-item v-if="displayModelSummary.errorMessage" label="展示降级原因">
-                {{ displayModelSummary.errorMessage }}
-              </el-descriptions-item>
               <el-descriptions-item label="更新时间">{{ formatDateTime(parseResult.updatedAt || '') }}</el-descriptions-item>
               <el-descriptions-item label="文件名">{{ activeResume.originalFilename }}</el-descriptions-item>
             </el-descriptions>
@@ -2201,139 +2154,59 @@ onUnmounted(() => {
               </ul>
             </article>
           </section>
-
-          <section class="resume-structured-section">
-            <h3 class="resume-block-title">调试信息</h3>
-            <el-collapse v-model="debugCollapseActive">
-              <el-collapse-item title="查看原文" name="raw">
-                <el-tabs class="resume-debug-tabs">
-                  <el-tab-pane label="原始提取文本">
-                    <pre class="resume-raw-text">{{ parseResult.extractedText || '-' }}</pre>
-                  </el-tab-pane>
-                  <el-tab-pane label="清洗后文本">
-                    <pre class="resume-raw-text">{{ parseResult.cleanedText || '-' }}</pre>
-                  </el-tab-pane>
-                </el-tabs>
-              </el-collapse-item>
-              <el-collapse-item title="查看调试信息" name="debug">
-                <h4 class="resume-debug-title">AI 与规则冲突</h4>
-                <div v-if="aiConflictWarnings.length" class="resume-tag-list">
-                  <el-tag
-                    v-for="warning in aiConflictWarnings"
-                    :key="warning"
-                    type="warning"
-                  >
-                    {{ resolveWarningText(warning) }}
-                  </el-tag>
-                </div>
-                <el-empty v-else description="暂无 AI 与规则冲突" :image-size="48" />
-
-                <h4 class="resume-debug-title">基础信息证据</h4>
-                <el-table :data="basicInfoDebugRows" size="small" border empty-text="暂无基础信息调试详情">
-                  <el-table-column prop="field" label="字段" width="120" />
-                  <el-table-column prop="value" label="值" width="160" />
-                  <el-table-column prop="confidence" label="置信度" width="90" />
-                  <el-table-column prop="source" label="来源" width="100" />
-                  <el-table-column label="状态" width="120">
-                    <template #default="{ row }">
-                      <el-tag size="small" :type="resolveDebugStatusType(row.status)">
-                        {{ row.status }}
-                      </el-tag>
-                    </template>
-                  </el-table-column>
-                  <el-table-column prop="evidence" label="证据" min-width="220" />
-                  <el-table-column prop="rejectReason" label="拒绝原因" min-width="180" />
-                </el-table>
-
-                <h4 class="resume-debug-title">文本块</h4>
-                <el-table :data="debugBlocks" size="small" border empty-text="暂无文本块">
-                  <el-table-column prop="originalIndex" label="原始序号" width="100" />
-                  <el-table-column prop="displayOrder" label="展示序号" width="100" />
-                  <el-table-column prop="sourceSection" label="来源章节" width="160" />
-                  <el-table-column prop="sourceSectionConfidence" label="来源置信度" width="120" />
-                  <el-table-column prop="finalSection" label="最终章节" width="160" />
-                  <el-table-column prop="finalSectionSource" label="最终来源" width="150" />
-                  <el-table-column label="锁定" width="90">
-                    <template #default="{ row }">
-                      <el-tag size="small" :type="row.sectionLocked ? 'success' : 'info'">
-                        {{ row.sectionLocked ? '是' : '否' }}
-                      </el-tag>
-                    </template>
-                  </el-table-column>
-                  <el-table-column prop="heading" label="标题" width="180" />
-                  <el-table-column prop="text" label="文本" min-width="260" />
-                </el-table>
-
-                <h4 class="resume-debug-title">AI 分类结果</h4>
-                <el-table :data="aiClassifiedBlocks" size="small" border empty-text="暂无 AI 分类结果">
-                  <el-table-column prop="originalIndex" label="原始序号" width="100" />
-                  <el-table-column prop="displayOrder" label="展示序号" width="100" />
-                  <el-table-column prop="sourceSection" label="来源章节" width="160" />
-                  <el-table-column prop="sourceSectionConfidence" label="来源置信度" width="120" />
-                  <el-table-column prop="finalSection" label="最终章节" width="160" />
-                  <el-table-column prop="finalSectionSource" label="最终来源" width="150" />
-                  <el-table-column label="锁定" width="90">
-                    <template #default="{ row }">
-                      <el-tag size="small" :type="row.sectionLocked ? 'success' : 'info'">
-                        {{ row.sectionLocked ? '是' : '否' }}
-                      </el-tag>
-                    </template>
-                  </el-table-column>
-                  <el-table-column prop="text" label="文本" min-width="260" />
-                </el-table>
-
-                <h4 class="resume-debug-title">原始章节</h4>
-                <div v-if="rawSectionDebugSections.length" class="resume-section-list">
-                  <article v-for="section in rawSectionDebugSections" :key="section.key" class="resume-section-card">
-                    <div class="resume-section-card-header">
-                      <strong>{{ section.title }}</strong>
-                      <el-space>
-                        <el-tag size="small">{{ section.normalizedSection }}</el-tag>
-                        <el-tag size="small" type="info">{{ section.source }}</el-tag>
-                        <el-tag size="small" type="success">{{ section.confidence }}</el-tag>
-                      </el-space>
-                    </div>
-                    <ul v-if="hasStructuredList(section.lines)" class="resume-text-list resume-section-lines">
-                      <li v-for="line in section.lines" :key="line">{{ line }}</li>
-                    </ul>
-                    <el-empty v-else description="暂无原始章节内容" :image-size="64" />
-                  </article>
-                </div>
-                <el-empty v-else description="暂无原始章节" :image-size="72" />
-
-                <h4 class="resume-debug-title">Indexed Lines</h4>
-                <el-table :data="indexedLineDebugRows" size="small" border empty-text="暂无 Indexed Lines">
-                  <el-table-column prop="lineId" label="lineId" width="90" />
-                  <el-table-column prop="sectionHint" label="章节提示" width="150" />
-                  <el-table-column prop="rawSectionId" label="rawSectionId" width="150" />
-                  <el-table-column prop="sourceType" label="来源类型" width="120" />
-                  <el-table-column prop="noise" label="噪声" width="80" />
-                  <el-table-column prop="text" label="原文" min-width="260" />
-                </el-table>
-
-                <h4 class="resume-debug-title">章节识别</h4>
-                <div v-if="hasSections(sectionResult)" class="resume-section-list">
-                  <article v-for="section in sectionResult" :key="`${section.sectionType}-${section.heading}`" class="resume-section-card">
-                    <div class="resume-section-card-header">
-                      <strong>{{ section.heading || section.sectionType }}</strong>
-                      <el-tag size="small">{{ section.sectionType }}</el-tag>
-                    </div>
-                    <ul v-if="hasStructuredList(section.lines)" class="resume-text-list resume-section-lines">
-                      <li v-for="line in section.lines" :key="line">{{ line }}</li>
-                    </ul>
-                    <el-empty v-else description="暂无章节内容" :image-size="64" />
-                  </article>
-                </div>
-                <el-empty v-else description="暂无章节识别结果" :image-size="72" />
-              </el-collapse-item>
-            </el-collapse>
-          </section>
         </div>
 
       </section>
 
+      <EmptyState
+        v-if="activeResume && activeDetailTab === 'parse' && !parseResult"
+        title="还没有结构化结果"
+        description="发起解析后，系统会展示基础信息、技能和结构化经历。"
+        action-text="开始解析"
+        @action="handleParse(activeResume)"
+      />
+
       <section
-        v-if="activeResume && aiAnalysis && (activePanel === 'parse' || activePanel === 'analysis')"
+        v-if="activeResume && activeDetailTab === 'raw'"
+        class="resume-raw-panel"
+      >
+        <header class="resume-parse-header">
+          <div>
+            <h2 class="resume-section-title">完整原文</h2>
+            <p class="resume-section-subtitle">这里展示系统整理后的简历全文，方便你核对是否有内容遗漏。</p>
+          </div>
+          <el-space wrap>
+            <el-tag v-if="parseResult" :type="resolveParseStatusType(parseResult.parseStatus)">
+              {{ resolveParseStatusText(parseResult.parseStatus) }}
+            </el-tag>
+            <el-button
+              :disabled="!cleanedResumeFullText"
+              @click="copyFullResumeText"
+            >
+              复制全文
+            </el-button>
+            <el-button
+              :loading="parsingResumeId === activeResume.id"
+              :disabled="isRowBusy(activeResume.id)"
+              @click="handleParse(activeResume)"
+            >
+              重新解析
+            </el-button>
+          </el-space>
+        </header>
+
+        <pre v-if="cleanedResumeFullText" class="resume-full-text">{{ cleanedResumeFullText }}</pre>
+        <EmptyState
+          v-else
+          title="还没有完整原文"
+          description="完成简历解析后，这里会展示整理后的简历全文。"
+          action-text="开始解析"
+          @action="handleParse(activeResume)"
+        />
+      </section>
+
+      <section
+        v-if="activeResume && aiAnalysis && activeDetailTab === 'analysis'"
         v-loading="loadingAiAnalysis"
         class="resume-ai-section"
       >
@@ -2341,7 +2214,7 @@ onUnmounted(() => {
           <div>
             <h3 class="resume-block-title">简历诊断</h3>
             <p class="resume-ai-meta">
-              {{ aiAnalysis.modelName || '-' }} · {{ formatDateTime(aiAnalysis.updatedAt || '') }}
+              更新时间：{{ formatDateTime(aiAnalysis.updatedAt || '') }}
             </p>
           </div>
           <el-tag :type="resolveAnalysisStatusType(aiAnalysis.analysisStatus)">
@@ -2399,13 +2272,12 @@ onUnmounted(() => {
                 </span>
               </div>
               <el-descriptions :column="1" border class="resume-score-detail">
-                <el-descriptions-item label="Prompt 版本">{{ aiAnalysis.promptVersion || '-' }}</el-descriptions-item>
                 <el-descriptions-item label="更新时间">{{ formatDateTime(aiAnalysis.updatedAt || '') }}</el-descriptions-item>
               </el-descriptions>
             </article>
           </section>
 
-          <section class="resume-ai-result-grid">
+          <section v-if="aiAnalysisResultCards.length" class="resume-ai-result-grid">
             <article
               v-for="card in aiAnalysisResultCards"
               :key="card.key"
@@ -2419,7 +2291,6 @@ onUnmounted(() => {
               <ol v-if="hasStructuredList(card.items)" class="resume-ai-result-list">
                 <li v-for="item in card.items" :key="item">{{ item }}</li>
               </ol>
-              <el-empty v-else :description="card.emptyText" :image-size="72" />
             </article>
           </section>
 
@@ -2432,6 +2303,16 @@ onUnmounted(() => {
             </el-space>
           </section>
         </template>
+      </section>
+
+      <EmptyState
+        v-if="activeResume && activeDetailTab === 'analysis' && !aiAnalysis"
+        title="还没有简历诊断"
+        description="简历诊断只分析简历自身质量，不判断具体岗位匹配度。"
+        action-text="生成简历诊断"
+        @action="handleAiAnalysis(activeResume)"
+      />
+        </section>
       </section>
     </section>
   </section>
@@ -2491,12 +2372,151 @@ onUnmounted(() => {
   box-shadow: var(--app-shadow-card);
 }
 
+.resume-workbench-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.35fr) minmax(0, 0.65fr);
+  gap: 18px;
+  align-items: start;
+}
+
 .resume-list-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
   margin-bottom: 16px;
+}
+
+.resume-asset-list {
+  display: grid;
+  gap: 12px;
+  min-height: 240px;
+}
+
+.resume-asset-card {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--app-color-border);
+  border-radius: 14px;
+  background: var(--app-color-surface-soft);
+}
+
+.resume-asset-card.is-active {
+  border-color: rgba(37, 111, 108, 0.38);
+  background: var(--app-color-primary-soft);
+}
+
+.resume-asset-main {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  color: var(--app-color-text);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.resume-asset-main strong {
+  overflow: hidden;
+  font-size: 14px;
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resume-asset-main span {
+  overflow: hidden;
+  color: var(--app-color-text-secondary);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resume-asset-status {
+  display: grid;
+  gap: 8px;
+}
+
+.resume-asset-status span {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--app-color-text-secondary);
+  font-size: 12px;
+}
+
+.resume-detail-workspace {
+  min-width: 0;
+}
+
+.resume-detail-topbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+  padding: 20px 22px;
+  border: 1px solid var(--app-color-border);
+  border-radius: 18px;
+  background: var(--app-color-surface);
+  box-shadow: var(--app-shadow-card);
+}
+
+.resume-detail-topbar > div {
+  min-width: 0;
+}
+
+.resume-detail-topbar .resume-section-title,
+.resume-detail-topbar .resume-section-subtitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resume-detail-tabs {
+  margin-bottom: 16px;
+  padding: 0 6px;
+}
+
+.resume-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.resume-overview-grid article {
+  display: grid;
+  gap: 8px;
+  min-height: 108px;
+  align-content: space-between;
+  padding: 14px;
+  border: 1px solid var(--app-color-border);
+  border-radius: 14px;
+  background: var(--app-color-surface-soft);
+}
+
+.resume-overview-grid span,
+.resume-overview-grid small {
+  overflow: hidden;
+  color: var(--app-color-text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resume-overview-grid strong {
+  overflow: hidden;
+  color: var(--app-color-text);
+  font-size: 22px;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .resume-flow-header,
@@ -2709,6 +2729,7 @@ onUnmounted(() => {
 
 .resume-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
@@ -2729,6 +2750,14 @@ onUnmounted(() => {
   box-shadow: var(--app-shadow-card);
 }
 
+.resume-detail-workspace .resume-detail-panel,
+.resume-detail-workspace .resume-parse-panel,
+.resume-detail-workspace .resume-raw-panel,
+.resume-detail-workspace .resume-ai-section,
+.resume-detail-workspace > .ui-empty-state {
+  margin-top: 0;
+}
+
 .resume-detail-actions {
   display: flex;
   flex-wrap: wrap;
@@ -2736,13 +2765,29 @@ onUnmounted(() => {
   margin-top: 18px;
 }
 
-.resume-parse-panel {
+.resume-parse-panel,
+.resume-raw-panel {
   margin-top: 24px;
   padding: 28px;
   border: 1px solid var(--app-color-border);
   border-radius: 18px;
   background: var(--app-color-surface);
   box-shadow: var(--app-shadow-card);
+}
+
+.resume-full-text {
+  max-height: 620px;
+  margin: 0;
+  overflow: auto;
+  padding: 18px;
+  border: 1px solid var(--app-color-border);
+  border-radius: 16px;
+  color: var(--app-color-text);
+  font-size: 14px;
+  line-height: 1.8;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--app-color-surface-soft);
 }
 
 .resume-parse-header {
@@ -3221,6 +3266,32 @@ onUnmounted(() => {
   background: var(--app-color-surface-soft);
 }
 
+:global(.resume-delete-confirm) {
+  display: grid;
+  gap: 10px;
+  color: var(--app-color-text);
+  line-height: 1.6;
+}
+
+:global(.resume-delete-confirm-title) {
+  margin: 0;
+  color: var(--app-color-text);
+  font-weight: 700;
+}
+
+:global(.resume-delete-confirm-desc) {
+  margin: 0;
+  color: var(--app-color-text-secondary);
+}
+
+:global(.resume-delete-confirm-list) {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--app-color-text-secondary);
+}
+
 @media (max-width: 640px) {
   .resume-header,
   .resume-flow-header,
@@ -3235,6 +3306,16 @@ onUnmounted(() => {
 
   .resume-flow-steps {
     grid-template-columns: 1fr;
+  }
+
+  .resume-workbench-grid,
+  .resume-overview-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .resume-detail-topbar {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .resume-actions {

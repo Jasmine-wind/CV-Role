@@ -1,6 +1,7 @@
 package com.winter.airesumeoptimizer.module.analysis.controller;
 
 import com.winter.airesumeoptimizer.common.result.Result;
+import com.winter.airesumeoptimizer.common.exception.BusinessException;
 import com.winter.airesumeoptimizer.module.analysis.assembler.AnalysisVoAssembler;
 import com.winter.airesumeoptimizer.module.analysis.dto.AiJobMatchRequestDTO;
 import com.winter.airesumeoptimizer.module.analysis.dto.AiResumeSuggestionRequestDTO;
@@ -177,15 +178,23 @@ public class ResumeAnalysisController {
             @Valid @RequestBody AiRewriteSuggestionRequestDTO request,
             Authentication authentication) {
         AuthenticatedUser authenticatedUser = (AuthenticatedUser) authentication.getPrincipal();
+        String originalText = request.resolvedOriginalText();
+        if (originalText == null || originalText.isBlank()) {
+            throw new BusinessException(400, "原文片段不能为空");
+        }
         AiRewriteSuggestion suggestion = aiRewriteSuggestionService.generate(
                 authenticatedUser.getUserId(),
                 id,
                 request.getRewriteType(),
                 request.getTargetSection(),
-                request.getOriginalText(),
+                originalText,
                 request.getJobDescriptionId(),
-                request.getAiJobMatchResultId(),
-                request.getAiResumeSuggestionId());
+                request.resolvedAiJobMatchResultId(),
+                request.resolvedAiResumeSuggestionId(),
+                request.getRewriteGoal(),
+                request.getJobKeywords(),
+                request.getTone(),
+                request.getLengthLimit());
         String message = "FAILED".equals(suggestion.getRewriteStatus()) ? "AI 局部改写生成失败" : "AI 局部改写生成完成";
         return Result.success(message, analysisVoAssembler.toAiRewriteSuggestionVO(suggestion));
     }

@@ -1,0 +1,64 @@
+* {
+  box-sizing: border-box;
+}
+
+html {
+  color-scheme: light;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  color: var(--app-text);
+  font-family:
+    Inter,
+    'Segoe UI',
+    'Microsoft YaHei',
+    'PingFang SC',
+    'Noto Sans CJK SC',
+    system-ui,
+    sans-serif;
+  background: var(--app-bg);
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+#app {
+  min-height: 100vh;
+}
+
+::selection {
+  color: var(--app-navy);
+  background: var(--app-primary-subtle);
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--app-bg-soft);
+}
+
+::-webkit-scrollbar-thumb {
+  border: 2px solid var(--app-bg-soft);
+  border-radius: 999px;
+  background: #cbd5e1;
+}
+
+.app-card {
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-lg);
+  background: var(--app-surface);
+  box-shadow: var(--app-shadow-card);
+}

@@ -6,18 +6,21 @@ import com.winter.airesumeoptimizer.module.analysis.dto.AiRewriteAcceptStatusUpd
 import com.winter.airesumeoptimizer.module.analysis.entity.AiRewriteSuggestion;
 import com.winter.airesumeoptimizer.module.analysis.service.AiRewriteSuggestionService;
 import com.winter.airesumeoptimizer.module.analysis.vo.AiRewriteSuggestionVO;
+import com.winter.airesumeoptimizer.module.analysis.vo.RewriteContextVO;
 import com.winter.airesumeoptimizer.security.AuthenticatedUser;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Positive;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.security.core.Authentication;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -35,6 +38,19 @@ public class AiRewriteSuggestionController {
             AnalysisVoAssembler analysisVoAssembler) {
         this.aiRewriteSuggestionService = aiRewriteSuggestionService;
         this.analysisVoAssembler = analysisVoAssembler;
+    }
+
+    @GetMapping("/context")
+    @Operation(summary = "获取建议驱动的局部改写上下文", description = "根据岗位优化建议准备候选简历片段、岗位关键词和默认改写目标")
+    public Result<RewriteContextVO> rewriteContext(
+            @RequestParam @Positive(message = "AI 优化建议 ID 必须大于 0") Long suggestionId,
+            @RequestParam(required = false) Integer suggestionIndex,
+            Authentication authentication) {
+        AuthenticatedUser authenticatedUser = (AuthenticatedUser) authentication.getPrincipal();
+        return Result.success(aiRewriteSuggestionService.getRewriteContext(
+                authenticatedUser.getUserId(),
+                suggestionId,
+                suggestionIndex));
     }
 
     @PatchMapping("/{rewriteId}/accept-status")

@@ -1,0 +1,60 @@
+:root {
+  --app-bg: #f6f8fb;
+  --app-bg-soft: #f8fafc;
+  --app-surface: #ffffff;
+  --app-surface-soft: #f9fbfd;
+
+  --app-primary: #2563eb;
+  --app-primary-hover: #1d4ed8;
+  --app-primary-soft: #eff6ff;
+  --app-primary-subtle: #dbeafe;
+
+  --app-accent: #0f766e;
+  --app-accent-hover: #0f5f59;
+  --app-accent-soft: #ecfdf5;
+
+  --app-navy: #0f172a;
+  --app-text: #1e293b;
+  --app-text-secondary: #64748b;
+  --app-text-muted: #94a3b8;
+
+  --app-border: #e2e8f0;
+  --app-border-soft: #edf2f7;
+
+  --app-success: #16a34a;
+  --app-success-soft: #ecfdf3;
+  --app-warning: #d97706;
+  --app-warning-soft: #fff7ed;
+  --app-danger: #dc2626;
+  --app-danger-soft: #fef2f2;
+
+  --app-radius-xl: 22px;
+  --app-radius-lg: 18px;
+  --app-radius-md: 12px;
+  --app-radius-sm: 8px;
+
+  --app-shadow-card: 0 12px 32px rgba(15, 23, 42, 0.06);
+  --app-shadow-soft: 0 8px 24px rgba(15, 23, 42, 0.04);
+
+  --app-sidebar-width: 248px;
+  --app-content-max-width: 1360px;
+  --app-content-wide-max-width: 1480px;
+  --app-content-reading-max-width: 1040px;
+  --app-content-padding-y: 32px;
+  --app-content-padding-x: 32px;
+
+  --app-color-primary: var(--app-primary);
+  --app-color-primary-soft: var(--app-primary-soft);
+  --app-color-accent: var(--app-accent);
+  --app-color-accent-soft: var(--app-accent-soft);
+  --app-color-bg: var(--app-bg);
+  --app-color-surface: var(--app-surface);
+  --app-color-surface-soft: var(--app-surface-soft);
+  --app-color-border: var(--app-border);
+  --app-color-text: var(--app-text);
+  --app-color-text-secondary: var(--app-text-secondary);
+  --app-color-text-muted: var(--app-text-muted);
+  --app-color-success: var(--app-success);
+  --app-color-warning: var(--app-warning);
+  --app-color-danger: var(--app-danger);
+}

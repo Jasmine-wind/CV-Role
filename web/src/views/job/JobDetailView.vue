@@ -89,7 +89,7 @@ onMounted(() => {
     <PageHeader
       eyebrow="岗位库参考"
       :title="job?.title || '岗位参考详情'"
-      description="系统预置岗位只用于参考。真实投递流程请复制岗位要求后新增目标岗位。"
+      description="系统预置岗位只用于只读参考。真实投递流程请复制岗位要求后新增目标岗位。"
     >
       <template #actions>
         <el-button @click="router.push('/jobs')">返回岗位库参考</el-button>
@@ -151,7 +151,7 @@ onMounted(() => {
               <strong>基于真实 JD 新增目标岗位</strong>
               <p>复制岗位要求后，到“新增目标岗位”粘贴完整 JD，再解析并进入匹配与优化。</p>
             </div>
-            <el-button type="primary" @click="router.push('/job-descriptions/new')">新增目标岗位</el-button>
+            <el-button type="primary" @click="router.push('/job-descriptions/new')">粘贴真实 JD</el-button>
           </div>
         </BaseCard>
       </template>

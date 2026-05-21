@@ -4,6 +4,7 @@ import com.winter.airesumeoptimizer.common.exception.BusinessException;
 import com.winter.airesumeoptimizer.infra.ai.PromptTemplateService;
 import com.winter.airesumeoptimizer.module.analysis.dto.AiRewriteSuggestionPromptDTO;
 import com.winter.airesumeoptimizer.module.analysis.service.AiRewriteSuggestionPromptService;
+import java.util.List;
 import java.util.Map;
 import org.springframework.stereotype.Service;
 
@@ -17,6 +18,9 @@ public class AiRewriteSuggestionPromptServiceImpl implements AiRewriteSuggestion
     private static final int MAX_JOB_STRUCTURED_LENGTH = 2500;
     private static final int MAX_MATCH_RESULT_LENGTH = 2500;
     private static final int MAX_AI_SUGGESTION_LENGTH = 2500;
+    private static final int MAX_REWRITE_GOAL_LENGTH = 200;
+    private static final int MAX_JOB_KEYWORDS_LENGTH = 600;
+    private static final int MAX_TONE_LENGTH = 40;
 
     private final PromptTemplateService promptTemplateService;
 
@@ -35,7 +39,11 @@ public class AiRewriteSuggestionPromptServiceImpl implements AiRewriteSuggestion
             String targetSection,
             String jobStructuredContent,
             String aiMatchResult,
-            String aiSuggestion) {
+            String aiSuggestion,
+            String rewriteGoal,
+            List<String> jobKeywords,
+            String tone,
+            Integer lengthLimit) {
         if (originalText == null || originalText.isBlank()) {
             throw new BusinessException(400, "原文片段不能为空");
         }
@@ -54,7 +62,11 @@ public class AiRewriteSuggestionPromptServiceImpl implements AiRewriteSuggestion
                         "targetSection", normalize(targetSection, MAX_TARGET_SECTION_LENGTH),
                         "jobStructuredContent", normalizeOptional(jobStructuredContent, MAX_JOB_STRUCTURED_LENGTH),
                         "aiMatchResult", normalizeOptional(aiMatchResult, MAX_MATCH_RESULT_LENGTH),
-                        "aiSuggestion", normalizeOptional(aiSuggestion, MAX_AI_SUGGESTION_LENGTH))))
+                        "aiSuggestion", normalizeOptional(aiSuggestion, MAX_AI_SUGGESTION_LENGTH),
+                        "rewriteGoal", normalizeOptional(rewriteGoal, MAX_REWRITE_GOAL_LENGTH),
+                        "jobKeywords", normalizeOptional(formatKeywords(jobKeywords), MAX_JOB_KEYWORDS_LENGTH),
+                        "tone", normalizeOptional(tone, MAX_TONE_LENGTH),
+                        "lengthLimit", formatLengthLimit(lengthLimit))))
                 .build();
     }
 
@@ -67,6 +79,25 @@ public class AiRewriteSuggestionPromptServiceImpl implements AiRewriteSuggestion
             return "未提供";
         }
         return normalize(value, maxLength);
+    }
+
+    private String formatKeywords(List<String> jobKeywords) {
+        if (jobKeywords == null || jobKeywords.isEmpty()) {
+            return null;
+        }
+        return String.join("、", jobKeywords.stream()
+                .filter(keyword -> keyword != null && !keyword.isBlank())
+                .map(String::strip)
+                .distinct()
+                .limit(20)
+                .toList());
+    }
+
+    private String formatLengthLimit(Integer lengthLimit) {
+        if (lengthLimit == null || lengthLimit <= 0) {
+            return "未提供";
+        }
+        return lengthLimit + " 字以内";
     }
 
     private String truncate(String value, int maxLength) {

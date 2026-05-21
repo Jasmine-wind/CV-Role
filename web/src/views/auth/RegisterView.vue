@@ -69,6 +69,10 @@ const handleSubmit = async () => {
 <template>
   <main class="auth-page">
     <section class="auth-panel">
+      <RouterLink to="/" class="auth-brand">
+        <span>AI</span>
+        <strong>简历优化</strong>
+      </RouterLink>
       <h1 class="auth-title">注册</h1>
       <p class="auth-subtitle">创建账号后，后续可以上传简历并查看匹配建议。</p>
 

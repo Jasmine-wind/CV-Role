@@ -4,6 +4,7 @@ import { ElMessage } from 'element-plus'
 import { useRouter } from 'vue-router'
 import EmptyState from '@/components/common/EmptyState.vue'
 import PageHeader from '@/components/common/PageHeader.vue'
+import SkeletonBlock from '@/components/common/SkeletonBlock.vue'
 import { getJobList } from '@/api/job'
 import type { JobListItem } from '@/types/job'
 
@@ -32,7 +33,7 @@ onMounted(() => {
   <section class="job-page">
     <PageHeader
       eyebrow="岗位库参考"
-      title="系统预置岗位只作为参考"
+      title="系统预置岗位只读参考"
       description="岗位库不是维护系统岗位的入口，也不是用户真实投递主流程。真实 JD 请从目标岗位新增。"
     >
       <template #actions>
@@ -41,7 +42,9 @@ onMounted(() => {
       </template>
     </PageHeader>
 
-    <section v-loading="loading" class="job-reference-grid">
+    <SkeletonBlock v-if="loading" title :rows="6" />
+
+    <section v-else-if="jobs.length" class="job-reference-grid">
       <article
         v-for="job in jobs"
         :key="job.id"
@@ -59,15 +62,16 @@ onMounted(() => {
         </div>
         <footer>
           <el-button @click="router.push(`/jobs/${job.id}`)">查看参考详情</el-button>
-          <el-button type="primary" plain @click="router.push('/job-descriptions/new')">基于真实 JD 新增</el-button>
+          <el-button type="primary" plain @click="router.push('/job-descriptions/new')">粘贴真实 JD</el-button>
         </footer>
       </article>
     </section>
 
     <EmptyState
-      v-if="!loading && jobs.length === 0"
+      v-else
       title="暂无岗位库参考"
       description="岗位库只是辅助参考，不影响你从目标岗位粘贴真实 JD。"
+      secondary-text="下一步建议：直接新增目标岗位并粘贴真实岗位描述。"
       action-text="新增目标岗位"
       @action="router.push('/job-descriptions/new')"
     />

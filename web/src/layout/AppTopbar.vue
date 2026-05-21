@@ -1,32 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
-import { ElMessage } from 'element-plus'
-import { useRoute, useRouter } from 'vue-router'
-import { useAuthStore } from '@/stores/auth'
+import { computed } from 'vue'
+import { useRoute } from 'vue-router'
 
 const route = useRoute()
-const router = useRouter()
-const authStore = useAuthStore()
 
 const pageTitle = computed(() => route.meta.title || '工作台')
-
-const displayName = computed(() => {
-  const user = authStore.currentUser
-
-  return user?.nickname || user?.username || '已登录用户'
-})
-
-const handleLogout = () => {
-  authStore.logout()
-  ElMessage.success('已退出登录')
-  router.push('/login')
-}
-
-onMounted(() => {
-  if (authStore.isAuthenticated && !authStore.currentUser) {
-    authStore.fetchMe().catch(() => undefined)
-  }
-})
 </script>
 
 <template>
@@ -36,9 +14,6 @@ onMounted(() => {
       <h1>{{ pageTitle }}</h1>
     </div>
 
-    <div class="app-topbar-user">
-      <span>{{ displayName }}</span>
-      <el-button plain type="danger" @click="handleLogout">退出</el-button>
-    </div>
+    <span class="app-topbar-note">围绕简历资产、目标岗位和 AI 结果推进优化流程</span>
   </header>
 </template>

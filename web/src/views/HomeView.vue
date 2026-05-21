@@ -5,9 +5,10 @@ import { useRouter } from 'vue-router'
 import PageHeader from '@/components/common/PageHeader.vue'
 import BaseCard from '@/components/common/BaseCard.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
-import AssetReadinessCard from '@/components/workflow/AssetReadinessCard.vue'
+import ProcessStepper from '@/components/common/ProcessStepper.vue'
+import SkeletonBlock from '@/components/common/SkeletonBlock.vue'
+import StatusTag from '@/components/common/StatusTag.vue'
 import NextActionCard from '@/components/workflow/NextActionCard.vue'
-import ProcessStepper from '@/components/workflow/ProcessStepper.vue'
 import { getAiResultPage } from '@/api/history'
 import { getJobDescriptionList } from '@/api/job-description'
 import { getResumeList } from '@/api/resume'
@@ -29,6 +30,13 @@ interface ProcessStep {
   status?: 'done' | 'current' | 'pending' | 'failed'
 }
 
+interface DashboardMetricCard {
+  label: string
+  value: string | number
+  note: string
+  status: 'ready' | 'pending' | 'warning'
+}
+
 const router = useRouter()
 const authStore = useAuthStore()
 
@@ -36,6 +44,10 @@ const resumes = ref<ResumeListItem[]>([])
 const targetJobs = ref<JobDescriptionDetail[]>([])
 const aiResults = ref<AiResultRecord[]>([])
 const dashboardLoading = ref(false)
+
+const dashboardColdLoading = computed(() => {
+  return dashboardLoading.value && resumes.value.length === 0 && targetJobs.value.length === 0 && aiResults.value.length === 0
+})
 
 const parsedTargetJobs = computed(() => targetJobs.value.filter((item) => item.parseStatus === 'SUCCESS'))
 
@@ -75,6 +87,33 @@ const readinessItems = computed<AssetReadinessItem[]>(() => [
     value: successfulMatchCount.value,
     status: successfulMatchCount.value > 0 ? 'ready' : 'pending',
     description: successfulMatchCount.value > 0 ? '已有可回看的结果' : '等待简历和岗位就绪',
+  },
+])
+
+const metricCards = computed<DashboardMetricCard[]>(() => [
+  {
+    label: '简历资产',
+    value: resumes.value.length,
+    note: resumes.value.length > 0 ? '可进入诊断和匹配' : '等待上传',
+    status: resumes.value.length > 0 ? 'ready' : 'pending',
+  },
+  {
+    label: '目标岗位',
+    value: `${parsedTargetJobs.value.length}/${targetJobs.value.length}`,
+    note: targetJobs.value.length > 0 ? '已解析 / 全部岗位' : '等待新增 JD',
+    status: parsedTargetJobs.value.length > 0 ? 'ready' : targetJobs.value.length > 0 ? 'warning' : 'pending',
+  },
+  {
+    label: '匹配报告',
+    value: successfulMatchCount.value,
+    note: successfulMatchCount.value > 0 ? '可回看匹配依据' : '流程推进后生成',
+    status: successfulMatchCount.value > 0 ? 'ready' : 'pending',
+  },
+  {
+    label: '优化建议',
+    value: successfulSuggestionCount.value,
+    note: successfulSuggestionCount.value > 0 ? '可继续局部改写' : '匹配后生成建议',
+    status: successfulSuggestionCount.value > 0 ? 'ready' : 'pending',
   },
 ])
 
@@ -190,22 +229,25 @@ const resultTypeText = (resultType: string) => {
   return resultTypeMap[resultType] ?? resultType
 }
 
-const statusType = (status: string) => {
-  if (status === 'SUCCESS') {
-    return 'success'
-  }
-  if (status === 'FAILED') {
-    return 'danger'
-  }
-  return 'warning'
-}
-
 const formatDateTime = (value: string | null) => {
   if (!value) {
     return '-'
   }
 
   return value.replace('T', ' ').slice(0, 19)
+}
+
+const normalizeSummary = (summary: string | null | undefined, fallback = '暂无摘要') => {
+  const value = summary?.trim()
+  if (!value) {
+    return fallback
+  }
+
+  if (value.startsWith('{') || value.startsWith('[')) {
+    return '已生成结构化结果，进入详情查看。'
+  }
+
+  return value.length > 80 ? `${value.slice(0, 80)}...` : value
 }
 
 const loadDashboard = async () => {
@@ -249,15 +291,18 @@ onMounted(async () => {
   <section class="home-page">
     <PageHeader
       eyebrow="AI 求职工作台"
-      title="围绕目标岗位推进简历优化闭环"
-      description="首页只保留当前状态、下一步主动作和最近结果。具体诊断、匹配、建议和局部改写进入对应业务页完成。"
+      title="继续优化你的求职材料"
+      :description="`当前推荐动作：${nextStep.title}`"
     >
       <template #actions>
         <el-button :loading="dashboardLoading" @click="refreshDashboard">刷新</el-button>
       </template>
     </PageHeader>
 
-    <section v-loading="dashboardLoading" class="home-workspace">
+    <section class="home-workspace">
+      <SkeletonBlock v-if="dashboardColdLoading" title :rows="8" />
+
+      <template v-else>
       <section class="home-hero-grid">
         <NextActionCard
           :title="nextStep.title"
@@ -265,21 +310,35 @@ onMounted(async () => {
           :action-text="nextStep.actionText"
           @action="router.push(nextStep.route)"
         />
-        <AssetReadinessCard :items="readinessItems" />
+
+        <div class="home-hero-side">
+          <BaseCard title="当前状态" subtitle="确认资产是否可用于匹配。">
+            <div class="home-readiness-compact">
+              <article
+                v-for="item in readinessItems"
+                :key="item.label"
+                :class="`is-${item.status}`"
+              >
+                <span>{{ item.label }}</span>
+                <strong>{{ item.value }}</strong>
+                <small>{{ item.description }}</small>
+              </article>
+            </div>
+          </BaseCard>
+
+        </div>
       </section>
 
-      <BaseCard title="主流程进度" subtitle="从简历资产到岗位优化报告，按当前可用数据推进。">
+      <BaseCard title="主流程进度" subtitle="按顺序完成简历、岗位和匹配分析。">
         <ProcessStepper :steps="flowSteps" />
       </BaseCard>
 
       <section class="home-summary-grid">
-        <BaseCard title="最近匹配报告" subtitle="只展示最新一条摘要，完整内容进入匹配与优化。">
+        <BaseCard title="最近一次匹配结果" subtitle="进入匹配与优化查看完整结论。">
           <article v-if="latestMatchResult" class="home-result-summary">
-            <el-tag :type="statusType(latestMatchResult.status)">
-              {{ resultTypeText(latestMatchResult.resultType) }}
-            </el-tag>
+            <StatusTag :status="latestMatchResult.status" />
             <strong>{{ latestMatchResult.jobTitle || latestMatchResult.title || '匹配分析' }}</strong>
-            <p>{{ latestMatchResult.summary || latestMatchResult.resumeName || '暂无摘要' }}</p>
+            <p>{{ normalizeSummary(latestMatchResult.summary, latestMatchResult.resumeName || '暂无摘要') }}</p>
             <el-button
               type="primary"
               plain
@@ -303,7 +362,7 @@ onMounted(async () => {
           />
         </BaseCard>
 
-        <BaseCard title="最近 AI 结果" subtitle="最多展示 3 条，AI 历史只负责回看。">
+        <BaseCard title="最近 AI 结果" subtitle="用于快速回看，不触发新的生成。">
           <div v-if="recentResults.length" class="home-recent-list">
             <button
               v-for="item in recentResults"
@@ -312,10 +371,11 @@ onMounted(async () => {
               @click="router.push('/history')"
             >
               <span>
-                <el-tag size="small" :type="statusType(item.status)">{{ resultTypeText(item.resultType) }}</el-tag>
+                <StatusTag :status="item.status" />
+              <small>{{ resultTypeText(item.resultType) }}</small>
                 <strong>{{ item.title || '-' }}</strong>
               </span>
-              <small>{{ item.summary || formatDateTime(item.updatedAt || item.createdAt) }}</small>
+              <small>{{ normalizeSummary(item.summary, formatDateTime(item.updatedAt || item.createdAt)) }}</small>
             </button>
           </div>
           <EmptyState
@@ -326,13 +386,27 @@ onMounted(async () => {
         </BaseCard>
       </section>
 
-      <BaseCard title="辅助入口" subtitle="岗位库只是参考入口，不作为主流程必经节点。">
+      <section class="home-overview-grid" aria-label="工作台数据概览">
+        <article
+          v-for="item in metricCards"
+          :key="item.label"
+          class="home-overview-card"
+          :class="`is-${item.status}`"
+        >
+          <span>{{ item.label }}</span>
+          <strong>{{ item.value }}</strong>
+          <small>{{ item.note }}</small>
+        </article>
+      </section>
+
+      <BaseCard title="辅助入口" subtitle="需要参考岗位要求？先看看岗位库。">
         <div class="home-secondary-links">
           <el-button text type="primary" @click="router.push('/jobs')">岗位库参考</el-button>
           <el-button text type="primary" @click="router.push('/resumes')">查看全部简历</el-button>
           <el-button text type="primary" @click="router.push('/history')">AI 历史回看</el-button>
         </div>
       </BaseCard>
+      </template>
     </section>
   </section>
 </template>
