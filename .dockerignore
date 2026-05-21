@@ -1,0 +1,14 @@
+**/node_modules
+**/dist
+**/target
+**/.vite
+.git
+.idea
+.vscode
+data
+backups
+logs
+.env
+.env.local
+.env.production
+

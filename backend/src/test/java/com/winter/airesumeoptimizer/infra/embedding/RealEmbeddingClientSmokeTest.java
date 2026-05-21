@@ -14,14 +14,20 @@ class RealEmbeddingClientSmokeTest {
     void embedShouldCallRealEmbeddingApi() {
         EmbeddingClientProperties properties = new EmbeddingClientProperties();
         properties.setApiKey(requiredPropertyOrEnv("realEmbedding.apiKey", "EMBEDDING_API_KEY"));
-        properties.setBaseUrl(requiredPropertyOrEnv("realEmbedding.baseUrl", "EMBEDDING_BASE_URL"));
-        properties.setModel(propertyOrEnv("realEmbedding.model", "EMBEDDING_MODEL", "Qwen3-Embedding-0.6B"));
+        properties.setBaseUrl(propertyOrEnv(
+                "realEmbedding.baseUrl",
+                "EMBEDDING_BASE_URL",
+                "https://api.siliconflow.cn/v1"));
+        properties.setModel(propertyOrEnv("realEmbedding.model", "EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-0.6B"));
         properties.setDimension(Integer.parseInt(propertyOrEnv("realEmbedding.dimension", "EMBEDDING_DIMENSION", "1024")));
-        properties.setTimeout(Integer.parseInt(propertyOrEnv("realEmbedding.timeout", "EMBEDDING_TIMEOUT", "30")));
+        properties.setTimeoutSeconds(Integer.parseInt(propertyOrEnv(
+                "realEmbedding.timeoutSeconds",
+                "EMBEDDING_TIMEOUT_SECONDS",
+                "120")));
         properties.setMaxInputLength(Integer.parseInt(propertyOrEnv(
                 "realEmbedding.maxInputLength",
                 "EMBEDDING_MAX_INPUT_LENGTH",
-                "8192")));
+                "8000")));
 
         OpenAiCompatibleEmbeddingClientService service = new OpenAiCompatibleEmbeddingClientService(
                 properties,

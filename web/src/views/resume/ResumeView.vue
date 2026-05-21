@@ -69,6 +69,7 @@ const aiAnalysis = ref<ResumeAiAnalysis | null>(null)
 const activePanel = ref<'parse' | 'analysis' | null>(null)
 const activeDetailTab = ref<'overview' | 'parse' | 'raw' | 'analysis'>('overview')
 const uploadPanelRef = ref<HTMLElement | null>(null)
+const uploadPickerRef = ref<HTMLElement | null>(null)
 const confirmedParseResultIds = ref<Set<number>>(new Set())
 const debugCollapseActive = ref<string[]>([])
 const selectedParseMode = ref<ResumeParseMode>('BALANCED')
@@ -1408,7 +1409,13 @@ const handleConfirmParseResult = () => {
   ElMessage.success('已确认当前结构化结果')
 }
 
-const scrollToUpload = () => {
+const openUploadPicker = () => {
+  const input = uploadPickerRef.value?.querySelector('input[type="file"]') as HTMLInputElement | null
+  if (input) {
+    input.click()
+    return
+  }
+
   uploadPanelRef.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
 
@@ -1502,7 +1509,7 @@ onUnmounted(() => {
         description="本页只处理简历自身的上传、解析和质量诊断；岗位匹配和岗位优化建议进入“匹配与优化”页面。"
       >
         <template #actions>
-          <el-button type="primary" @click="scrollToUpload">上传新简历</el-button>
+          <el-button type="primary" @click="openUploadPicker">上传新简历</el-button>
         </template>
       </PageHeader>
 
@@ -1528,21 +1535,23 @@ onUnmounted(() => {
               {{ selectedUploadFiles.length ? '已选择文件' : '等待选择' }}
             </el-tag>
           </div>
-          <el-upload
-            v-model:file-list="uploadFiles"
-            accept=".pdf,.doc,.docx"
-            :auto-upload="false"
-            multiple
-            :limit="RESUME_UPLOAD_LIMIT"
-            :on-change="handleFileChange"
-            :on-exceed="handleFileExceed"
-            :on-remove="handleFileRemove"
-          >
-            <el-button type="primary">选择简历文件</el-button>
-            <template #tip>
-              <div class="resume-upload-tip">支持 PDF、DOC、DOCX，单份最大 10 MB，一次最多 {{ RESUME_UPLOAD_LIMIT }} 份。</div>
-            </template>
-          </el-upload>
+          <div ref="uploadPickerRef" class="resume-upload-picker">
+            <el-upload
+              v-model:file-list="uploadFiles"
+              accept=".pdf,.doc,.docx"
+              :auto-upload="false"
+              multiple
+              :limit="RESUME_UPLOAD_LIMIT"
+              :on-change="handleFileChange"
+              :on-exceed="handleFileExceed"
+              :on-remove="handleFileRemove"
+            >
+              <el-button type="primary">选择简历文件</el-button>
+              <template #tip>
+                <div class="resume-upload-tip">支持 PDF、DOC、DOCX，单份最大 10 MB，一次最多 {{ RESUME_UPLOAD_LIMIT }} 份。</div>
+              </template>
+            </el-upload>
+          </div>
 
           <p class="resume-upload-tip">解析会优先使用规则结果；只有需要 AI 参与时才调用 AI，调用失败后自动降级为规则解析。</p>
           <p v-if="uploadProgressText" class="resume-upload-progress">{{ uploadProgressText }}</p>
@@ -1697,7 +1706,7 @@ onUnmounted(() => {
               title="你还没有上传简历"
               description="上传后可以进行简历解析、简历诊断和后续岗位匹配。"
               action-text="上传第一份简历"
-              @action="scrollToUpload"
+              @action="openUploadPicker"
             />
           </div>
         </section>
@@ -1725,7 +1734,7 @@ onUnmounted(() => {
             title="先选择一份简历"
             description="左侧选择简历后，右侧会显示概览、结构化结果、完整原文和简历诊断。"
             action-text="上传新简历"
-            @action="scrollToUpload"
+            @action="openUploadPicker"
           />
 
       <section v-if="activeResume && activeDetailTab === 'overview'" class="resume-detail-panel">

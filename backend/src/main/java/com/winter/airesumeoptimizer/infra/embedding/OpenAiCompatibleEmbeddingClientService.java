@@ -12,6 +12,7 @@ import java.net.http.HttpResponse;
 import java.net.http.HttpTimeoutException;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.slf4j.Logger;
@@ -23,7 +24,7 @@ import org.springframework.stereotype.Service;
 public class OpenAiCompatibleEmbeddingClientService implements EmbeddingClientService {
 
     private static final Logger log = LoggerFactory.getLogger(OpenAiCompatibleEmbeddingClientService.class);
-    private static final int MAX_ERROR_BODY_LENGTH = 500;
+    private static final String EMBEDDINGS_PATH = "/embeddings";
 
     private final EmbeddingClientProperties properties;
     private final ObjectMapper objectMapper;
@@ -51,33 +52,43 @@ public class OpenAiCompatibleEmbeddingClientService implements EmbeddingClientSe
         String normalizedText = normalizeInputText(text);
 
         HttpRequest request = buildRequest(normalizedText);
+        long startedAt = System.nanoTime();
         try {
-            log.info("Embedding request started: model={}, timeoutSeconds={}, inputLength={}",
+            log.info("Embedding request started: model={}, dimension={}, timeoutSeconds={}, inputLength={}",
                     properties.getModel(),
+                    properties.getDimension(),
                     resolveTimeoutSeconds(),
                     normalizedText.length());
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                log.warn("Embedding request failed: model={}, httpStatus={}",
+                log.warn("Embedding request failed: model={}, dimension={}, inputLength={}, durationMs={}, httpStatus={}",
                         properties.getModel(),
+                        properties.getDimension(),
+                        normalizedText.length(),
+                        elapsedMillis(startedAt),
                         response.statusCode());
-                throw new AiClientException("Embedding 调用失败，HTTP 状态码：" + response.statusCode()
-                        + "，响应：" + truncate(response.body()));
+                throw buildHttpErrorException(response.statusCode());
             }
             List<Double> embedding = extractEmbedding(response.body());
             validateEmbeddingDimension(embedding);
-            log.info("Embedding request succeeded: model={}, dimension={}",
+            log.info("Embedding request succeeded: model={}, dimension={}, inputLength={}, durationMs={}",
                     properties.getModel(),
-                    embedding.size());
+                    embedding.size(),
+                    normalizedText.length(),
+                    elapsedMillis(startedAt));
             return embedding;
         } catch (HttpTimeoutException exception) {
-            log.warn("Embedding request timed out: model={}, timeoutSeconds={}",
+            log.warn("Embedding request timed out: model={}, dimension={}, inputLength={}, timeoutSeconds={}",
                     properties.getModel(),
+                    properties.getDimension(),
+                    normalizedText.length(),
                     resolveTimeoutSeconds());
-            throw new AiClientException("Embedding 调用超时，请稍后重试或缩短输入文本", exception);
+            throw new AiClientException("Embedding 服务调用超时，请稍后重试或缩短输入文本", exception);
         } catch (IOException exception) {
-            log.warn("Embedding request IO failed: model={}, message={}",
+            log.warn("Embedding request IO failed: model={}, dimension={}, inputLength={}, message={}",
                     properties.getModel(),
+                    properties.getDimension(),
+                    normalizedText.length(),
                     LogSanitizer.sanitize(exception.getMessage()));
             throw new AiClientException("Embedding 调用失败，请检查网络或 base-url 配置", exception);
         } catch (InterruptedException exception) {
@@ -99,10 +110,13 @@ public class OpenAiCompatibleEmbeddingClientService implements EmbeddingClientSe
 
     List<Double> extractEmbedding(String responseBody) {
         try {
-            JsonNode embeddingNode = objectMapper.readTree(responseBody)
-                    .path("data")
-                    .path(0)
-                    .path("embedding");
+            JsonNode rootNode = objectMapper.readTree(responseBody);
+            JsonNode dataNode = rootNode.path("data");
+            if (!dataNode.isArray() || dataNode.isEmpty()) {
+                throw new AiClientException("Embedding 响应中缺少 data 数据");
+            }
+
+            JsonNode embeddingNode = dataNode.path(0).path("embedding");
             if (!embeddingNode.isArray() || embeddingNode.isEmpty()) {
                 throw new AiClientException("Embedding 响应中缺少向量数据");
             }
@@ -148,12 +162,10 @@ public class OpenAiCompatibleEmbeddingClientService implements EmbeddingClientSe
 
     private HttpRequest buildRequest(String text) {
         try {
-            String requestBody = objectMapper.writeValueAsString(Map.of(
-                    "model", properties.getModel(),
-                    "input", text));
+            String requestBody = buildRequestBody(text);
 
             return HttpRequest.newBuilder()
-                    .uri(URI.create(normalizeBaseUrl(properties.getBaseUrl()) + "/embeddings"))
+                    .uri(URI.create(normalizeBaseUrl(properties.getBaseUrl()) + EMBEDDINGS_PATH))
                     .version(HttpClient.Version.HTTP_1_1)
                     .timeout(Duration.ofSeconds(resolveTimeoutSeconds()))
                     .header("Authorization", "Bearer " + properties.getApiKey())
@@ -167,7 +179,17 @@ public class OpenAiCompatibleEmbeddingClientService implements EmbeddingClientSe
         }
     }
 
-    private void validateConfig() {
+    String buildRequestBody(String text) throws IOException {
+        Map<String, Object> requestBody = new LinkedHashMap<>();
+        requestBody.put("model", properties.getModel());
+        requestBody.put("input", text);
+        if (properties.getDimension() != null && properties.getDimension() > 0) {
+            requestBody.put("dimensions", properties.getDimension());
+        }
+        return objectMapper.writeValueAsString(requestBody);
+    }
+
+    void validateConfig() {
         if (properties.getApiKey() == null || properties.getApiKey().isBlank()) {
             throw new AiClientException("Embedding API Key 未配置");
         }
@@ -183,15 +205,15 @@ public class OpenAiCompatibleEmbeddingClientService implements EmbeddingClientSe
     }
 
     private int resolveTimeoutSeconds() {
-        if (properties.getTimeout() == null || properties.getTimeout() <= 0) {
-            return 30;
+        if (properties.getTimeoutSeconds() == null || properties.getTimeoutSeconds() <= 0) {
+            return 120;
         }
-        return properties.getTimeout();
+        return properties.getTimeoutSeconds();
     }
 
     private int resolveMaxInputLength() {
         if (properties.getMaxInputLength() == null || properties.getMaxInputLength() <= 0) {
-            return 8192;
+            return 8000;
         }
         return properties.getMaxInputLength();
     }
@@ -201,13 +223,26 @@ public class OpenAiCompatibleEmbeddingClientService implements EmbeddingClientSe
         while (normalized.endsWith("/")) {
             normalized = normalized.substring(0, normalized.length() - 1);
         }
+        if (normalized.endsWith(EMBEDDINGS_PATH)) {
+            throw new IllegalArgumentException("Embedding base-url 不应以 /embeddings 结尾");
+        }
         return normalized;
     }
 
-    private String truncate(String value) {
-        if (value == null || value.length() <= MAX_ERROR_BODY_LENGTH) {
-            return value;
+    AiClientException buildHttpErrorException(int httpStatus) {
+        if (httpStatus == 401 || httpStatus == 403) {
+            return new AiClientException("Embedding API Key 无效或没有调用权限");
         }
-        return value.substring(0, MAX_ERROR_BODY_LENGTH);
+        if (httpStatus == 429) {
+            return new AiClientException("Embedding 请求过于频繁或额度不足，请稍后重试");
+        }
+        if (httpStatus >= 500) {
+            return new AiClientException("SiliconFlow Embedding 服务暂时不可用，请稍后重试");
+        }
+        return new AiClientException("Embedding 调用失败，HTTP 状态码：" + httpStatus);
+    }
+
+    private long elapsedMillis(long startedAt) {
+        return Duration.ofNanos(System.nanoTime() - startedAt).toMillis();
     }
 }

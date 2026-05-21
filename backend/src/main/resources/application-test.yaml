@@ -13,6 +13,9 @@ jwt:
   expiration-minutes: 30
 
 app:
+  cache:
+    redis:
+      enabled: false
   storage:
     local:
       base-dir: ${TEST_LOCAL_STORAGE_BASE_DIR:build/test-uploads}
@@ -24,4 +27,3 @@ logging:
   level:
     root: warn
     com.winter.airesumeoptimizer: info
-

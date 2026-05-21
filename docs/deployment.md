@@ -26,14 +26,16 @@
 - 前端环境变量示例位于 `web/.env.example`。
 - 本地依赖 Compose 位于 `docker-compose.yml`。
 - Nginx 草案位于 `deploy/nginx/ai-resume.conf`。
+- Nginx HTTPS 模板位于 `deploy/nginx/conf.d/ai-resume-https.conf`。
+- 生产 Compose 位于 `docker-compose.prod.yml`。
+- 生产环境示例变量位于 `.env.production.example`。
 
 当前边界：
 
-- `docker-compose.yml` 只编排 PostgreSQL、Redis、MinIO 等依赖，不包含后端和前端应用镜像。
-- 后端当前推荐用 jar 方式启动。
-- 前端当前推荐构建为静态文件后交给 Nginx 托管。
-- 后端上传链路当前仍使用 local 存储，MinIO 只是后续对象存储接入预留。
-- Redis 当前只作为依赖预留，后端运行路径尚未依赖 Redis。
+- `docker-compose.yml` 只用于本地依赖。
+- `docker-compose.prod.yml` 是正式部署入口。
+- 后端、前端和 Nginx 已提供容器化路径。
+- MinIO 和 Redis 已在后端运行路径接入。
 
 ## 2. 服务器环境要求
 
@@ -133,9 +135,9 @@ Embedding：
 
 ```env
 EMBEDDING_ENABLED=true
-EMBEDDING_BASE_URL=https://embedding.example.com/v1
-EMBEDDING_API_KEY=change-to-real-embedding-api-key
-EMBEDDING_MODEL=your-embedding-model
+EMBEDDING_BASE_URL=https://api.siliconflow.cn/v1
+EMBEDDING_API_KEY=change-to-real-siliconflow-api-key
+EMBEDDING_MODEL=Qwen/Qwen3-Embedding-0.6B
 EMBEDDING_DIMENSION=1024
 ```
 
@@ -260,7 +262,7 @@ VITE_API_BASE_URL=/api
 
 ## 8. Docker Compose 部署方式
 
-当前 Compose 只用于依赖服务：
+本地依赖服务：
 
 ```bash
 docker compose --env-file .env up -d postgres redis minio
@@ -293,23 +295,46 @@ docker compose down -v
 说明：
 
 - `postgres` 使用 `pgvector/pgvector:pg16`。
-- `redis` 当前是部署预留，后端运行路径尚未依赖 Redis。
-- `minio` 当前是对象存储预留，后端上传链路尚未切换到 MinIO。
-- 当前没有后端 / 前端应用镜像，不能用 Compose 一键启动完整系统。
+- `redis` 已作为后端缓存依赖接入。
+- `minio` 已作为后端文件存储接入。
+
+生产部署：
+
+```bash
+docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
+```
+
+如果要申请 HTTPS 证书，可启用 `certbot` profile：
+
+```bash
+docker compose -f docker-compose.prod.yml --env-file .env.production --profile certbot run --rm certbot
+```
+
+检查项：
+
+- [ ] `docker compose -f docker-compose.prod.yml config` 可展开。
+- [ ] `nginx` 可以访问 `/healthz`。
+- [ ] `backend` 可以访问 `/v3/api-docs`。
+- [ ] `/.well-known/acme-challenge/` 可通过 HTTP 访问。
 
 ## 9. Nginx 反向代理
 
-草案路径：
+HTTP 草案路径：
 
 ```text
-deploy/nginx/ai-resume.conf
+deploy/nginx/conf.d/ai-resume.conf
+```
+
+HTTPS 模板路径：
+
+```text
+deploy/nginx/conf.d/ai-resume-https.conf
 ```
 
 部署前必须替换：
 
 - `server_name example.com`
-- `root /var/www/ai-resume-optimizer/web`
-- 如启用 HTTPS，补充证书路径和 `listen 443 ssl`
+- 证书路径中的域名
 
 关键要求：
 
@@ -318,6 +343,7 @@ deploy/nginx/ai-resume.conf
 - `/api/` 代理到 `http://127.0.0.1:8080/api/`。
 - `client_max_body_size` 不低于后端上传限制。
 - AI 慢请求场景下，代理超时不要过短。
+- `/.well-known/acme-challenge/` 要能被 Certbot 读取。
 
 如果服务器已安装 Nginx，可检查配置：
 
@@ -333,9 +359,7 @@ nginx -s reload
 
 ## 10. 文件存储目录
 
-当前上传链路使用 local 存储。
-
-生产环境建议：
+本地模式建议：
 
 ```text
 /data/ai-resume/uploads
@@ -346,6 +370,13 @@ nginx -s reload
 ```env
 APP_STORAGE_TYPE=local
 APP_STORAGE_LOCAL_BASE_DIR=/data/ai-resume/uploads
+```
+
+生产容器部署建议：
+
+```env
+APP_STORAGE_TYPE=minio
+MINIO_ENDPOINT=http://minio:9000
 ```
 
 检查项：
@@ -372,10 +403,10 @@ Embedding 用于向量生成和后续检索增强相关能力。当前项目中�
 
 ```env
 EMBEDDING_ENABLED=true
-EMBEDDING_BASE_URL=
-EMBEDDING_API_KEY=
-EMBEDDING_MODEL=
-EMBEDDING_DIMENSION=
+EMBEDDING_BASE_URL=https://api.siliconflow.cn/v1
+EMBEDDING_API_KEY=change-to-real-siliconflow-api-key
+EMBEDDING_MODEL=Qwen/Qwen3-Embedding-0.6B
+EMBEDDING_DIMENSION=1024
 ```
 
 检查项：
@@ -426,6 +457,8 @@ EMBEDDING_DIMENSION=
 - [ ] 后端 `8080` 未直接暴露公网。
 - [ ] Nginx 上传大小限制不低于后端上传限制。
 - [ ] 错误提示不暴露数据库、JWT、AI Key 或本地绝对路径。
+- [ ] 域名可以通过 HTTPS 打开。
+- [ ] `/.well-known/acme-challenge/` 可被正常访问。
 
 ## 13. 回滚方案
 
@@ -497,10 +530,7 @@ try_files $uri $uri/ /index.html;
 
 ## 15. 后续待补
 
-- 后端应用容器镜像和前端静态资源镜像。
-- systemd 服务文件或 Compose 应用服务。
-- HTTPS 正式配置和证书续期说明。
-- 生产文件日志输出路径配置。
-- MinIO 存储实现接入。
-- Redis 实际运行能力接入。
-- CORS 从硬编码本地开发地址调整为部署可配置。
+- 备份脚本和运维脚本。
+- README 和演示素材。
+- 服务器备份、日志巡检和恢复说明。
+- 真实服务器上的证书续期流程。

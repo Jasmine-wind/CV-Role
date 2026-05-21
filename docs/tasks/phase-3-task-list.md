@@ -463,7 +463,7 @@ v2.8 小任务完成情况：
 |---|---|---|
 | v2.8.1 pgvector 可行性检查 | 已完成 | 明确原 `postgres:16-alpine` 不包含 pgvector，后续需使用 `pgvector/pgvector:pg16`，并确认 Flyway 可管理 `CREATE EXTENSION vector` |
 | v2.8.2 向量表设计 | 已完成 | 新增 pgvector 扩展迁移和 `resume_embeddings`、`job_description_embeddings`，向量字段使用非固定维度 `vector` 并记录实际维度 |
-| v2.8.3 Embedding 模型接入 | 已完成 | 接入 OpenAI-compatible `/embeddings` 客户端，默认模型 `Qwen3-Embedding-0.6B`，默认维度 `1024`，配置通过环境变量读取 |
+| v2.8.3 Embedding 模型接入 | 已完成 | 接入 OpenAI-compatible `/embeddings` 客户端，当前默认 SiliconFlow 模型 `Qwen/Qwen3-Embedding-0.6B`，默认维度 `1024`，配置通过环境变量读取 |
 | v2.8.4 简历向量生成 | 已完成 | 支持已解析简历文本切片、生成向量、保存到 `resume_embeddings`，并提供生成和查询接口 |
 | v2.8.5 岗位描述向量生成 | 已完成 | 支持已解析岗位描述文本切片、生成向量、保存到 `job_description_embeddings`，并提供生成和查询接口 |
 | v2.8.6 基础语义相似度查询 | 已完成 | 使用 pgvector 余弦距离 `<=>` 查询简历与岗位描述 Top-K 相似片段，返回片段和相似度分数 |
@@ -473,7 +473,7 @@ v2.8 小任务完成情况：
 联调验收结论：
 
 - pgvector 扩展可用，后端 Flyway 能完成 V12 / V13 迁移。
-- 本地 Embedding 服务可调用，默认模型为 `Qwen3-Embedding-0.6B`，默认维度为 `1024`。
+- Embedding 服务可调用，当前默认 SiliconFlow 模型为 `Qwen/Qwen3-Embedding-0.6B`，默认维度为 `1024`。
 - 简历向量和岗位描述向量均可生成并查询。
 - 语义相似度接口可返回 Top-K 相似片段、简历片段、岗位描述片段和相似度分数。
 - AI 岗位匹配和 AI 简历优化建议可选接入 RAG 上下文；无向量或无可用片段时不阻断原流程。

@@ -15,9 +15,9 @@ public class EmbeddingClientProperties {
 
     private Integer dimension;
 
-    private Integer timeout = 30;
+    private Integer timeoutSeconds = 120;
 
-    private Integer maxInputLength = 8192;
+    private Integer maxInputLength = 8000;
 
     public String getApiKey() {
         return apiKey;
@@ -51,12 +51,20 @@ public class EmbeddingClientProperties {
         this.dimension = dimension;
     }
 
+    public Integer getTimeoutSeconds() {
+        return timeoutSeconds;
+    }
+
+    public void setTimeoutSeconds(Integer timeoutSeconds) {
+        this.timeoutSeconds = timeoutSeconds;
+    }
+
     public Integer getTimeout() {
-        return timeout;
+        return timeoutSeconds;
     }
 
     public void setTimeout(Integer timeout) {
-        this.timeout = timeout;
+        this.timeoutSeconds = timeout;
     }
 
     public Integer getMaxInputLength() {

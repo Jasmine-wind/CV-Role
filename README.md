@@ -178,9 +178,10 @@ backend/src/main/resources/application-test.yaml
 - `AI_API_KEY` 是推荐的 AI 客户端 API Key 环境变量名，旧的 `DASHSCOPE_API_KEY` 仍作为兼容 fallback。
 - AI base URL 推荐通过 `AI_BASE_URL` 覆盖，旧的 `OPENAI_BASE_URL` 仍作为兼容 fallback，默认是 `https://api.deepseek.com`。
 - AI 模型、温度、超时和输出长度推荐使用 `AI_MODEL`、`AI_TEMPERATURE`、`AI_TIMEOUT_SECONDS`、`AI_MAX_TOKENS`。
-- Embedding 使用独立的 `EMBEDDING_*` 配置；当前默认模型为 `Qwen3-Embedding-0.6B`，默认向量维度为 `1024`。
-- `EMBEDDING_BASE_URL` 不绑定具体服务商，需要按实际 OpenAI-compatible Embedding 服务地址配置，例如本地服务 `http://localhost:8000/v1` 或第三方平台提供的 base-url。
-- `EMBEDDING_API_KEY` 需要用户在本地 `.env` 中自行配置，不要提交真实密钥。
+- Embedding 使用独立的 `EMBEDDING_*` 配置；当前默认接入 SiliconFlow OpenAI-compatible Embeddings API。
+- `EMBEDDING_BASE_URL` 默认是 `https://api.siliconflow.cn/v1`，客户端内部会拼接 `/embeddings`，不要把 base-url 配成 `/embeddings` 结尾。
+- `EMBEDDING_MODEL` 默认是 `Qwen/Qwen3-Embedding-0.6B`，`EMBEDDING_DIMENSION` 默认是 `1024`，请求体会携带 `dimensions=1024`。
+- `EMBEDDING_API_KEY` 需要用户在本地 `.env` 或生产环境变量中自行配置，不要提交真实密钥。
 - 后续如果切换到 Qwen3-Embedding-4B 或 Qwen3-Embedding-8B，需要同步确认向量维度、历史向量数据兼容性和相似度查询策略。
 - `JWT_SECRET` 请使用足够长的随机字符串。
 - 当前 Phase 1 / Phase 2 仍使用本地文件存储，`LOCAL_STORAGE_BASE_DIR` 默认是 `uploads`。
@@ -305,7 +306,20 @@ pgvector/pgvector:pg16
 CREATE EXTENSION IF NOT EXISTS vector;
 ```
 
-当前默认 Embedding 模型为 `Qwen3-Embedding-0.6B`，默认向量维度为 `1024`。`EMBEDDING_BASE_URL` 仍由实际 OpenAI-compatible Embedding 服务决定，不在项目中写死；`EMBEDDING_API_KEY` 需要用户在本地 `.env` 中配置。当前 v2.8.3 只完成 Embedding 客户端和环境配置，不生成向量。当前向量表使用不固定维度的 `vector` 字段，并用 `embedding_dimension` 记录实际维度；pgvector 不可用时，只能作为开发过渡临时保存 Embedding JSON 字符串，不能作为最终方案。
+当前 Embedding API 使用 SiliconFlow OpenAI-compatible 接口，默认配置为 `EMBEDDING_BASE_URL=https://api.siliconflow.cn/v1`、`EMBEDDING_MODEL=Qwen/Qwen3-Embedding-0.6B`、`EMBEDDING_DIMENSION=1024`。客户端请求完整地址为 `https://api.siliconflow.cn/v1/embeddings`，请求体包含 `model`、`input` 和 `dimensions`。`EMBEDDING_API_KEY` 需要用户在本地 `.env` 或生产环境变量中配置，不能提交真实密钥。当前向量表使用不固定维度的 `vector` 字段，并用 `embedding_dimension` 记录实际维度；pgvector 不可用时，只能作为开发过渡临时保存 Embedding JSON 字符串，不能作为最终方案。
+
+本地可用以下方式验证 Embedding 服务配置：
+
+```bash
+curl https://api.siliconflow.cn/v1/embeddings \
+  -H "Authorization: Bearer $EMBEDDING_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "Qwen/Qwen3-Embedding-0.6B",
+    "input": "AI 简历优化与岗位匹配系统",
+    "dimensions": 1024
+  }'
+```
 
 停止本地依赖服务：
 

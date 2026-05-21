@@ -23,8 +23,8 @@
 | Spring Boot 后端 | jar 方式运行 | 进程状态、端口 `8080`、日志、`.env`、数据库连接 |
 | Vue 前端 | Nginx 托管静态文件 | `dist` 发布目录、Nginx 配置、`VITE_API_BASE_URL` |
 | PostgreSQL | 外部数据库或 Compose 依赖 | 数据 volume、连接数、备份、迁移 |
-| Redis | Compose 预留 | 当前后端运行路径尚未依赖 Redis |
-| MinIO | Compose 预留 | 当前上传链路尚未切换到 MinIO |
+| Redis | 生产缓存依赖 | AI 展示模型缓存，失败可降级 |
+| MinIO | 生产文件存储 | 简历文件上传、读取、删除 |
 | 文件存储目录 | local 存储 | `APP_STORAGE_LOCAL_BASE_DIR`、读写权限、磁盘空间、备份 |
 | AI Chat 服务 | 外部 OpenAI-compatible 服务 | base URL、API Key、模型、超时、返回格式 |
 | Embedding 服务 | 外部 OpenAI-compatible 服务 | 启用状态、模型、维度、超时 |
@@ -34,7 +34,7 @@
 
 ### 后端 jar 运行
 
-当前后端主要通过控制台输出日志。若部署时将日志重定向到文件，可用：
+当前后端已支持文件日志输出。容器部署时日志写入 `/app/logs` 卷；jar 方式运行时可自行重定向：
 
 ```bash
 tail -f logs/ai-resume-optimizer.log
@@ -49,12 +49,11 @@ tail -f logs/ai-resume-optimizer.log
 
 说明：
 
-- `LOG_FILE_PATH` 当前只是部署预留变量，后端尚未正式接入文件日志配置。
 - 日志中不应出现 JWT Secret、AI Key、数据库密码、MinIO Secret 或完整本地敏感路径。
 
 ### Compose 依赖服务
 
-当前 Compose 只包含依赖服务：
+本地 Compose 依赖服务：
 
 ```bash
 docker compose logs -f postgres
@@ -68,6 +67,13 @@ docker compose logs -f minio
 podman compose logs -f postgres
 podman compose logs -f redis
 podman compose logs -f minio
+```
+
+生产 Compose 日志：
+
+```bash
+docker compose -f docker-compose.prod.yml --env-file .env.production logs -f backend
+docker compose -f docker-compose.prod.yml --env-file .env.production logs -f nginx
 ```
 
 ### Nginx 日志
@@ -155,28 +161,13 @@ nginx -s reload
 
 ## 5. 数据库备份与恢复
 
-备份：
+建议使用 `scripts/ops/backup-postgres.sh` 和 `scripts/ops/restore-postgres.sh`。
+
+如果手工执行：
 
 ```bash
-pg_dump -h localhost -U dawn -d ai_resume_optimizer > backup.sql
-```
-
-带日期的备份文件示例：
-
-```bash
-pg_dump -h localhost -U dawn -d ai_resume_optimizer > backup-$(date +%F).sql
-```
-
-恢复：
-
-```bash
-psql -h localhost -U dawn -d ai_resume_optimizer < backup.sql
-```
-
-如果 PostgreSQL 在 Compose 中运行：
-
-```bash
-docker compose exec postgres pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" > backup.sql
+docker compose -f docker-compose.prod.yml --env-file .env.production exec -T postgres \
+  pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" > backup.sql
 ```
 
 注意：
@@ -187,23 +178,13 @@ docker compose exec postgres pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" > bac
 
 ## 6. 上传文件备份
 
-当前上传链路使用 local 存储，目录由以下变量控制：
+本地存储模式下，目录由以下变量控制：
 
 ```env
 APP_STORAGE_LOCAL_BASE_DIR=/data/ai-resume/uploads
 ```
 
-备份：
-
-```bash
-tar -czf uploads-backup-$(date +%F).tar.gz /data/ai-resume/uploads
-```
-
-恢复：
-
-```bash
-tar -xzf uploads-backup-YYYY-MM-DD.tar.gz -C /
-```
+建议使用 `scripts/ops/backup-uploads.sh`。
 
 检查：
 
@@ -214,9 +195,8 @@ tar -xzf uploads-backup-YYYY-MM-DD.tar.gz -C /
 
 MinIO 说明：
 
-- MinIO 当前只是依赖和配置预留。
-- 后端上传链路尚未正式切换到 MinIO。
-- 后续接入后可使用 `mc mirror` 或对象存储控制台做备份。
+- 生产部署下 MinIO 已正式接入。
+- 建议使用 `scripts/ops/backup-minio.sh` 进行卷备份。
 
 ## 7. 配置修改
 
@@ -228,7 +208,9 @@ MinIO 说明：
 | `.env.example` | 示例变量，不包含真实密钥 |
 | `backend/src/main/resources/application-prod.yaml` | 生产 Profile 配置 |
 | `web/.env.example` | 前端环境变量示例 |
-| `deploy/nginx/ai-resume.conf` | Nginx 反向代理草案 |
+| `deploy/nginx/conf.d/ai-resume.conf` | Nginx 反向代理配置 |
+| `deploy/nginx/conf.d/ai-resume-https.conf` | Nginx HTTPS 配置模板 |
+| `scripts/ops/*.sh` | 备份、日志、重启脚本 |
 
 修改流程：
 

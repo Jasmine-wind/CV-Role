@@ -72,10 +72,12 @@ coverage/
 # =========================
 .env
 .env.local
+.env.production
 .env.*.local
 
 # Keep examples
 !.env.example
+!.env.production.example
 
 # =========================
 # OS / desktop files

@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.winter.airesumeoptimizer.common.logging.LogSanitizer;
 import com.winter.airesumeoptimizer.infra.ai.AiClientService;
+import com.winter.airesumeoptimizer.infra.cache.RedisJsonCacheService;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeAchievementDTO;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeDisplayModelDTO;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeExperienceDTO;
@@ -33,6 +34,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -66,10 +68,20 @@ public class ResumeDisplayModelServiceImpl implements ResumeDisplayModelService 
     private final AiClientService aiClientService;
     private final ObjectMapper objectMapper;
     private final ConcurrentMap<String, ResumeDisplayModelDTO> cache = new ConcurrentHashMap<>();
+    private final RedisJsonCacheService redisJsonCacheService;
 
     public ResumeDisplayModelServiceImpl(AiClientService aiClientService, ObjectMapper objectMapper) {
+        this(aiClientService, objectMapper, null);
+    }
+
+    @Autowired
+    public ResumeDisplayModelServiceImpl(
+            AiClientService aiClientService,
+            ObjectMapper objectMapper,
+            RedisJsonCacheService redisJsonCacheService) {
         this.aiClientService = aiClientService;
         this.objectMapper = objectMapper;
+        this.redisJsonCacheService = redisJsonCacheService;
     }
 
     @Override
@@ -114,7 +126,7 @@ public class ResumeDisplayModelServiceImpl implements ResumeDisplayModelService 
         try {
             Map<String, Object> promptInput = buildPromptInput(structuredContent);
             String cacheKey = buildCacheKey(resumeId, promptInput);
-            ResumeDisplayModelDTO cached = cache.get(cacheKey);
+            ResumeDisplayModelDTO cached = getCachedDisplayModel(cacheKey);
             if (cached != null) {
                 ResumeDisplayModelDTO cachedCopy = copy(cached);
                 applyDisplayMeta(cachedCopy, "AI", true, false, "", elapsedMs(startedAt), true, cacheKey);
@@ -125,7 +137,7 @@ public class ResumeDisplayModelServiceImpl implements ResumeDisplayModelService 
             ResumeDisplayModelDTO aiModel = readDisplayModel(aiOutput);
             ResumeDisplayModelDTO validated = validateAiModel(aiModel, ruleModel, structuredContent);
             applyDisplayMeta(validated, "AI", true, false, "", elapsedMs(startedAt), false, cacheKey);
-            cache.put(cacheKey, copy(validated));
+            putCachedDisplayModel(cacheKey, validated);
             return validated;
         } catch (RuntimeException exception) {
             log.warn("Resume AI display model fallback: resumeId={}, reason={}",
@@ -143,7 +155,7 @@ public class ResumeDisplayModelServiceImpl implements ResumeDisplayModelService 
         try {
             Map<String, Object> promptInput = buildPromptInput(structuredContent);
             String cacheKey = buildCacheKey(resumeId, promptInput);
-            ResumeDisplayModelDTO cached = cache.get(cacheKey);
+            ResumeDisplayModelDTO cached = getCachedDisplayModel(cacheKey);
             if (cached == null) {
                 return null;
             }
@@ -155,6 +167,30 @@ public class ResumeDisplayModelServiceImpl implements ResumeDisplayModelService 
                     resumeId,
                     LogSanitizer.sanitize(exception.getMessage()));
             return null;
+        }
+    }
+
+    private ResumeDisplayModelDTO getCachedDisplayModel(String cacheKey) {
+        ResumeDisplayModelDTO cached = cache.get(cacheKey);
+        if (cached != null) {
+            return cached;
+        }
+        if (redisJsonCacheService == null) {
+            return null;
+        }
+        return redisJsonCacheService.get(cacheKey, ResumeDisplayModelDTO.class)
+                .map(cachedModel -> {
+                    cache.put(cacheKey, copy(cachedModel));
+                    return cachedModel;
+                })
+                .orElse(null);
+    }
+
+    private void putCachedDisplayModel(String cacheKey, ResumeDisplayModelDTO model) {
+        ResumeDisplayModelDTO cachedCopy = copy(model);
+        cache.put(cacheKey, cachedCopy);
+        if (redisJsonCacheService != null) {
+            redisJsonCacheService.put(cacheKey, cachedCopy, redisJsonCacheService.aiDisplayModelTtlSeconds());
         }
     }
 

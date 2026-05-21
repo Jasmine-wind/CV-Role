@@ -393,7 +393,7 @@ backend/src/main/resources/db/migration/
 |---|---:|---|
 | `app.ai.openai-compatible.timeout-seconds` | `90` | AI completion 请求超时 |
 | `app.ai.openai-compatible.max-tokens` | `4000` | AI completion 输出上限 |
-| `app.ai.embedding-compatible.timeout` | `30` | 单次 Embedding 请求超时 |
+| `app.ai.embedding-compatible.timeout-seconds` | `120` | 单次 Embedding 请求超时 |
 | `spring.servlet.multipart.max-file-size` | `10MB` | 上传文件大小限制 |
 | `app.resume.parse.ai-structured-parse-enabled` | `false` | AI 结构化补全默认关闭 |
 | `app.resume.parse.ai-section-classify-enabled` | `true` | AI 章节归类默认开启 |
