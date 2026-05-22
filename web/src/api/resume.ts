@@ -1,4 +1,5 @@
 import request from '@/api/request'
+import type { EmbeddingSummary } from '@/types/embedding'
 import type { AsyncTaskVO } from '@/types/task'
 import type {
   ResumeAiAnalysis,
@@ -12,6 +13,7 @@ import type {
 
 const AI_ANALYSIS_TIMEOUT_MS = 120000
 const RESUME_PARSE_TIMEOUT_MS = 180000
+const EMBEDDING_TIMEOUT_MS = 180000
 
 export const uploadResume = (file: File) => {
   const formData = new FormData()
@@ -58,6 +60,16 @@ export const getResumeAiAnalysis = (id: number) => {
 
 export const submitResumeEmbeddingTask = (id: number) => {
   return request.post<AsyncTaskVO>(`/api/resumes/${id}/embeddings/tasks`)
+}
+
+export const generateResumeEmbedding = (id: number) => {
+  return request.post<EmbeddingSummary>(`/api/resumes/${id}/embeddings`, undefined, {
+    timeout: EMBEDDING_TIMEOUT_MS,
+  })
+}
+
+export const getResumeEmbeddingSummary = (id: number) => {
+  return request.get<EmbeddingSummary>(`/api/resumes/${id}/embeddings`)
 }
 
 export const deleteResume = (id: number) => {

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowRight } from '@element-plus/icons-vue'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -10,8 +10,8 @@ import { getAiJobMatch, getAiJobMatches, triggerAiJobMatch } from '@/api/ai-job-
 import { getAiResumeSuggestionByMatchResult, triggerAiResumeSuggestion } from '@/api/ai-resume-suggestion'
 import { getAiRewriteContext, getAiRewriteSuggestions, triggerAiRewriteSuggestion, updateAiRewriteAcceptStatus } from '@/api/ai-rewrite-suggestion'
 import { getJobOptimizationReport } from '@/api/job-optimization-report'
-import { getJobDescriptionList } from '@/api/job-description'
-import { getResumeList, getResumeParseResult } from '@/api/resume'
+import { generateJobDescriptionEmbedding, getJobDescriptionEmbeddingSummary, getJobDescriptionList } from '@/api/job-description'
+import { generateResumeEmbedding, getResumeEmbeddingSummary, getResumeList, getResumeParseResult } from '@/api/resume'
 import type { AiJobMatchResult } from '@/types/ai-job-match'
 import type { AiResumeSuggestionItem, AiResumeSuggestionResult } from '@/types/ai-resume-suggestion'
 import type { AiRewriteSuggestionResult, RecommendedRewriteSection, RewriteContext } from '@/types/ai-rewrite-suggestion'
@@ -53,6 +53,7 @@ const selectedRewriteSource = ref<RecommendedRewriteSection | null>(null)
 const selectedSuggestionItem = ref<AiResumeSuggestionItem | null>(null)
 const selectedSuggestionItemIndex = ref<number | null>(null)
 const latestDialogRewriteResult = ref<AiRewriteSuggestionResult | null>(null)
+const latestDialogRewriteFingerprint = ref('')
 const generatingRewrite = ref(false)
 const loadingRewriteContext = ref(false)
 const rewriteContextError = ref<string | null>(null)
@@ -389,17 +390,98 @@ const normalizeSuggestionText = (value: string | null | undefined) => {
   return value.trim().replace(/\s+/g, ' ').toLowerCase()
 }
 
+const normalizeSuggestionCompactText = (value: string | null | undefined) => {
+  return normalizeSuggestionText(value).replace(/[^\p{L}\p{N}]+/gu, '')
+}
+
+const isSameRewriteSection = (left: string | null | undefined, right: string | null | undefined) => {
+  const normalizedLeft = normalizeSuggestionCompactText(left)
+  const normalizedRight = normalizeSuggestionCompactText(right)
+
+  if (!normalizedLeft || !normalizedRight) {
+    return false
+  }
+
+  return normalizedLeft === normalizedRight
+    || normalizedLeft.includes(normalizedRight)
+    || normalizedRight.includes(normalizedLeft)
+}
+
+const isGenericRewriteSection = (value: string | null | undefined) => {
+  const normalized = normalizeSuggestionCompactText(value)
+  return ['技能', '技能标签', '专业技能', '项目', '项目经历', '工作经历', '实习经历', '经历', '其他'].includes(normalized)
+}
+
+const extractSuggestionKeywords = (suggestion: AiResumeSuggestionItem) => {
+  const rawText = [
+    suggestion.targetSection,
+    suggestion.issue,
+    suggestion.suggestion,
+    ...(suggestion.relatedItems ?? []),
+    ...(suggestion.evidence ?? []),
+  ].filter(Boolean).join(' ')
+
+  const tokens = rawText
+    .split(/[^\p{L}\p{N}+#.]+/gu)
+    .map((item) => item.trim())
+    .filter((item) => item.length >= 2 && !['岗位', '简历', '建议', '问题', '要求', '相关', '内容', '技能'].includes(item))
+
+  return Array.from(new Set(tokens)).slice(0, 10)
+}
+
+const normalizeRewriteFingerprintValue = (value: string | number | null | undefined) => {
+  if (value === null || value === undefined) {
+    return ''
+  }
+  return String(value).trim().replace(/\s+/g, ' ')
+}
+
+const buildRewriteFingerprint = () => {
+  return JSON.stringify({
+    resumeId: selectedResumeId.value,
+    jobDescriptionId: selectedJobDescriptionId.value,
+    matchId: selectedMatch.value?.matchId ?? '',
+    suggestionId: selectedSuggestion.value?.suggestionId ?? '',
+    suggestionIndex: selectedSuggestionItemIndex.value ?? '',
+    rewriteType: normalizeRewriteFingerprintValue(rewriteForm.rewriteType),
+    targetSection: normalizeRewriteFingerprintValue(rewriteForm.targetSection),
+    rewriteGoal: normalizeRewriteFingerprintValue(rewriteForm.rewriteGoal),
+    tone: normalizeRewriteFingerprintValue(rewriteForm.tone),
+    lengthLimit: rewriteForm.lengthLimit || '',
+    originalText: normalizeRewriteFingerprintValue(rewriteForm.originalText),
+  })
+}
+
 const resolveSuggestionRewriteType = (suggestion: AiResumeSuggestionItem) => {
   return resolveRewriteTypeFromSuggestion(suggestion)
 }
 
 const getSuggestionRewriteRecords = (suggestion: AiResumeSuggestionItem) => {
-  const targetSection = normalizeSuggestionText(suggestion.targetSection)
   const rewriteType = resolveSuggestionRewriteType(suggestion)
+  const keywords = extractSuggestionKeywords(suggestion)
 
   return selectedSuggestionRewriteSuggestions.value.filter((record) => {
-    return normalizeSuggestionText(record.targetSection) === targetSection
-      && record.rewriteType === rewriteType
+    if (record.rewriteType !== rewriteType) {
+      return false
+    }
+
+    const rewriteContent = [
+      record.targetSection,
+      record.originalText,
+      record.rewrittenText,
+      record.rewriteReason,
+      record.caution,
+    ].filter(Boolean).join(' ')
+
+    const hasKeywordMatch = keywords.some((keyword) => rewriteContent.includes(keyword))
+
+    if (isSameRewriteSection(record.targetSection, suggestion.targetSection)) {
+      return isGenericRewriteSection(record.targetSection) || isGenericRewriteSection(suggestion.targetSection)
+        ? hasKeywordMatch
+        : true
+    }
+
+    return hasKeywordMatch
   })
 }
 
@@ -845,6 +927,26 @@ const handleLoadOptimizationReport = async () => {
   }
 }
 
+const ensureEmbeddingReadyForMatch = async (resumeId: number, jobDescriptionId: number) => {
+  try {
+    const resumeEmbedding = await getResumeEmbeddingSummary(resumeId)
+    if (resumeEmbedding.embeddingStatus !== 'SUCCESS') {
+      await generateResumeEmbedding(resumeId)
+    }
+  } catch (error) {
+    ElMessage.warning(error instanceof Error ? `简历向量生成失败，继续常规匹配：${error.message}` : '简历向量生成失败，继续常规匹配')
+  }
+
+  try {
+    const jobEmbedding = await getJobDescriptionEmbeddingSummary(jobDescriptionId)
+    if (jobEmbedding.embeddingStatus !== 'SUCCESS') {
+      await generateJobDescriptionEmbedding(jobDescriptionId)
+    }
+  } catch (error) {
+    ElMessage.warning(error instanceof Error ? `岗位向量生成失败，继续常规匹配：${error.message}` : '岗位向量生成失败，继续常规匹配')
+  }
+}
+
 const handleMatch = async () => {
   if (!selectedResumeId.value || !selectedJobDescriptionId.value) {
     ElMessage.warning('请先选择简历和目标岗位')
@@ -864,6 +966,7 @@ const handleMatch = async () => {
   matching.value = true
 
   try {
+    await ensureEmbeddingReadyForMatch(selectedResumeId.value, selectedJobDescriptionId.value)
     const triggerResult = await triggerAiJobMatch(selectedResumeId.value, {
       jobDescriptionId: selectedJobDescriptionId.value,
     })
@@ -999,6 +1102,7 @@ const resetRewriteContext = () => {
   selectedSuggestionItem.value = null
   selectedSuggestionItemIndex.value = null
   latestDialogRewriteResult.value = null
+  latestDialogRewriteFingerprint.value = ''
   rewriteContextError.value = null
 }
 
@@ -1084,13 +1188,32 @@ const openRewriteDialog = (suggestion?: AiResumeSuggestionItem, suggestionIndex?
   rewriteDialogVisible.value = true
 }
 
-const handleGenerateRewrite = async () => {
+const focusLatestDialogRewriteRecord = () => {
+  if (latestDialogRewriteResult.value?.rewriteId) {
+    selectedRewriteSuggestion.value = rewriteSuggestions.value.find((item) => item.rewriteId === latestDialogRewriteResult.value?.rewriteId)
+      || latestDialogRewriteResult.value
+  }
+  activeMatchStage.value = 'rewrite'
+  rewriteDialogVisible.value = false
+}
+
+const handleGenerateRewrite = async (options: { force?: boolean } = {}) => {
   if (!selectedResumeId.value) {
     ElMessage.warning('请先选择简历')
     return
   }
   if (!canGenerateRewrite.value) {
     ElMessage.warning('请填写改写类型、目标部分和原文片段')
+    return
+  }
+
+  const currentFingerprint = buildRewriteFingerprint()
+  if (
+    !options.force
+    && latestDialogRewriteResult.value?.rewriteStatus === 'SUCCESS'
+    && latestDialogRewriteFingerprint.value === currentFingerprint
+  ) {
+    ElMessage.warning('当前内容已生成改写建议，请先查看结果，或修改内容后再重新生成。')
     return
   }
 
@@ -1118,6 +1241,7 @@ const handleGenerateRewrite = async () => {
     if (result.rewriteStatus === 'FAILED') {
       ElMessage.error(result.errorMessage || 'AI 局部改写生成失败')
     } else {
+      latestDialogRewriteFingerprint.value = currentFingerprint
       ElMessage.success('AI 局部改写生成完成')
       activeMatchStage.value = 'rewrite'
     }
@@ -1131,6 +1255,26 @@ const handleGenerateRewrite = async () => {
   } finally {
     generatingRewrite.value = false
   }
+}
+
+const handleRegenerateRewrite = async () => {
+  if (latestDialogRewriteResult.value?.rewriteStatus === 'SUCCESS') {
+    try {
+      await ElMessageBox.confirm(
+        '当前已有改写结果，重新生成会新增一条改写记录，是否继续？',
+        '确认重新生成',
+        {
+          confirmButtonText: '继续生成',
+          cancelButtonText: '取消',
+          type: 'warning',
+        },
+      )
+    } catch {
+      return
+    }
+  }
+
+  await handleGenerateRewrite({ force: true })
 }
 
 const handleUpdateRewriteAcceptStatus = async (acceptStatus: 'ACCEPTED' | 'REJECTED') => {
@@ -1702,8 +1846,8 @@ onMounted(() => {
                   <el-alert
                     v-if="selectedSuggestionRewriteSuggestions.length"
                     class="ai-match-rewrite-summary"
-                    :title="`当前建议已改写 ${selectedSuggestionRewriteSuggestions.length} 次`"
-                    :description="selectedSuggestionRewriteSuggestions[0]?.rewrittenText ? '可以直接查看最近一次改写结果，或继续生成新的版本。' : '可以直接查看最近一次改写结果，或继续生成新的版本。'"
+                    :title="`已关联 ${selectedSuggestionRewriteSuggestions.length} 次改写记录`"
+                    description="系统会按改写类型、目标章节和岗位关键词识别相近建议；一次改写可能让多条相似建议显示已改写，用于提醒你避免重复生成。"
                     type="success"
                     :closable="false"
                     show-icon
@@ -1751,6 +1895,20 @@ onMounted(() => {
                       </div>
                       <p><strong>问题：</strong>{{ suggestion.issue || '-' }}</p>
                       <p><strong>建议：</strong>{{ suggestion.suggestion || '-' }}</p>
+                      <div v-if="getSuggestionRewriteSummary(suggestion).latestRecord" class="ai-match-rewritten-banner">
+                        <div>
+                          <strong>已标记为相关改写</strong>
+                          <span>最近一次：{{ formatDateTime(getSuggestionRewriteSummary(suggestion).latestRecord!.updatedAt) }}</span>
+                        </div>
+                        <el-button
+                          size="small"
+                          type="success"
+                          plain
+                          @click="openExistingRewriteRecord(getSuggestionRewriteSummary(suggestion).latestRecord!)"
+                        >
+                          查看结果
+                        </el-button>
+                      </div>
                       <div class="ai-match-inline-actions">
                         <div class="ai-match-inline-actions-hint">
                           <strong>{{ getSuggestionRewriteSummary(suggestion).count > 0 ? '这条建议已改写' : '建议驱动改写' }}</strong>
@@ -1759,19 +1917,19 @@ onMounted(() => {
                         <el-space wrap>
                           <el-button
                             v-if="getSuggestionRewriteSummary(suggestion).latestRecord"
-                            plain
-                            type="success"
+                            type="primary"
                             @click="openExistingRewriteRecord(getSuggestionRewriteSummary(suggestion).latestRecord!)"
                           >
                             查看已改写
                           </el-button>
                           <el-button
-                            type="primary"
+                            :type="getSuggestionRewriteSummary(suggestion).count > 0 ? 'default' : 'primary'"
                             size="default"
-                            :icon="ArrowRight"
+                            :plain="getSuggestionRewriteSummary(suggestion).count > 0"
+                            :icon="getSuggestionRewriteSummary(suggestion).count > 0 ? undefined : ArrowRight"
                             @click="openRewriteDialog(suggestion, resolveSuggestionOriginalIndex(suggestion))"
                           >
-                            {{ getSuggestionRewriteSummary(suggestion).count > 0 ? '再次改写' : '基于此建议改写' }}
+                            {{ getSuggestionRewriteSummary(suggestion).count > 0 ? '重新生成' : '基于此建议改写' }}
                           </el-button>
                         </el-space>
                       </div>
@@ -2151,7 +2309,9 @@ onMounted(() => {
       </section>
 
       <template #footer>
-        <el-button @click="rewriteDialogVisible = false">取消</el-button>
+        <el-button @click="rewriteDialogVisible = false">
+          {{ latestDialogRewriteResult?.rewriteStatus === 'SUCCESS' ? '关闭' : '取消' }}
+        </el-button>
         <el-button
           v-if="latestDialogRewriteResult?.rewriteStatus === 'SUCCESS'"
           @click="copyRewriteResult(latestDialogRewriteResult.rewrittenText)"
@@ -2159,10 +2319,28 @@ onMounted(() => {
           复制改写结果
         </el-button>
         <el-button
+          v-if="latestDialogRewriteResult?.rewriteStatus === 'SUCCESS'"
+          plain
+          type="warning"
+          :loading="generatingRewrite"
+          :disabled="!canGenerateRewrite"
+          @click="handleRegenerateRewrite"
+        >
+          重新生成
+        </el-button>
+        <el-button
+          v-if="latestDialogRewriteResult?.rewriteStatus === 'SUCCESS'"
+          type="primary"
+          @click="focusLatestDialogRewriteRecord"
+        >
+          查看改写记录
+        </el-button>
+        <el-button
+          v-else
           type="primary"
           :loading="generatingRewrite"
           :disabled="!canGenerateRewrite"
-          @click="handleGenerateRewrite"
+          @click="handleGenerateRewrite()"
         >
           生成改写建议
         </el-button>
@@ -2786,6 +2964,36 @@ onMounted(() => {
 .ai-match-suggestion-item.is-rewritten {
   border-color: rgba(34, 197, 94, 0.34);
   background: linear-gradient(180deg, rgba(236, 253, 245, 0.9), var(--app-color-surface));
+}
+
+.ai-match-rewritten-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(34, 197, 94, 0.28);
+  border-radius: 12px;
+  background: rgba(236, 253, 245, 0.86);
+}
+
+.ai-match-rewritten-banner > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.ai-match-rewritten-banner strong {
+  color: var(--app-color-success);
+  font-size: 14px;
+}
+
+.ai-match-rewritten-banner span {
+  overflow: hidden;
+  color: var(--app-color-text-secondary);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ai-match-suggestion-head {

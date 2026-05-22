@@ -6,7 +6,7 @@ import EmptyState from '@/components/common/EmptyState.vue'
 import PageHeader from '@/components/common/PageHeader.vue'
 import SkeletonBlock from '@/components/common/SkeletonBlock.vue'
 import JobDescriptionCard from '@/components/job/JobDescriptionCard.vue'
-import { deleteJobDescription, getJobDescriptionList, parseJobDescription } from '@/api/job-description'
+import { deleteJobDescription, generateJobDescriptionEmbedding, getJobDescriptionList, parseJobDescription } from '@/api/job-description'
 import type { JobDescriptionDetail } from '@/types/job-description'
 
 const router = useRouter()
@@ -39,6 +39,9 @@ const handleParse = async (record: JobDescriptionDetail) => {
       ElMessage.error(next.errorMessage || '目标岗位解析失败')
     } else {
       ElMessage.success('目标岗位解析完成')
+      await generateJobDescriptionEmbedding(next.id).catch((error) => {
+        ElMessage.warning(error instanceof Error ? `岗位向量生成失败：${error.message}` : '岗位向量生成失败')
+      })
     }
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '目标岗位解析失败')

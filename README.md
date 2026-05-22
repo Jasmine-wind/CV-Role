@@ -2,7 +2,7 @@
 
 一句话介绍：本项目是一个面向求职场景的 AI 简历优化与岗位匹配系统，帮助用户围绕目标岗位完成简历解析、AI 诊断、匹配分析、优化建议、局部改写和岗位优化报告查看。
 
-项目采用前后端分离结构和文档驱动方式推进，阶段目标、任务拆分和迭代记录放在 `docs/` 目录下。
+项目采用前后端分离结构和文档驱动方式推进，最终文档入口见 [docs/README.md](docs/README.md)，项目收尾总结见 [docs/project-final-summary.md](docs/project-final-summary.md)。
 
 ## 项目核心价值
 
@@ -49,6 +49,8 @@
 ## 演示入口
 
 - [项目主线说明](docs/project-storyline.md)
+- [项目最终总结](docs/project-final-summary.md)
+- [线上部署与运维指南](docs/ai-resume-deployment-ops-guide.md)
 - [完整演示流程](docs/demo/demo-flow.md)
 - [虚构 Java 后端简历样例](docs/demo/demo-resume-java-backend.md)
 - [虚构 Java 后端岗位样例](docs/demo/demo-job-java-backend.md)
@@ -184,8 +186,8 @@ backend/src/main/resources/application-test.yaml
 - `EMBEDDING_API_KEY` 需要用户在本地 `.env` 或生产环境变量中自行配置，不要提交真实密钥。
 - 后续如果切换到 Qwen3-Embedding-4B 或 Qwen3-Embedding-8B，需要同步确认向量维度、历史向量数据兼容性和相似度查询策略。
 - `JWT_SECRET` 请使用足够长的随机字符串。
-- 当前 Phase 1 / Phase 2 仍使用本地文件存储，`LOCAL_STORAGE_BASE_DIR` 默认是 `uploads`。
-- `MINIO_*` 当前用于本地依赖服务编排预留，现有上传链路仍走本地文件存储。
+- 本地默认仍可使用本地文件存储，`LOCAL_STORAGE_BASE_DIR` 默认是 `uploads`。
+- 生产部署推荐使用 MinIO，设置 `APP_STORAGE_TYPE=minio` 并配置 `MINIO_*`。
 
 前端开发环境配置位于：
 
@@ -479,23 +481,16 @@ AI 分析结果只作为简历检查和表达优化参考。涉及教育经历�
 
 ## 文档
 
-- [项目总览](docs/01-project-overview.md)
+- [文档入口](docs/README.md)
+- [项目最终总结](docs/project-final-summary.md)
 - [项目主线说明](docs/project-storyline.md)
 - [完整演示流程](docs/demo/demo-flow.md)
+- [线上部署与运维指南](docs/ai-resume-deployment-ops-guide.md)
 - [Phase 1 MVP](docs/phase-1-mvp.md)
-- [Phase 2 工程化](docs/phase-2-engineering.md)
-- [Phase 3 AI 能力深化](docs/phase-3-ai.md)
+- [Phase 5 产品化部署收口](docs/phase-5-productization-deployment-v4.md)
 - [项目结构规范](docs/project-structure.md)
-- [Phase 1 任务清单](docs/tasks/phase-1-task-list.md)
-- [Phase 2 任务清单](docs/tasks/phase-2-task-list.md)
-- [Phase 3 任务清单](docs/tasks/phase-3-task-list.md)
 - [迭代日志](docs/iteration-log/)
 
 ## 后续规划
 
-Phase 1 MVP 和 Phase 2 工程化增强已完成。Phase 3 已围绕 AI 简历分析、岗位解析、岗位匹配、优化建议、局部改写、历史记录、解析质量和岗位优化报告持续增强。
-
-后续规划：
-
-- Phase 4：服务拆分边界、工程质量、可观测性和更清晰的架构治理。
-- Phase 5：产品化、部署、演示材料、上线配置和用户体验收口。
+当前项目已进入收尾阶段，后续重点不再继续扩展大功能，而是围绕线上稳定性、演示材料、简历项目包装和少量体验细节做维护。

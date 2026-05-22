@@ -8,7 +8,7 @@ import ErrorState from '@/components/common/ErrorState.vue'
 import PageHeader from '@/components/common/PageHeader.vue'
 import StatusTag from '@/components/common/StatusTag.vue'
 import JobParseResult from '@/components/job/JobParseResult.vue'
-import { deleteJobDescription, getJobDescriptionDetail, parseJobDescription } from '@/api/job-description'
+import { deleteJobDescription, generateJobDescriptionEmbedding, getJobDescriptionDetail, parseJobDescription } from '@/api/job-description'
 import type { JobDescriptionDetail, JobDescriptionStructuredContent } from '@/types/job-description'
 
 const route = useRoute()
@@ -84,6 +84,9 @@ const handleParse = async () => {
       ElMessage.error(detail.value.errorMessage || '目标岗位解析失败')
     } else {
       ElMessage.success('目标岗位解析完成')
+      await generateJobDescriptionEmbedding(detail.value.id).catch((error) => {
+        ElMessage.warning(error instanceof Error ? `岗位向量生成失败：${error.message}` : '岗位向量生成失败')
+      })
     }
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '目标岗位解析失败')

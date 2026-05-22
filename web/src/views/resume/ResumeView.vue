@@ -1164,6 +1164,7 @@ const startResumeTaskPolling = (taskId: number, resumeId: number | null, initial
             await loadAiAnalysis(resume)
           } else if (task.taskType === 'RESUME_PARSE') {
             await loadParseResult(resume)
+            await handleEmbedding(resume, { silent: true })
           }
         }
       }
@@ -1324,15 +1325,22 @@ const retryActiveAsyncTask = async () => {
   }
 }
 
-const handleEmbedding = async (resume: ResumeListItem) => {
+const handleEmbedding = async (resume: ResumeListItem, options: { silent?: boolean } = {}) => {
   embeddingResumeId.value = resume.id
 
   try {
     const task = await submitResumeEmbeddingTask(resume.id)
     startResumeTaskPolling(task.taskId, resume.id, task)
-    ElMessage.success('简历向量生成任务已提交')
+    if (!options.silent) {
+      ElMessage.success('简历向量生成任务已提交')
+    }
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '提交简历向量生成任务失败')
+    const message = error instanceof Error ? error.message : '提交简历向量生成任务失败'
+    if (options.silent) {
+      ElMessage.warning(`简历解析已完成，但向量生成未启动：${message}`)
+    } else {
+      ElMessage.error(message)
+    }
   } finally {
     embeddingResumeId.value = null
   }
@@ -1507,11 +1515,7 @@ onUnmounted(() => {
         eyebrow="我的简历"
         title="管理简历资产、结构化结果和简历诊断"
         description="本页只处理简历自身的上传、解析和质量诊断；岗位匹配和岗位优化建议进入“匹配与优化”页面。"
-      >
-        <template #actions>
-          <el-button type="primary" @click="openUploadPicker">上传新简历</el-button>
-        </template>
-      </PageHeader>
+      />
 
       <section class="resume-flow-panel">
         <div class="resume-flow-header">
@@ -1576,7 +1580,14 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <el-button type="success" :loading="uploading" @click="handleUpload">上传</el-button>
+        <el-button
+          type="primary"
+          :loading="uploading"
+          :disabled="!selectedUploadFiles.length"
+          @click="handleUpload"
+        >
+          上传所选文件
+        </el-button>
       </section>
 
       <section v-if="activeAsyncTask || asyncTaskError" class="resume-task-panel">
@@ -1705,8 +1716,6 @@ onUnmounted(() => {
               v-if="!loading && resumes.length === 0"
               title="你还没有上传简历"
               description="上传后可以进行简历解析、简历诊断和后续岗位匹配。"
-              action-text="上传第一份简历"
-              @action="openUploadPicker"
             />
           </div>
         </section>
@@ -1733,8 +1742,6 @@ onUnmounted(() => {
             v-else
             title="先选择一份简历"
             description="左侧选择简历后，右侧会显示概览、结构化结果、完整原文和简历诊断。"
-            action-text="上传新简历"
-            @action="openUploadPicker"
           />
 
       <section v-if="activeResume && activeDetailTab === 'overview'" class="resume-detail-panel">

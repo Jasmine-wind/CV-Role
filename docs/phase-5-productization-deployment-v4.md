@@ -242,7 +242,7 @@ systemd 仅作为管理 Docker Compose 启动命令的可选方案，不作为�
 
 ### Phase 4 收口状态
 
-- `docs/tasks/phase-4-task-list.md` 中 v3.1 - v3.8 均已标记为已完成。
+- Phase 4 的 v3.1 - v3.8 已完成，详细过程保留在 `docs/iteration-log/`。
 - Phase 4 已完成架构审查、包边界整理、文件存储抽象、异步任务基础、任务状态机、安全加固、部署配置和运维文档初版。
 - `docs/iteration-log/` 中已存在 v3.1 - v3.8 对应日志。
 
@@ -725,7 +725,7 @@ cd backend
 - [x] 检查日志脱敏。
 - [x] 检查错误信息是否暴露堆栈或路径。
 - [x] 检查 Docker Compose 中是否写死密钥。
-- [x] 创建 `docs/security-checklist.md` 或更新已有文档。
+- [x] 更新上线安全检查内容。
 - [x] 更新 `docs/iteration-log/v4.4-release-security-check.md`。
 
 ## 验收标准
@@ -748,7 +748,7 @@ cd backend
 
 - CORS 已从硬编码本地开发地址改为 `APP_CORS_ALLOWED_ORIGIN_PATTERNS` 环境变量配置。
 - 生产 Profile 要求显式配置允许来源。
-- 新增 `docs/security-checklist.md`，记录生产 `.env`、JWT、数据库、AI Key、文件访问、Redis、MinIO、日志、Compose 和 Nginx 的上线前检查项。
+- 上线安全检查内容已合并到 `docs/ai-resume-deployment-ops-guide.md`，覆盖生产 `.env`、JWT、数据库、AI Key、文件访问、Redis、MinIO、日志、Compose 和 Nginx。
 - 全局异常处理继续避免向用户返回堆栈，文件存储和 AI 异常使用通用用户文案。
 - Redis 仅用于非核心缓存，MinIO 文件访问仍通过后端权限校验链路。
 
@@ -1013,7 +1013,7 @@ Certbot + Nginx
 - `deploy/nginx/conf.d/ai-resume.conf` 已补充 `/.well-known/acme-challenge/` 路径，支持 Certbot 的 HTTP-01 验证。
 - 新增 `deploy/nginx/conf.d/ai-resume-https.conf` 作为正式 HTTPS 模板，包含 80 跳转和 443 SSL 反代配置。
 - `.env.production.example` 已增加 `DEPLOY_DOMAIN` 和 `CERTBOT_EMAIL`。
-- `docs/deployment.md` 已补充生产 Compose、HTTPS 和证书申请步骤。
+- 生产 Compose、HTTPS 和证书申请步骤已合并到 `docs/ai-resume-deployment-ops-guide.md`。
 
 ## v4.6 验证记录
 
@@ -1105,7 +1105,7 @@ docker compose -f docker-compose.prod.yml exec postgres \
 - [x] 编写日志查看脚本。
 - [x] 编写服务重启脚本。
 - [x] 编写运维文档。
-- [x] 更新 `docs/ops-guide.md`。
+- [x] 更新部署运维文档。
 - [x] 更新迭代日志。
 
 ## 验收标准
@@ -1122,8 +1122,7 @@ docker compose -f docker-compose.prod.yml exec postgres \
 ## v4.7 实现结果
 
 - 新增 `scripts/ops/`，集中放置 PostgreSQL 备份/恢复、MinIO 备份、上传文件备份、日志查看和服务重启脚本。
-- 新增 `docs/ops-guide.md`，给出脚本调用方式和默认约定。
-- 更新 `docs/ops.md`，将 Redis / MinIO / 日志 / 备份说明调整到当前真实状态。
+- 运维脚本调用方式、Redis / MinIO / 日志 / 备份说明已合并到 `docs/ai-resume-deployment-ops-guide.md`。
 
 ## v4.7 验证记录
 
