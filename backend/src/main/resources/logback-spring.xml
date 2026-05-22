@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <configuration>
-    <springProperty scope="context" name="LOG_FILE_PATH" source="LOG_FILE_PATH" defaultValue="/app/logs/backend.log"/>
     <springProperty scope="context" name="LOG_LEVEL_ROOT" source="LOG_LEVEL_ROOT" defaultValue="INFO"/>
     <springProperty scope="context" name="LOG_LEVEL_APP" source="LOG_LEVEL_APP" defaultValue="INFO"/>
 
@@ -12,25 +11,34 @@
         </encoder>
     </appender>
 
-    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
-        <file>${LOG_FILE_PATH}</file>
-        <append>true</append>
-        <encoder>
-            <pattern>${CONSOLE_PATTERN}</pattern>
-        </encoder>
-        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
-            <fileNamePattern>${LOG_FILE_PATH}.%d{yyyy-MM-dd}.%i.gz</fileNamePattern>
-            <maxFileSize>10MB</maxFileSize>
-            <maxHistory>14</maxHistory>
-            <totalSizeCap>1GB</totalSizeCap>
-        </rollingPolicy>
-    </appender>
-
     <logger name="com.winter.airesumeoptimizer" level="${LOG_LEVEL_APP}"/>
 
-    <root level="${LOG_LEVEL_ROOT}">
-        <appender-ref ref="CONSOLE"/>
-        <appender-ref ref="FILE"/>
-    </root>
-</configuration>
+    <springProfile name="test">
+        <root level="${LOG_LEVEL_ROOT}">
+            <appender-ref ref="CONSOLE"/>
+        </root>
+    </springProfile>
 
+    <springProfile name="!test">
+        <springProperty scope="context" name="LOG_FILE_PATH" source="LOG_FILE_PATH" defaultValue="logs/backend.log"/>
+
+        <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+            <file>${LOG_FILE_PATH}</file>
+            <append>true</append>
+            <encoder>
+                <pattern>${CONSOLE_PATTERN}</pattern>
+            </encoder>
+            <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+                <fileNamePattern>${LOG_FILE_PATH}.%d{yyyy-MM-dd}.%i.gz</fileNamePattern>
+                <maxFileSize>10MB</maxFileSize>
+                <maxHistory>14</maxHistory>
+                <totalSizeCap>1GB</totalSizeCap>
+            </rollingPolicy>
+        </appender>
+
+        <root level="${LOG_LEVEL_ROOT}">
+            <appender-ref ref="CONSOLE"/>
+            <appender-ref ref="FILE"/>
+        </root>
+    </springProfile>
+</configuration>

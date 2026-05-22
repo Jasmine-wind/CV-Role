@@ -11,8 +11,23 @@ interface ApiClient {
   delete<T>(url: string, config?: AxiosRequestConfig): Promise<T>
 }
 
+const resolveApiBaseUrl = () => {
+  const configuredBaseUrl = import.meta.env.VITE_API_BASE_URL ?? ''
+  const normalizedBaseUrl = configuredBaseUrl.trim().replace(/\/+$/, '')
+
+  if (normalizedBaseUrl === '/api') {
+    return ''
+  }
+
+  if (normalizedBaseUrl.endsWith('/api')) {
+    return normalizedBaseUrl.slice(0, -4)
+  }
+
+  return normalizedBaseUrl
+}
+
 const service = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8080',
+  baseURL: resolveApiBaseUrl(),
   timeout: 10000,
 })
 
