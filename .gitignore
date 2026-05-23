@@ -119,11 +119,7 @@ docs/demo/private/
 docs/demo/*private*
 
 # Local-only presentation images
-docs/screenshots/*.png
-docs/screenshots/*.jpg
-docs/screenshots/*.jpeg
-docs/screenshots/*.webp
-docs/architecture/*.png
+
 
 docs/project-package.md
 AGENTS.md
