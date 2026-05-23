@@ -1,496 +1,199 @@
 # AI 简历优化与岗位匹配系统
 
-一句话介绍：本项目是一个面向求职场景的 AI 简历优化与岗位匹配系统，帮助用户围绕目标岗位完成简历解析、AI 诊断、匹配分析、优化建议、局部改写和岗位优化报告查看。
+<p>
+  <img alt="Java 21" src="https://img.shields.io/badge/Java-21-007396">
+  <img alt="Spring Boot 3.5" src="https://img.shields.io/badge/Spring_Boot-3.5-6DB33F">
+  <img alt="Vue 3" src="https://img.shields.io/badge/Vue-3-42B883">
+  <img alt="PostgreSQL pgvector" src="https://img.shields.io/badge/PostgreSQL-pgvector-4169E1">
+  <img alt="AI Powered" src="https://img.shields.io/badge/AI-OpenAI--compatible-111827">
+</p>
 
-项目采用前后端分离结构和文档驱动方式推进，最终文档入口见 [docs/README.md](docs/README.md)，项目收尾总结见 [docs/project-final-summary.md](docs/project-final-summary.md)。
+一个面向求职场景的 AI 简历优化与岗位匹配系统。系统围绕“简历内容 + 目标岗位 JD”建立分析闭环，帮助用户完成简历解析、AI 诊断、岗位匹配、优化建议、局部改写、报告回看和历史追踪。
 
-## 项目核心价值
+本项目采用 Spring Boot + Vue 3 前后端分离架构，覆盖 JWT 鉴权、文件存储抽象、异步任务、AI 调用、Embedding、Redis、MinIO 和 Docker Compose 部署，适合作为 Java 后端 / AI 应用方向的项目展示。
 
-- 把“简历内容”和“目标岗位要求”放到同一个分析闭环中，而不是只做单次简历评分。
-- 将 AI 输出拆成可核查的匹配项、缺口、建议、改写和报告，避免直接生成不可追溯的大段结论。
-- 保留用户确认环节，AI 只做分析和表达优化，不替用户编造经历、技能、证书、奖项或量化指标。
-- 为本地演示和后续部署准备清晰主线：上传简历 -> 解析简历 -> 诊断简历 -> 解析岗位 -> 匹配岗位 -> 生成建议 -> 局部改写 -> 查看岗位优化报告 -> 回看历史。
+![AI 简历优化与岗位匹配工作台](docs/screenshots/readme-cover.png)
 
-## 核心功能流程
+## 项目亮点
+
+- 面向真实求职流程：从上传简历、解析岗位到优化报告，形成完整业务闭环。
+- 简历与岗位 JD 联合分析：不只做单次简历评分，而是围绕目标岗位识别优势、差距和风险。
+- AI 输出可追溯：匹配、建议、改写和报告均保留结构化结果与历史记录。
+- 控制 AI 边界：AI 只做分析和表达优化，不自动编造经历，不直接写回原始简历。
+- 工程链路完整：前后端分离、JWT 鉴权、异步任务、文件存储抽象、缓存和对象存储均已接入。
+- 可部署可运维：提供 Docker Compose 生产编排、Nginx、HTTPS、备份和日志运维说明。
+
+## 核心流程
 
 ```text
-注册 / 登录
+注册登录
   -> 上传简历
-  -> 简历文本提取与结构化解析
+  -> 简历解析
   -> AI 简历诊断
-  -> 新增并解析目标岗位
-  -> AI 岗位匹配
+  -> 目标岗位解析
+  -> 匹配分析
   -> 岗位优化建议
-  -> 局部改写建议
-  -> 岗位优化报告
+  -> 局部改写
+  -> 优化报告
   -> AI 历史回看
 ```
 
-## 当前已完成能力概览
+## 功能概览
 
-- 用户注册、登录和 JWT 鉴权。
-- PDF、DOC、DOCX 简历上传、本地文件存储和文本提取。
-- 简历结构化解析，支持解析模式、解析质量提示、解析结果展示和回归样例。
-- AI 简历分析，输出评分、优势、问题和建议摘要。
-- 目标岗位提交、岗位解析和岗位信息查看。
-- AI 岗位匹配，输出匹配分数、强匹配项、弱匹配项、缺失技能、风险提示和依据。
-- 岗位优化建议，按优先级聚合可执行修改建议。
-- AI 局部改写，支持采纳 / 拒绝状态管理。
-- 岗位优化报告，聚合匹配、建议、改写、下一步清单、模型信息和缺失依据 warning。
-- AI 历史记录，支持回看简历分析、岗位匹配、优化建议和局部改写结果。
-
-## AI 能力说明
-
-- AI 能力用于简历诊断、岗位匹配、优化建议、局部改写和报告聚合展示。
-- 岗位优化报告只聚合已有 AI 结果，不为了补依据重新调用 AI，不编造缺失依据。
-- 局部改写只优化表达，不应写入用户没有真实经历过的项目、技能、证书、奖项或量化指标。
-- 所有建议都需要用户结合真实经历确认后再使用。
-
-## 演示入口
-
-- [项目主线说明](docs/project-storyline.md)
-- [项目最终总结](docs/project-final-summary.md)
-- [线上部署与运维指南](docs/ai-resume-deployment-ops-guide.md)
-- [完整演示流程](docs/demo/demo-flow.md)
-- [虚构 Java 后端简历样例](docs/demo/demo-resume-java-backend.md)
-- [虚构 Java 后端岗位样例](docs/demo/demo-job-java-backend.md)
-
-## 功能特性
-
-- 用户注册、登录和 JWT 鉴权
-- PDF、DOC、DOCX 简历上传
-- 本地文件存储
-- 简历文本提取和基础结构化解析
-- AI 简历分析，输出评分、优势、问题和建议摘要
-- 目标岗位提交、解析和详情查看
-- AI 岗位匹配
-- 基于匹配差距的岗位优化建议
-- AI 局部改写建议
-- 岗位优化报告
-- 用户维度历史记录，聚合上传、解析、AI 分析和岗位匹配状态
+| 模块 | 能力 | 状态 |
+|---|---|---|
+| 用户与鉴权 | 注册、登录、JWT 鉴权、当前用户识别 | 已完成 |
+| 简历上传与解析 | PDF / DOC / DOCX 上传、文本提取、结构化解析、完整原文查看 | 已完成 |
+| AI 简历诊断 | 优势、问题、建议和下一步方向 | 已完成 |
+| 目标岗位 | 用户粘贴 JD、岗位画像、核心技能、职责和经验信号 | 已完成 |
+| 匹配分析 | 匹配分数、强弱匹配、缺失技能、风险提醒和依据 | 已完成 |
+| 优化建议 | 按优先级输出可执行修改方向 | 已完成 |
+| 局部改写 | 基于建议改写真实片段，支持采纳状态管理 | 已完成 |
+| AI 历史 | 按结果类型回看用户可读报告 | 已完成 |
+| 部署运维 | Docker Compose、Nginx、HTTPS、Redis、MinIO、备份脚本 | 已完成 |
 
 ## 技术栈
 
-后端：
+| 方向 | 技术 |
+|---|---|
+| 后端 | Java 21、Spring Boot 3.5、Spring Security、JWT、MyBatis-Plus、Flyway |
+| 前端 | Vue 3、TypeScript、Vite、Pinia、Vue Router、Element Plus、Axios、SCSS |
+| 数据与存储 | PostgreSQL、pgvector、Redis、MinIO、本地文件存储 |
+| AI 能力 | OpenAI-compatible Chat API、SiliconFlow OpenAI-compatible Embeddings API |
+| 部署运维 | Docker Compose、Nginx、Let's Encrypt HTTPS、Shell 运维脚本 |
 
-- Java 21
-- Spring Boot 3.5.12
-- Spring Web
-- Spring Security
-- JWT
-- MyBatis-Plus
-- PostgreSQL
-- Flyway
-- PDFBox
-- Apache POI
-- OpenAPI / Swagger UI
-- OpenAI-compatible API 调用适配
-- Maven Wrapper
+## 系统架构
 
-前端：
+![系统总体架构](docs/architecture/a11cd1e7-642f-4119-917d-0b9c052d15c4.png)
 
-- Vue 3
-- TypeScript
-- Vite
-- Pinia
-- Vue Router
-- Axios
-- Element Plus
+说明：
+
+- 前端通过同域 `/api` 或本地代理访问后端。
+- 后端统一适配 AI Chat API 和 Embedding API，前端不接触真实密钥。
+- Redis 只缓存可重新生成内容，不替代数据库核心状态。
+- MinIO / 本地文件存储通过后端存储抽象切换，文件访问仍经过权限校验。
 
 ## 项目结构
 
 ```text
 .
-├── backend/                  # Spring Boot 后端项目
-│   ├── src/main/java/
-│   ├── src/main/resources/
-│   │   ├── application.yaml
-│   │   └── db/init/          # 数据库初始化 SQL
-│   └── pom.xml
-├── web/                      # Vue 3 + Vite 前端项目
-│   ├── src/
-│   └── package.json
-├── docs/                     # 项目文档、阶段任务、迭代日志
-├── deploy/                   # 部署相关文件，当前阶段可为空
-├── AGENTS.md
-└── README.md
+├── backend/                 # Spring Boot 后端
+│   ├── src/main/java/       # 业务代码
+│   └── src/main/resources/  # 配置、Flyway 迁移、Mapper
+├── web/                     # Vue 3 + Vite 前端
+│   └── src/                 # 页面、组件、API、状态和样式
+├── docs/                    # 项目文档、展示材料、迭代日志
+├── deploy/                  # Nginx 与部署配置
+├── scripts/                 # 运维脚本
+├── docker-compose.yml       # 本地依赖服务
+└── docker-compose.prod.yml  # 生产部署编排
 ```
 
-后端业务模块位于：
+后端业务代码集中在 `backend/src/main/java/com/winter/airesumeoptimizer/module/`，按 `auth`、`user`、`resume`、`job`、`analysis`、`history` 等模块组织。
 
-```text
-backend/src/main/java/com/winter/airesumeoptimizer/module/
-```
+## 快速启动
 
-当前主要模块：
-
-- `auth`：注册、登录
-- `user`：当前用户信息
-- `resume`：简历上传、解析、删除
-- `analysis`：AI 简历分析
-- `job`：岗位和岗位匹配
-- `history`：历史记录聚合查询
-
-## 本地环境要求
-
-- JDK 21+
-- Node.js 20.19+ 或 22.12+
-- PostgreSQL 14+
-- 可用的 OpenAI-compatible 模型服务 API Key
-
-## 环境变量
-
-后端默认使用 `local` profile，也可以通过 `SPRING_PROFILES_ACTIVE` 切换到 `dev`、`prod` 或 `test`。公共配置位于：
-
-```text
-backend/src/main/resources/application.yaml
-```
-
-本地开发配置位于：
-
-```text
-backend/src/main/resources/application-local.yaml
-```
-
-开发测试环境配置位于：
-
-```text
-backend/src/main/resources/application-dev.yaml
-```
-
-生产部署配置位于：
-
-```text
-backend/src/main/resources/application-prod.yaml
-```
-
-测试环境预留配置位于：
-
-```text
-backend/src/main/resources/application-test.yaml
-```
-
-后端会读取仓库根目录 `.env` 或 `backend/.env`。本地可参考 `.env.example` 在仓库根目录创建 `.env`，并替换数据库密码、`JWT_SECRET`、AI API Key、Embedding API Key 和 MinIO 密钥。
-
-说明：
-
-- 不要提交 `.env`。
-- `.env.example` 只保留本地示例值和占位符，可以提交。
-- 示例密码仅用于本地开发，不要用于共享环境或生产部署。
-- `AI_API_KEY` 是推荐的 AI 客户端 API Key 环境变量名，旧的 `DASHSCOPE_API_KEY` 仍作为兼容 fallback。
-- AI base URL 推荐通过 `AI_BASE_URL` 覆盖，旧的 `OPENAI_BASE_URL` 仍作为兼容 fallback，默认是 `https://api.deepseek.com`。
-- AI 模型、温度、超时和输出长度推荐使用 `AI_MODEL`、`AI_TEMPERATURE`、`AI_TIMEOUT_SECONDS`、`AI_MAX_TOKENS`。
-- Embedding 使用独立的 `EMBEDDING_*` 配置；当前默认接入 SiliconFlow OpenAI-compatible Embeddings API。
-- `EMBEDDING_BASE_URL` 默认是 `https://api.siliconflow.cn/v1`，客户端内部会拼接 `/embeddings`，不要把 base-url 配成 `/embeddings` 结尾。
-- `EMBEDDING_MODEL` 默认是 `Qwen/Qwen3-Embedding-0.6B`，`EMBEDDING_DIMENSION` 默认是 `1024`，请求体会携带 `dimensions=1024`。
-- `EMBEDDING_API_KEY` 需要用户在本地 `.env` 或生产环境变量中自行配置，不要提交真实密钥。
-- 后续如果切换到 Qwen3-Embedding-4B 或 Qwen3-Embedding-8B，需要同步确认向量维度、历史向量数据兼容性和相似度查询策略。
-- `JWT_SECRET` 请使用足够长的随机字符串。
-- 本地默认仍可使用本地文件存储，`LOCAL_STORAGE_BASE_DIR` 默认是 `uploads`。
-- 生产部署推荐使用 MinIO，设置 `APP_STORAGE_TYPE=minio` 并配置 `MINIO_*`。
-
-前端开发环境配置位于：
-
-```text
-web/.env.development
-```
-
-生产构建默认配置位于：
-
-```text
-web/.env.production
-```
-
-开发环境默认请求：
-
-```text
-http://localhost:8080
-```
-
-如需在本机覆盖后端地址，可在 `web/.env.local` 中配置：
-
-```properties
-VITE_API_BASE_URL=http://localhost:8080
-```
-
-## PostgreSQL 初始化与迁移
-
-推荐先使用 Compose 启动本地依赖服务：
+### 1. 启动依赖服务
 
 ```bash
 docker compose up -d postgres redis minio
 ```
 
-如果使用 Podman：
+本地开发依赖包括 PostgreSQL、Redis 和 MinIO。也可以只使用本地文件存储，具体配置见 `.env.example`。
+
+### 2. 配置环境变量
+
+复制示例配置：
 
 ```bash
-podman compose up -d postgres redis minio
+cp .env.example .env
 ```
 
-服务端口：
-
-```text
-PostgreSQL: localhost:5433
-Redis:      localhost:6379
-MinIO API:  http://localhost:9000
-MinIO 控制台: http://localhost:9001
-```
-
-当前 `docker-compose.yml` 只编排本地依赖服务，不包含后端和前端应用镜像。后端仍通过 `cd backend && ./mvnw spring-boot:run` 启动，前端仍通过 `cd web && npm run dev` 启动；应用容器化和反向代理配置会在后续部署任务中继续整理。
-
-Nginx 反向代理草案位于 `deploy/nginx/ai-resume.conf`。该文件仅用于后续部署准备，需要替换域名、前端静态文件路径并单独配置 HTTPS 后再用于真实服务器。
-
-默认 PostgreSQL 配置与 `.env.example` 一致：
+至少检查以下变量：
 
 ```properties
-POSTGRES_DB=ai_resume_optimizer
-POSTGRES_USER=dawn
-POSTGRES_PASSWORD=change-me-local-postgres-password
-```
-
-如果不使用 Compose，也可以手动创建数据库：
-
-```bash
-createdb ai_resume_optimizer
-```
-
-确认 `.env` 中的数据库连接信息和本机一致：
-
-```properties
-DB_URL=jdbc:postgresql://localhost:5432/ai_resume_optimizer
+DB_URL=jdbc:postgresql://localhost:5433/ai_resume_optimizer
 DB_USERNAME=dawn
 DB_PASSWORD=change-me-local-postgres-password
+JWT_SECRET=change-me-to-a-long-random-secret
+
+AI_API_KEY=your-ai-api-key
+AI_BASE_URL=https://api.deepseek.com
+AI_MODEL=deepseek-chat
+
+EMBEDDING_API_KEY=your-siliconflow-api-key
 ```
 
-启动后端后，Flyway 会自动执行迁移脚本：
+完整配置说明见 [.env.example](.env.example) 和 [部署与运维文档](docs/ai-resume-deployment-ops-guide.md)。
+
+### 3. 启动后端
 
 ```bash
 cd backend
 ./mvnw spring-boot:run
 ```
 
-Flyway 脚本位于：
-
-```text
-backend/src/main/resources/db/migration/
-```
-
-当前迁移会创建 Phase 1 所需表，并预置 Phase 1 岗位数据。`backend/src/main/resources/db/init/` 下的 SQL 保留为历史初始化脚本，不再作为推荐初始化方式。
-
-已有本地数据库如果已经手动建过表，当前配置会通过 `baseline-on-migrate` 接管，并继续执行后续迁移。
-
-## pgvector 本地环境结论
-
-v2.8.1 检查时，Compose 中的 PostgreSQL 镜像为：
-
-```text
-postgres:16-alpine
-```
-
-本地检查结果：
-
-- PostgreSQL 版本：16.13。
-- 当前镜像未安装 `vector` 扩展。
-- `CREATE EXTENSION IF NOT EXISTS vector;` 会失败，错误原因是缺少 `vector.control`。
-- 因此当前本地数据库不能直接使用 pgvector。
-
-v2.8.2 已将 Compose PostgreSQL 镜像调整为：
-
-```text
-pgvector/pgvector:pg16
-```
-
-本地如果已经创建过旧容器，需要重新创建 PostgreSQL 容器后，Flyway 才能执行扩展初始化和向量表迁移。
-
-后续迁移由 Flyway 执行扩展初始化：
-
-```sql
-CREATE EXTENSION IF NOT EXISTS vector;
-```
-
-当前 Embedding API 使用 SiliconFlow OpenAI-compatible 接口，默认配置为 `EMBEDDING_BASE_URL=https://api.siliconflow.cn/v1`、`EMBEDDING_MODEL=Qwen/Qwen3-Embedding-0.6B`、`EMBEDDING_DIMENSION=1024`。客户端请求完整地址为 `https://api.siliconflow.cn/v1/embeddings`，请求体包含 `model`、`input` 和 `dimensions`。`EMBEDDING_API_KEY` 需要用户在本地 `.env` 或生产环境变量中配置，不能提交真实密钥。当前向量表使用不固定维度的 `vector` 字段，并用 `embedding_dimension` 记录实际维度；pgvector 不可用时，只能作为开发过渡临时保存 Embedding JSON 字符串，不能作为最终方案。
-
-本地可用以下方式验证 Embedding 服务配置：
-
-```bash
-curl https://api.siliconflow.cn/v1/embeddings \
-  -H "Authorization: Bearer $EMBEDDING_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "Qwen/Qwen3-Embedding-0.6B",
-    "input": "AI 简历优化与岗位匹配系统",
-    "dimensions": 1024
-  }'
-```
-
-停止本地依赖服务：
-
-```bash
-docker compose down
-```
-
-如需同时删除本地数据卷：
-
-```bash
-docker compose down -v
-```
-
-## 对象存储
-
-当前 Phase 1 使用本地文件存储，上传文件默认保存到：
-
-```text
-backend/uploads/
-```
-
-因此本阶段不需要启动 MinIO。
-
-如果后续切换到 MinIO，应在 `deploy/` 中补充对象存储配置，并同步修改后端存储实现和 README。
-
-## 后端启动
-
-进入后端目录：
-
-```bash
-cd backend
-```
-
-运行测试：
-
-```bash
-./mvnw test
-```
-
-启动后端：
-
-```bash
-./mvnw spring-boot:run
-```
-
-默认服务地址：
+后端默认地址：
 
 ```text
 http://localhost:8080
 ```
 
-## 接口文档
+### 4. 启动前端
 
-后端启动后可访问接口文档：
+```bash
+cd web
+npm install
+npm run dev
+```
+
+前端默认地址：
+
+```text
+http://localhost:5173
+```
+
+## API 文档
+
+后端启动后访问：
 
 ```text
 Swagger UI: http://localhost:8080/swagger-ui/index.html
 OpenAPI JSON: http://localhost:8080/v3/api-docs
 ```
 
-需要登录的接口使用 `bearerAuth` 认证方案。调试时先调用 `/api/auth/login` 获取返回的 `token`，再在 Swagger UI 右上角 `Authorize` 中填写该 token。
+需要登录的接口使用 `bearerAuth`。调试时先调用 `/api/auth/login` 获取 token，再在 Swagger UI 的 `Authorize` 中填写。
 
-## 前端启动
+## 部署说明
 
-进入前端目录：
-
-```bash
-cd web
-```
-
-安装依赖：
+生产部署使用 `docker-compose.prod.yml`，包含 Nginx、Backend、PostgreSQL + pgvector、Redis、MinIO 和 certbot。
 
 ```bash
-npm install
+docker compose -f docker-compose.prod.yml --env-file .env up -d --build
 ```
 
-启动开发服务：
+完整部署、HTTPS、日志、备份、更新和排障流程见 [线上部署与运维指南](docs/ai-resume-deployment-ops-guide.md)。
 
-```bash
-npm run dev
-```
+## 项目展示
 
-默认访问地址：
+项目展示流程、公开示例数据和讲解要点见 [项目展示指南](docs/demo-guide.md)。
 
-```text
-http://localhost:5173
-```
+本仓库不提交真实个人简历附件、页面截图和架构图图片；截图与架构图可作为本地展示素材保留，文档中已配置本地引用路径。
 
-构建检查：
+## 文档导航
 
-```bash
-npm run build
-```
+| 文档 | 内容 |
+|---|---|
+| [docs/README.md](docs/README.md) | 文档总入口 |
+| [docs/demo-guide.md](docs/demo-guide.md) | 展示流程、公开示例数据、架构讲解 |
+| [docs/project-final-summary.md](docs/project-final-summary.md) | 项目最终总结、阶段成果、边界说明 |
+| [docs/ai-resume-deployment-ops-guide.md](docs/ai-resume-deployment-ops-guide.md) | 生产部署、HTTPS、运维、备份和排障 |
+| [docs/project-structure.md](docs/project-structure.md) | 目录结构和代码放置规范 |
 
-## 演示流程
+## 项目边界
 
-完整演示流程见 [docs/demo/demo-flow.md](docs/demo/demo-flow.md)。
-
-推荐主线：
-
-1. 注册并登录演示用户。
-2. 上传虚构 Java 后端简历。
-3. 解析简历并查看结构化结果。
-4. 触发 AI 简历诊断。
-5. 新增并解析虚构 Java 后端岗位。
-6. 触发 AI 岗位匹配。
-7. 生成岗位优化建议。
-8. 对关键项目片段生成局部改写。
-9. 查看岗位优化报告。
-10. 进入 AI 历史记录回看完整过程。
-
-## 测试账号
-
-当前项目不预置测试账号。首次本地运行时请通过注册页面创建演示用户。
-
-## CI
-
-项目提供基础 GitHub Actions workflow：
-
-```text
-.github/workflows/ci.yml
-```
-
-CI 会执行：
-
-- 后端 `./mvnw test`
-- 前端 `npm ci`
-- 前端 `npm run build`
-
-后端 CI 会启动 PostgreSQL 服务容器，真实 AI smoke test 仍按环境变量条件跳过。
-
-## 常见问题
-
-### 前端提示“无法连接后端服务”
-
-确认后端已启动，并检查 `VITE_API_BASE_URL` 是否指向 `http://localhost:8080`。
-
-### 后端启动时报数据库连接失败
-
-确认 PostgreSQL 已启动，数据库 `ai_resume_optimizer` 已创建，`.env` 中的 `DB_PASSWORD` 与本机数据库密码一致。
-
-### AI 分析失败
-
-检查 `.env` 中的 `AI_API_KEY`、`AI_BASE_URL`、`AI_MODEL` 是否匹配当前服务商；旧变量 `DASHSCOPE_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_MODEL` 仍可兼容，但新环境优先使用 `AI_*`。
-
-### AI 输出限制
-
-AI 分析结果只作为简历检查和表达优化参考。涉及教育经历、工作经历、项目经历、技能、证书、奖项和量化指标的内容，必须由用户确认真实后再使用。系统不应代替用户编造不存在的经历或数据。
-
-### 上传简历失败
-
-当前仅支持 PDF、DOC、DOCX，单个文件最大 10 MB。
-
-### 看不到岗位数据
-
-确认后端已正常启动，Flyway 会自动执行 `backend/src/main/resources/db/migration/` 下的迁移脚本并写入预置岗位数据。
-
-## 文档
-
-- [文档入口](docs/README.md)
-- [项目最终总结](docs/project-final-summary.md)
-- [项目主线说明](docs/project-storyline.md)
-- [完整演示流程](docs/demo/demo-flow.md)
-- [线上部署与运维指南](docs/ai-resume-deployment-ops-guide.md)
-- [Phase 1 MVP](docs/phase-1-mvp.md)
-- [Phase 5 产品化部署收口](docs/phase-5-productization-deployment-v4.md)
-- [项目结构规范](docs/project-structure.md)
-- [迭代日志](docs/iteration-log/)
-
-## 后续规划
-
-当前项目已进入收尾阶段，后续重点不再继续扩展大功能，而是围绕线上稳定性、演示材料、简历项目包装和少量体验细节做维护。
+- AI 只做简历诊断、岗位匹配、优化建议、局部改写和报告聚合展示。
+- AI 不自动编造教育经历、工作经历、项目经历、技能、证书、奖项或量化指标。
+- 局部改写不会自动写回原始简历，是否采纳由用户确认。
+- 岗位优化报告聚合已有结果，不为了补依据重复调用 AI。
+- 所有建议都需要用户结合真实经历确认后再使用。

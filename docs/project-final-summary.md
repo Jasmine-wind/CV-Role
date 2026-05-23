@@ -10,6 +10,31 @@
 
 系统不是传统后台管理系统，也不是一次性简历评分工具，而是一个以“岗位匹配决策”和“简历表达优化”为主线的 AI SaaS 工作台。
 
+## 项目背景与主线
+
+普通求职者常见问题是：简历内容写了很多，但不知道是否命中目标岗位；AI 可以生成建议，但如果缺少依据和用户确认，容易变成泛泛而谈甚至不真实内容。
+
+本项目采用“简历 + 用户粘贴目标岗位 JD + AI 结果聚合”的方式组织主流程：
+
+```text
+简历上传与解析
+  -> 简历诊断
+  -> 目标岗位提交与解析
+  -> 匹配分析
+  -> 岗位优化建议
+  -> 局部改写
+  -> 岗位优化报告
+  -> AI 结果回看
+```
+
+关键边界：
+
+- AI 结果必须尽量结构化，便于展示、回看和验证。
+- AI 建议只作为修改参考，不直接替用户编造事实。
+- 岗位优化报告只聚合已有结果，不为了补依据重新调用 AI。
+- 目标岗位以用户粘贴 JD 为主，岗位库只作为参考入口。
+- 缺少依据时保留 warning，让用户知道哪些结果需要谨慎确认。
+
 ## 当前核心能力
 
 - 用户注册、登录、JWT 鉴权。
@@ -77,7 +102,7 @@
 | Phase 2 | 完成配置、异常、Flyway、日志、测试、OpenAPI 和本地编排工程化。 |
 | Phase 3 | 完成目标岗位解析、AI 匹配、优化建议、局部改写、AI 历史、评估、Embedding/RAG 和解析质量优化。 |
 | Phase 4 | 完成架构审查、包结构整理、文件存储抽象、异步任务、安全加固和部署配置准备。 |
-| Phase 5 | 完成 Redis、MinIO、Docker Compose、HTTPS、运维脚本、线上部署和项目包装。 |
+| Phase 5 | 完成 Redis、MinIO、Docker Compose、HTTPS、运维脚本、线上部署和 GitHub 展示文档。 |
 
 详细过程保留在 `docs/iteration-log/`。
 
@@ -93,6 +118,7 @@
 ```text
 docs/ai-resume-deployment-ops-guide.md
 ```
+
 
 ## 主要验收路径
 
@@ -115,8 +141,6 @@ docs/ai-resume-deployment-ops-guide.md
 - 项目总结：`docs/project-final-summary.md`
 - 结构规范：`docs/project-structure.md`
 - 部署运维：`docs/ai-resume-deployment-ops-guide.md`
-- 当前阶段：`docs/phase-5-productization-deployment-v4.md`
 - 历史记录：`docs/iteration-log/`
-- 演示与评估：`docs/demo/`、`docs/evaluation/`
+- 展示材料：`docs/demo-guide.md`、`docs/demo/`
 
-旧的重复部署文档、运维文档、排障文档、阶段任务草稿和临时 Codex 任务文档已合并删除。

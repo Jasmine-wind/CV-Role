@@ -779,4 +779,4 @@ docker compose -f docker-compose.prod.yml --env-file .env exec postgres   sh -lc
 https://resume.dawn04.xyz
 ```
 
-README、演示文档、简历项目描述中统一使用该地址。
+README、项目展示文档和部署文档中统一使用该地址。

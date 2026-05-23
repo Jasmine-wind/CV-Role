@@ -603,10 +603,9 @@ docs/
 ├── 00-development-workflow.md
 ├── 01-project-overview.md
 ├── project-structure.md
-├── phase-1-mvp.md
-├── phase-2-engineering.md
-├── phase-3-ai.md
-└── phase-4-architecture.md
+├── project-final-summary.md
+├── demo-guide.md
+└── ai-resume-deployment-ops-guide.md
 ```
 
 ### 10.1 迭代日志规则

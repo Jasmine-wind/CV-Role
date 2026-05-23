@@ -10,23 +10,16 @@
    - 当前能力、技术架构、阶段成果、边界说明和后续可讲解重点。
 3. [线上部署与运维指南](ai-resume-deployment-ops-guide.md)
    - Docker Compose 生产部署、HTTPS、更新流程、日志、备份和常见问题。
-4. [项目结构规范](project-structure.md)
+4. [项目展示指南](demo-guide.md)
+   - 本地体验环境、公开示例数据、展示流程、架构讲解和讲解重点。
+5. [项目结构规范](project-structure.md)
    - 代码目录、后端包结构、前端目录、文档和部署文件放置规则。
-5. [Phase 5 收口文档](phase-5-productization-deployment-v4.md)
-   - 产品化、部署、运维和项目包装阶段的最终执行记录。
 
-## 演示材料
+## 展示材料
 
-- [完整演示流程](demo/demo-flow.md)
+- [项目展示指南](demo-guide.md)
 - [Java 后端简历样例](demo/demo-resume-java-backend.md)
 - [Java 后端岗位样例](demo/demo-job-java-backend.md)
-
-## 评估材料
-
-- [评估说明](evaluation/README.md)
-- [解析问题样例](evaluation/parse/parse-issue-samples.md)
-- [解析报告](evaluation/parse/parse-report.md)
-- [评估报告](evaluation/reports/evaluation-report-v1.md)
 
 ## 历史记录
 
@@ -38,5 +31,5 @@
 
 - 新增部署、HTTPS、备份、日志、排障内容，统一更新 `ai-resume-deployment-ops-guide.md`。
 - 新增项目介绍、技术亮点、功能边界，统一更新 `project-final-summary.md` 和根目录 `README.md`。
+- 新增展示步骤、架构讲解和公开示例数据，优先更新 `demo-guide.md` 和 `demo/`。
 - 新增阶段执行记录，统一写入 `iteration-log/`。
-- 不再新增临时 Codex 提示词文档、重复部署文档、重复运维文档。
