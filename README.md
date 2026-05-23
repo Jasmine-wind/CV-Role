@@ -12,6 +12,8 @@
 
 本项目采用 Spring Boot + Vue 3 前后端分离架构，覆盖 JWT 鉴权、文件存储抽象、异步任务、AI 调用、Embedding、Redis、MinIO 和 Docker Compose 部署，适合作为 Java 后端 / AI 应用方向的项目展示。
 
+项目系统地址：[https://resume.dawn04.xyz](https://resume.dawn04.xyz)
+
 ![AI 简历优化与岗位匹配工作台](docs/screenshots/readme-cover.png)
 
 ## 项目亮点
