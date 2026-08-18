@@ -19,6 +19,7 @@ import com.winter.airesumeoptimizer.common.exception.GlobalExceptionHandler;
 import com.winter.airesumeoptimizer.common.logging.RequestIdFilter;
 import com.winter.airesumeoptimizer.config.OpenApiConfig;
 import com.winter.airesumeoptimizer.config.SecurityConfig;
+import com.winter.airesumeoptimizer.module.analysis.controller.JobAnalysisController;
 import com.winter.airesumeoptimizer.module.analysis.controller.JobOptimizationReportController;
 import com.winter.airesumeoptimizer.module.analysis.controller.ResumeAnalysisController;
 import com.winter.airesumeoptimizer.module.analysis.controller.AiRewriteSuggestionController;
@@ -36,8 +37,10 @@ import com.winter.airesumeoptimizer.module.analysis.entity.ResumeAiAnalysis;
 import com.winter.airesumeoptimizer.module.analysis.service.AiJobMatchService;
 import com.winter.airesumeoptimizer.module.analysis.service.AiResumeSuggestionService;
 import com.winter.airesumeoptimizer.module.analysis.service.AiRewriteSuggestionService;
+import com.winter.airesumeoptimizer.module.analysis.service.JobAnalysisService;
 import com.winter.airesumeoptimizer.module.analysis.service.JobOptimizationReportService;
 import com.winter.airesumeoptimizer.module.analysis.service.ResumeAnalysisService;
+import com.winter.airesumeoptimizer.module.analysis.vo.JobAnalysisStartVO;
 import com.winter.airesumeoptimizer.module.analysis.vo.JobOptimizationReportVO;
 import com.winter.airesumeoptimizer.module.auth.controller.AuthController;
 import com.winter.airesumeoptimizer.module.auth.dto.LoginRequestDTO;
@@ -70,10 +73,12 @@ import com.winter.airesumeoptimizer.module.job.vo.JobMatchResultVO;
 import com.winter.airesumeoptimizer.module.resume.controller.ResumeController;
 import com.winter.airesumeoptimizer.module.resume.service.ResumeService;
 import com.winter.airesumeoptimizer.module.resume.service.ResumeAsyncTaskService;
+import com.winter.airesumeoptimizer.module.resume.service.ResumeIntakeService;
 import com.winter.airesumeoptimizer.module.resume.vo.ResumeDetailVO;
 import com.winter.airesumeoptimizer.module.resume.vo.ResumeListVO;
 import com.winter.airesumeoptimizer.module.resume.vo.ResumeParseResultVO;
 import com.winter.airesumeoptimizer.module.resume.vo.ResumeUploadVO;
+import com.winter.airesumeoptimizer.module.task.vo.AsyncTaskVO;
 import com.winter.airesumeoptimizer.module.user.controller.UserController;
 import com.winter.airesumeoptimizer.module.user.service.UserService;
 import com.winter.airesumeoptimizer.module.user.vo.UserProfileVO;
@@ -103,6 +108,7 @@ import org.springframework.web.multipart.MultipartFile;
         UserController.class,
         ResumeController.class,
         ResumeAnalysisController.class,
+        JobAnalysisController.class,
         JobOptimizationReportController.class,
         AiRewriteSuggestionController.class,
         JobController.class,
@@ -149,6 +155,9 @@ class Phase1ApiIntegrationTest {
     private ResumeAsyncTaskService resumeAsyncTaskService;
 
     @MockitoBean
+    private ResumeIntakeService resumeIntakeService;
+
+    @MockitoBean
     private ResumeAnalysisService resumeAnalysisService;
 
     @MockitoBean
@@ -159,6 +168,9 @@ class Phase1ApiIntegrationTest {
 
     @MockitoBean
     private AiRewriteSuggestionService aiRewriteSuggestionService;
+
+    @MockitoBean
+    private JobAnalysisService jobAnalysisService;
 
     @MockitoBean
     private JobOptimizationReportService jobOptimizationReportService;
@@ -385,19 +397,78 @@ class Phase1ApiIntegrationTest {
     }
 
     @Test
+    void jobAnalysisEndpointShouldStartDefaultFlowAndValidateInput() throws Exception {
+        when(jobAnalysisService.start(eq(1L), any())).thenReturn(JobAnalysisStartVO.builder()
+                .taskId(1000L)
+                .resumeId(100L)
+                .jobDescriptionId(10L)
+                .build());
+        when(jobAnalysisService.retry(1L, 100L, 10L)).thenReturn(JobAnalysisStartVO.builder()
+                .taskId(1001L)
+                .resumeId(100L)
+                .jobDescriptionId(10L)
+                .build());
+
+        mockMvc.perform(post("/api/job-analyses")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "resumeId", 100,
+                                "jobDescription", "Java 后端工程师，负责 Spring Boot 服务开发"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("岗位分析已开始"))
+                .andExpect(jsonPath("$.data.taskId").value(1000))
+                .andExpect(jsonPath("$.data.resumeId").value(100))
+                .andExpect(jsonPath("$.data.jobDescriptionId").value(10));
+
+        mockMvc.perform(post("/api/job-analyses/10/retry")
+                        .param("resumeId", "100")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("岗位分析已重新开始"))
+                .andExpect(jsonPath("$.data.taskId").value(1001))
+                .andExpect(jsonPath("$.data.resumeId").value(100))
+                .andExpect(jsonPath("$.data.jobDescriptionId").value(10));
+
+        mockMvc.perform(post("/api/job-analyses")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "resumeId", 100,
+                                "jobDescription", " "))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(400))
+                .andExpect(jsonPath("$.message").value("目标岗位 JD 不能为空"));
+
+        mockMvc.perform(post("/api/job-analyses")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "resumeId", 100,
+                                "jobDescription", "Java 后端工程师"))))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
     void resumeEndpointsShouldUploadListDetailParseAndRejectCrossUserAccess() throws Exception {
         MockMultipartFile file = new MockMultipartFile(
                 "file",
                 "resume.pdf",
                 "application/pdf",
                 "resume-content".getBytes());
-        when(resumeService.upload(eq(1L), any(MultipartFile.class))).thenReturn(ResumeUploadVO.builder()
+        when(resumeIntakeService.uploadAndPrepare(eq(1L), any(MultipartFile.class))).thenReturn(ResumeUploadVO.builder()
                 .id(100L)
                 .originalFilename("resume.pdf")
                 .fileType("PDF")
                 .fileSize(14L)
                 .uploadStatus("UPLOADED")
+                .parseStatus("PENDING")
+                .preparationTaskId(1000L)
                 .createdAt(LocalDateTime.now())
+                .build());
+        when(resumeIntakeService.prepare(1L, 100L)).thenReturn(AsyncTaskVO.builder()
+                .taskId(1001L)
+                .taskType("RESUME_PARSE")
+                .status("PENDING")
                 .build());
         when(resumeService.listByUser(1L)).thenReturn(List.of(ResumeListVO.builder()
                 .id(100L)
@@ -436,9 +507,17 @@ class Phase1ApiIntegrationTest {
                         .file(file)
                         .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.message").value("上传成功"))
+                .andExpect(jsonPath("$.message").value("上传成功，正在准备简历"))
                 .andExpect(jsonPath("$.data.id").value(100))
+                .andExpect(jsonPath("$.data.parseStatus").value("PENDING"))
+                .andExpect(jsonPath("$.data.preparationTaskId").value(1000))
                 .andExpect(jsonPath("$.data.objectKey").doesNotExist());
+
+        mockMvc.perform(post("/api/resumes/100/preparation")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("简历准备任务已提交"))
+                .andExpect(jsonPath("$.data.taskId").value(1001));
 
         mockMvc.perform(get("/api/resumes")
                         .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))

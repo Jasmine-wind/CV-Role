@@ -7,7 +7,7 @@ CV-Role is a frontend/backend separated repository. The root is repository orche
 ```text
 backend/  Spring Boot backend
 web/      Vue 3 frontend
-docs/     long-lived documentation and evaluation assets
+docs/     long-lived product, architecture, plan, context, and operations documentation
 deploy/   deployment configuration
 scripts/  operational scripts
 ```
@@ -27,7 +27,7 @@ Product conflicts are resolved by `docs/PRD.md`. Current behavior is determined 
 
 ## Current phase
 
-The repository is at the clean V2 pre-refactor baseline. Do not present P0/P1/P2 V2 target capabilities as already implemented. Follow the phase order in `docs/PLAN.md`; do not start later phases opportunistically.
+Phase 1 (information architecture and main-flow simplification) is complete. Phase 2 is the next approved phase; do not present Phase 2 or later P0/P1/P2 capabilities as already implemented, and do not start later phases opportunistically.
 
 Do not introduce microservices, message queues, Kubernetes, crawlers, auto-apply, a job marketplace, a chatbot-first UI, a complex ATS score system, a template marketplace, or a new technology stack unless the product baseline is explicitly revised.
 

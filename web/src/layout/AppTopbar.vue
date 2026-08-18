@@ -10,10 +10,10 @@ const pageTitle = computed(() => route.meta.title || '工作台')
 <template>
   <header class="app-topbar">
     <div>
-      <p class="app-topbar-kicker">AI Resume Optimizer</p>
+      <p class="app-topbar-kicker">CV Role</p>
       <h1>{{ pageTitle }}</h1>
     </div>
 
-    <span class="app-topbar-note">围绕简历资产、目标岗位和 AI 结果推进优化流程</span>
+    <span class="app-topbar-note">用真实经历，为每一个岗位准备更合适的简历</span>
   </header>
 </template>

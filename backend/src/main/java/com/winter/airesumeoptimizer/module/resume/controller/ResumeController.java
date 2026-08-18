@@ -3,6 +3,7 @@ package com.winter.airesumeoptimizer.module.resume.controller;
 import com.winter.airesumeoptimizer.common.result.Result;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeParseOptionsDTO;
 import com.winter.airesumeoptimizer.module.resume.service.ResumeAsyncTaskService;
+import com.winter.airesumeoptimizer.module.resume.service.ResumeIntakeService;
 import com.winter.airesumeoptimizer.module.resume.service.ResumeService;
 import com.winter.airesumeoptimizer.module.resume.vo.ResumeDetailVO;
 import com.winter.airesumeoptimizer.module.resume.vo.ResumeListVO;
@@ -37,19 +38,33 @@ public class ResumeController {
 
     private final ResumeService resumeService;
     private final ResumeAsyncTaskService resumeAsyncTaskService;
+    private final ResumeIntakeService resumeIntakeService;
 
-    public ResumeController(ResumeService resumeService, ResumeAsyncTaskService resumeAsyncTaskService) {
+    public ResumeController(
+            ResumeService resumeService,
+            ResumeAsyncTaskService resumeAsyncTaskService,
+            ResumeIntakeService resumeIntakeService) {
         this.resumeService = resumeService;
         this.resumeAsyncTaskService = resumeAsyncTaskService;
+        this.resumeIntakeService = resumeIntakeService;
     }
 
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    @Operation(summary = "上传简历", description = "上传 PDF、DOC 或 DOCX 简历文件")
+    @Operation(summary = "上传简历", description = "上传 PDF、DOC 或 DOCX 简历文件，并在后台自动准备内容")
     public Result<ResumeUploadVO> upload(
             @RequestParam("file") MultipartFile file,
             Authentication authentication) {
         AuthenticatedUser authenticatedUser = (AuthenticatedUser) authentication.getPrincipal();
-        return Result.success("上传成功", resumeService.upload(authenticatedUser.getUserId(), file));
+        return Result.success("上传成功，正在准备简历", resumeIntakeService.uploadAndPrepare(authenticatedUser.getUserId(), file));
+    }
+
+    @PostMapping("/{id}/preparation")
+    @Operation(summary = "准备简历", description = "提交默认简历准备任务，用于上传失败恢复或重新准备")
+    public Result<AsyncTaskVO> prepare(
+            @PathVariable @Positive(message = "简历 ID 必须大于 0") Long id,
+            Authentication authentication) {
+        AuthenticatedUser authenticatedUser = (AuthenticatedUser) authentication.getPrincipal();
+        return Result.success("简历准备任务已提交", resumeIntakeService.prepare(authenticatedUser.getUserId(), id));
     }
 
     @GetMapping

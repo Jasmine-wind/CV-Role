@@ -1,272 +1,203 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
 const router = useRouter()
-const visibleSectionIds = ref(new Set(['hero']))
 
-let revealObserver: IntersectionObserver | null = null
-
-const markSectionVisible = (sectionId: string) => {
-  const next = new Set(visibleSectionIds.value)
-  next.add(sectionId)
-  visibleSectionIds.value = next
-}
-
-const isSectionVisible = (sectionId: string) => visibleSectionIds.value.has(sectionId)
-
-const scrollToWorkflow = () => {
-  document.getElementById('workflow')?.scrollIntoView({ behavior: 'smooth' })
-}
-
-const flowSteps = [
+const valuePoints = [
   {
-    title: '上传简历',
-    description: '建立第一份可分析的简历资产。',
+    title: '岗位定向',
+    description: '根据你粘贴的真实 JD，检查岗位要求与当前简历表达。',
   },
   {
-    title: '解析简历',
-    description: '提取技能、经历和项目内容。',
+    title: '真实可控',
+    description: '分析只依据当前简历；未体现的岗位要求会提示你核对真实经历。',
   },
   {
-    title: '添加目标岗位',
-    description: '粘贴真实 JD，生成岗位要求画像。',
-  },
-  {
-    title: '匹配分析',
-    description: '看清强匹配、弱匹配和缺失项。',
-  },
-  {
-    title: '优化建议',
-    description: '按优先级处理最关键差距。',
-  },
-  {
-    title: '局部改写',
-    description: '只优化你选择的真实简历片段。',
+    title: '清晰结果',
+    description: '集中查看已有优势、表达检查项和当前简历尚未体现的要求。',
   },
 ]
-
-const aiCapabilities = [
-  {
-    title: '简历解析',
-    description: '提取基础信息、技能、项目和经历。',
-  },
-  {
-    title: '简历诊断',
-    description: '发现结构、表达和完整度问题。',
-  },
-  {
-    title: '岗位解析',
-    description: '抽取职责、技能、关键词和经验要求。',
-  },
-  {
-    title: '匹配分析',
-    description: '展示强匹配、弱匹配和缺失项。',
-  },
-  {
-    title: '优化建议',
-    description: '给出优先级、依据和注意事项。',
-  },
-  {
-    title: '局部改写',
-    description: '只改写用户确认的真实内容片段。',
-  },
-  {
-    title: 'AI 历史回看',
-    description: '回看所有已保存的结构化结果。',
-  },
-]
-
-onMounted(() => {
-  const root = document.querySelector('.landing-page')
-  const sections = document.querySelectorAll<HTMLElement>('[data-landing-section]')
-
-  revealObserver = new IntersectionObserver((entries) => {
-    entries.forEach((entry) => {
-      const sectionId = (entry.target as HTMLElement).dataset.landingSection
-      if (entry.isIntersecting && sectionId) {
-        markSectionVisible(sectionId)
-      }
-    })
-  }, {
-    root,
-    threshold: 0.34,
-    rootMargin: '0px 0px -10% 0px',
-  })
-
-  sections.forEach((section) => revealObserver?.observe(section))
-})
-
-onUnmounted(() => {
-  revealObserver?.disconnect()
-})
 </script>
 
 <template>
-  <main class="landing-page">
+  <main class="landing-page landing-simple-page">
     <header class="landing-nav">
       <RouterLink to="/" class="landing-brand">
-        <span>AI</span>
-        <strong>简历优化</strong>
+        <span>CV</span>
+        <strong>CV Role</strong>
       </RouterLink>
-      <nav>
-        <a href="#workflow">核心流程</a>
-        <a href="#ai">AI 能力</a>
-        <a href="#preview">界面预览</a>
-      </nav>
       <div class="landing-nav-actions">
         <el-button @click="router.push('/login')">登录</el-button>
-        <el-button type="primary" @click="router.push('/login?redirect=/app')">进入工作台</el-button>
+        <el-button type="primary" @click="router.push('/register')">开始优化</el-button>
       </div>
     </header>
 
-    <section
-      class="landing-snap-section landing-hero-section"
-      :class="{ 'is-visible': isSectionVisible('hero') }"
-      data-landing-section="hero"
-    >
-      <div class="landing-section-inner landing-hero">
-        <div class="landing-hero-copy">
-          <p class="landing-eyebrow">AI Resume Optimization Workspace</p>
-          <h1>AI 简历优化与岗位匹配工作台</h1>
-          <p>
-            从简历解析、岗位匹配到优化建议，帮助你看清简历与目标岗位之间的真实差距。
-          </p>
-          <div class="landing-hero-actions">
-            <el-button type="primary" size="large" @click="router.push('/login?redirect=/app')">进入工作台</el-button>
-            <el-button size="large" @click="scrollToWorkflow">查看使用流程</el-button>
-          </div>
-        </div>
-
-        <aside class="landing-hero-panel" aria-label="产品流程预览">
-          <div class="landing-panel-header">
-            <span>下一步</span>
-            <el-tag type="primary">匹配分析</el-tag>
-          </div>
-          <h2>选择已解析简历和目标岗位，生成匹配报告。</h2>
-          <div class="landing-metric-grid">
-            <span>
-              <strong>3</strong>
-              简历资产
-            </span>
-            <span>
-              <strong>2</strong>
-              目标岗位
-            </span>
-            <span>
-              <strong>86</strong>
-              匹配分
-            </span>
-          </div>
-        </aside>
-      </div>
-    </section>
-
-    <section
-      id="workflow"
-      class="landing-snap-section"
-      :class="{ 'is-visible': isSectionVisible('workflow') }"
-      data-landing-section="workflow"
-    >
-      <div class="landing-section-inner">
-        <div class="landing-section-heading">
-          <p class="landing-eyebrow">Workflow</p>
-          <h2>一条清晰的求职优化流程</h2>
-        </div>
-        <div class="landing-flow">
-          <article
-            v-for="(step, index) in flowSteps"
-            :key="step.title"
-            :style="{ '--landing-item-index': String(index + 1) }"
-          >
-            <span>{{ index + 1 }}</span>
-            <strong>{{ step.title }}</strong>
-            <p>{{ step.description }}</p>
-          </article>
-        </div>
-      </div>
-    </section>
-
-    <section
-      id="ai"
-      class="landing-snap-section"
-      :class="{ 'is-visible': isSectionVisible('ai') }"
-      data-landing-section="ai"
-    >
-      <div class="landing-section-inner">
-        <div class="landing-section-heading">
-          <p class="landing-eyebrow">AI Capability</p>
-          <h2>AI 不替你编简历，只给出可验证的优化依据</h2>
-        </div>
-        <div class="landing-feature-grid">
-          <article
-            v-for="(item, index) in aiCapabilities"
-            :key="item.title"
-            class="landing-card"
-            :style="{ '--landing-item-index': String(index + 1) }"
-          >
-            <h3>{{ item.title }}</h3>
-            <p>{{ item.description }}</p>
-          </article>
-        </div>
-      </div>
-    </section>
-
-    <section
-      id="preview"
-      class="landing-snap-section"
-      :class="{ 'is-visible': isSectionVisible('preview') }"
-      data-landing-section="preview"
-    >
-      <div class="landing-section-inner landing-preview-layout">
-        <div class="landing-section-heading">
-          <p class="landing-eyebrow">Preview</p>
-          <h2>像 SaaS 工具一样管理你的求职材料</h2>
-        </div>
-        <div class="landing-product-preview" aria-label="工作台界面预览">
-          <aside>
-            <span>工作台</span>
-            <span>我的简历</span>
-            <span>目标岗位</span>
-            <span>匹配与优化</span>
-            <span>AI 历史</span>
-          </aside>
-          <section>
-            <div class="landing-preview-header">
-              <strong>继续完成岗位匹配流程</strong>
-              <el-button type="primary">开始匹配</el-button>
-            </div>
-            <div class="landing-preview-grid">
-              <article>
-                <small>当前状态</small>
-                <strong>简历和岗位已就绪</strong>
-                <p>下一步生成匹配报告。</p>
-              </article>
-              <article>
-                <small>AI 建议</small>
-                <strong>补强项目经历证据</strong>
-                <p>优先补充与岗位相关的后端接口、性能优化和协作经历。</p>
-              </article>
-            </div>
-          </section>
-        </div>
-      </div>
-    </section>
-
-    <section
-      class="landing-snap-section landing-final-section"
-      :class="{ 'is-visible': isSectionVisible('start') }"
-      data-landing-section="start"
-    >
-      <div class="landing-section-inner">
-        <p class="landing-eyebrow">Start</p>
-        <h2>准备开始一次完整的简历优化演示</h2>
-        <p>上传简历、添加目标岗位，再用 AI 报告找到下一步优化方向。</p>
+    <section class="landing-simple-hero">
+      <div class="landing-simple-copy">
+        <p class="landing-eyebrow">岗位定向简历优化</p>
+        <h1>为每一个岗位，准备更合适的简历</h1>
+        <p>
+          上传已有简历，粘贴目标 JD，看清哪里匹配、哪里值得检查，
+          以及哪些岗位要求在当前简历中还没有体现。
+        </p>
         <div class="landing-hero-actions">
-          <el-button type="primary" size="large" @click="router.push('/login?redirect=/app')">立即体验</el-button>
-          <el-button size="large" @click="router.push('/login')">登录账号</el-button>
+          <el-button type="primary" size="large" @click="router.push('/register')">开始优化</el-button>
+          <el-button size="large" @click="router.push('/login')">已有账号</el-button>
         </div>
       </div>
+
+      <aside class="landing-simple-preview app-card" aria-label="产品主流程">
+        <span>只需要两项输入</span>
+        <div>
+          <strong>我的简历</strong>
+          <small>你的真实经历与当前表达</small>
+        </div>
+        <div>
+          <strong>目标岗位 JD</strong>
+          <small>当前准备投递的岗位要求</small>
+        </div>
+        <p>选择简历 + 粘贴 JD → 开始分析</p>
+      </aside>
+    </section>
+
+    <section class="landing-simple-values">
+      <article v-for="item in valuePoints" :key="item.title" class="app-card">
+        <h2>{{ item.title }}</h2>
+        <p>{{ item.description }}</p>
+      </article>
+    </section>
+
+    <section class="landing-simple-final">
+      <h2>复杂步骤留给系统，重要决定留给你</h2>
+      <p>第一次使用只需要上传简历、粘贴 JD、开始分析。</p>
+      <el-button type="primary" size="large" @click="router.push('/register')">立即开始</el-button>
     </section>
   </main>
 </template>
+
+<style scoped>
+.landing-simple-page {
+  min-height: 100vh;
+  height: auto;
+  overflow: visible;
+  scroll-snap-type: none;
+}
+
+.landing-simple-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(320px, 0.75fr);
+  gap: 64px;
+  width: min(100% - 48px, 1160px);
+  min-height: calc(100vh - 72px);
+  align-items: center;
+  margin: 0 auto;
+  padding: 72px 0;
+}
+
+.landing-simple-copy h1 {
+  max-width: 720px;
+  margin: 0;
+  color: var(--app-navy);
+  font-size: clamp(42px, 6vw, 68px);
+  line-height: 1.08;
+  letter-spacing: -0.04em;
+}
+
+.landing-simple-copy > p:not(.landing-eyebrow) {
+  max-width: 680px;
+  margin: 24px 0 0;
+  color: var(--app-text-secondary);
+  font-size: 18px;
+  line-height: 1.8;
+}
+
+.landing-simple-preview {
+  display: grid;
+  gap: 14px;
+  padding: 28px;
+}
+
+.landing-simple-preview > span {
+  color: var(--app-primary);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.landing-simple-preview > div {
+  display: grid;
+  gap: 5px;
+  padding: 18px;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-md);
+  background: var(--app-surface-soft);
+}
+
+.landing-simple-preview strong {
+  color: var(--app-text);
+}
+
+.landing-simple-preview small,
+.landing-simple-preview p,
+.landing-simple-values p,
+.landing-simple-final p {
+  color: var(--app-text-secondary);
+  line-height: 1.7;
+}
+
+.landing-simple-preview p {
+  margin: 4px 0 0;
+  color: var(--app-primary);
+  font-weight: 800;
+}
+
+.landing-simple-values {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  width: min(100% - 48px, 1160px);
+  margin: 0 auto;
+  padding: 0 0 100px;
+}
+
+.landing-simple-values article {
+  padding: 24px;
+}
+
+.landing-simple-values h2,
+.landing-simple-final h2 {
+  margin: 0;
+  color: var(--app-navy);
+}
+
+.landing-simple-values p {
+  margin: 12px 0 0;
+}
+
+.landing-simple-final {
+  display: grid;
+  justify-items: center;
+  gap: 14px;
+  padding: 84px 24px;
+  text-align: center;
+  background: var(--app-surface);
+}
+
+.landing-simple-final h2 {
+  font-size: 32px;
+}
+
+.landing-simple-final p {
+  margin: 0;
+}
+
+@media (max-width: 820px) {
+  .landing-simple-hero,
+  .landing-simple-values {
+    grid-template-columns: 1fr;
+  }
+
+  .landing-simple-hero {
+    gap: 36px;
+  }
+}
+</style>

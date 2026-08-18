@@ -23,7 +23,7 @@ Spring Boot 单体应用
 ```text
 backend/  后端应用、数据库迁移和测试
 web/      前端应用
-docs/     长期文档与评估资产
+docs/     长期产品、架构、计划、上下文与运维文档
 deploy/   Nginx 配置
 scripts/  生产运维脚本
 ```
@@ -48,24 +48,24 @@ scripts/  生产运维脚本
 - `history`：旧历史聚合与 AI 结果回看。
 - `task`：单进程异步任务记录、归属校验和状态查询。
 
-前端按 `api/`、`components/`、`layout/`、`router/`、`stores/`、`types/`、`utils/`、`views/` 分层。页面路由当前包括 Landing、工作台、我的简历、岗位库、目标岗位、匹配与优化、AI 历史、登录和注册。
+前端按 `api/`、`components/`、`layout/`、`router/`、`stores/`、`types/`、`utils/`、`views/` 分层。Phase 1 后的页面路由只包括 Landing、首页、我的简历、岗位分析结果、登录和注册；一级导航只有首页和我的简历。
 
 ## 3. 当前主链路
 
 ```text
 注册 / 登录
-→ 上传简历
-→ 手动触发解析，轮询异步任务
-→ 手动生成简历诊断
-→ 创建目标岗位并手动解析 JD
-→ 生成匹配分析
-→ 生成优化建议
-→ 针对建议生成局部改写并记录采纳状态
-→ 聚合优化报告 / AI 历史回看
+→ 选择已有简历，或上传后由 ResumeIntakeService 自动提交准备任务
+→ 在首页粘贴目标岗位 JD
+→ JobAnalysisService 保存原始 JD，并在一个后台任务内确保简历可用、解析 JD、生成匹配分析
+→ 失败时复用已保存的简历与 JD 重试，不重复创建目标岗位
+→ 岗位分析结果页展示已有优势、表达检查项和简历当前未体现的要求
 ```
+
+Phase 1 的 `ResumeIntakeService` 与 `JobAnalysisService` 是默认用户流的两个深模块 seam：前者负责上传、默认准备和准备失败恢复，后者负责首次分析与复用已保存输入的重试；调用方不需要编排 Parse、Embedding、Prompt 或供应商步骤。正式 `ResumeVersion`、`OptimizationTask`、Evidence / Gap 模型尚未建立，因此结果页不会把当前匹配输出宣称为稳定的能力缺口判断。
 
 重要边界：
 
+- 岗位库、目标岗位管理、技术分类式 AI 历史和旧匹配编排页面已退出前端路由；对应后端表和服务暂时保留，供后续数据模型迁移与兼容读取，不能恢复为第二套用户主流程。
 - AI 输出通过受控 DTO / Schema 解析后持久化；不能把模型原文直接当可信业务数据。
 - 优化报告聚合已有结果，不为补全报告再次调用 AI。
 - Redis 只缓存可重新生成内容，不承担唯一业务状态。
@@ -81,9 +81,9 @@ scripts/  生产运维脚本
 - Chat 与 Embedding 都通过后端兼容客户端调用，密钥不得进入前端、日志或 Git。
 - `application.yaml` 提供公共默认值，`application-local/dev/test/prod.yaml` 负责环境差异。
 
-## 5. V2 目标架构边界
+## 5. 后续 V2 目标架构边界
 
-V2 不推翻前后端分离和模块化单体基础。新增能力应围绕 PRD 冻结链路建立：
+Phase 1 已完成用户链路收敛，但 V2 不推翻前后端分离和模块化单体基础。后续能力应围绕 PRD 冻结链路建立：
 
 ```text
 Resume / ResumeVersion

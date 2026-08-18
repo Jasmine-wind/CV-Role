@@ -20,6 +20,10 @@ public class ResumeListVO {
     private Long fileSize;
     @Schema(description = "上传状态", example = "UPLOADED")
     private String uploadStatus;
+    @Schema(description = "简历准备状态", example = "SUCCESS")
+    private String parseStatus;
+    @Schema(description = "简历准备失败原因")
+    private String parseErrorMessage;
     @Schema(description = "上传时间")
     private LocalDateTime createdAt;
 }

@@ -9,6 +9,8 @@ public interface AsyncTaskService {
 
     void markRunning(Long taskId, String message);
 
+    void updateStage(Long taskId, String message);
+
     void updateProgress(Long taskId, int progress, String message);
 
     void markSuccess(Long taskId, String resultType, Long resultId, String resultSummary);

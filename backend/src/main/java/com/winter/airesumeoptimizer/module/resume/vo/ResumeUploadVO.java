@@ -20,6 +20,10 @@ public class ResumeUploadVO {
     private Long fileSize;
     @Schema(description = "上传状态", example = "UPLOADED")
     private String uploadStatus;
+    @Schema(description = "简历准备状态", example = "PENDING")
+    private String parseStatus;
+    @Schema(description = "后台准备任务 ID", example = "1001")
+    private Long preparationTaskId;
     @Schema(description = "上传时间")
     private LocalDateTime createdAt;
 }

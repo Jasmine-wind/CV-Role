@@ -1,7 +1,3 @@
-export interface AiJobMatchRequest {
-  jobDescriptionId: number
-}
-
 export interface AiJobMatchItem {
   item: string
   reason: string
@@ -31,18 +27,6 @@ export interface AiJobMatchResult {
   modelName: string | null
   promptVersion: string | null
   matchStatus: 'PENDING' | 'SUCCESS' | 'FAILED' | string
-  errorMessage: string | null
-  updatedAt: string | null
-}
-
-export interface AiJobMatchTrigger {
-  matchId: number
-  resumeId: number
-  jobDescriptionId: number
-  overallScore: number | null
-  matchStatus: 'PENDING' | 'SUCCESS' | 'FAILED' | string
-  modelName: string | null
-  promptVersion: string | null
   errorMessage: string | null
   updatedAt: string | null
 }

@@ -9,37 +9,14 @@ const authStore = useAuthStore()
 
 const primaryNavItems = [
   {
-    label: '工作台',
+    label: '首页',
     route: '/app',
-    hint: '当前进度',
+    hint: '分析新岗位',
   },
   {
     label: '我的简历',
     route: '/resumes',
-    hint: '简历资产',
-  },
-  {
-    label: '目标岗位',
-    route: '/job-descriptions',
-    hint: '真实 JD',
-  },
-  {
-    label: '匹配与优化',
-    route: '/ai-job-matches',
-    hint: 'AI 主流程',
-  },
-  {
-    label: 'AI 历史',
-    route: '/history',
-    hint: '结果回看',
-  },
-]
-
-const auxiliaryNavItems = [
-  {
-    label: '岗位库',
-    route: '/jobs',
-    hint: '预置参考',
+    hint: '真实经历',
   },
 ]
 
@@ -68,10 +45,10 @@ onMounted(() => {
   <aside class="app-sidebar">
     <div class="app-sidebar-main">
       <div class="app-sidebar-brand">
-        <span class="app-sidebar-mark">AI</span>
+        <span class="app-sidebar-mark">CV</span>
         <div>
           <strong>简历优化</strong>
-          <small>Resume Workspace</small>
+          <small>CV Role</small>
         </div>
       </div>
 
@@ -88,20 +65,6 @@ onMounted(() => {
           </RouterLink>
         </nav>
 
-        <section class="app-sidebar-section">
-          <p>辅助入口</p>
-          <nav class="app-sidebar-nav is-secondary" aria-label="辅助导航">
-            <RouterLink
-              v-for="item in auxiliaryNavItems"
-              :key="item.route"
-              :to="item.route"
-              class="app-sidebar-link"
-            >
-              <span>{{ item.label }}</span>
-              <small>{{ item.hint }}</small>
-            </RouterLink>
-          </nav>
-        </section>
       </div>
     </div>
 

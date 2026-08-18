@@ -59,6 +59,7 @@ class JobDescriptionParseServiceImplTest {
         JobDescriptionVO result = service.parse(1L, 10L);
 
         assertThat(result.getParseStatus()).isEqualTo("SUCCESS");
+        assertThat(result.getTitle()).isEqualTo("Java 后端开发工程师");
         assertThat(result.getModelName()).isEqualTo("qwen-plus");
         assertThat(result.getPromptVersion()).isEqualTo("job_description_parse_v1");
         assertThat(result.getStructuredContent()).contains("Java 后端开发工程师");

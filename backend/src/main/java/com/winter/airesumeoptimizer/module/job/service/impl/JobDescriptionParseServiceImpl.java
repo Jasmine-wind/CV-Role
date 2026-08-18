@@ -105,6 +105,9 @@ public class JobDescriptionParseServiceImpl implements JobDescriptionParseServic
             String promptVersion,
             JobDescriptionParseResultDTO result) {
         try {
+            if (result.getJobTitle() != null && !result.getJobTitle().isBlank()) {
+                jobDescription.setTitle(truncateTitle(result.getJobTitle()));
+            }
             jobDescription.setParseStatus(PARSE_STATUS_SUCCESS);
             jobDescription.setStructuredContent(objectMapper.writeValueAsString(result));
             jobDescription.setModelName(aiClientService.modelName());
@@ -143,6 +146,11 @@ public class JobDescriptionParseServiceImpl implements JobDescriptionParseServic
             return sanitized;
         }
         return sanitized.substring(0, MAX_ERROR_MESSAGE_LENGTH);
+    }
+
+    private String truncateTitle(String title) {
+        String normalized = title.strip();
+        return normalized.length() <= 200 ? normalized : normalized.substring(0, 200);
     }
 
     private JobDescriptionVO toVO(JobDescription jobDescription) {

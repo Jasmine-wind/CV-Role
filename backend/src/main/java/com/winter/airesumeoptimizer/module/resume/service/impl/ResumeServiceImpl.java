@@ -237,11 +237,19 @@ public class ResumeServiceImpl implements ResumeService {
     public List<ResumeListVO> listByUser(Long userId) {
         validateUserId(userId);
 
-        return resumeMapper.selectList(new LambdaQueryWrapper<Resume>()
-                        .eq(Resume::getUserId, userId)
-                        .orderByDesc(Resume::getCreatedAt))
-                .stream()
-                .map(this::toListVO)
+        List<Resume> resumes = resumeMapper.selectList(new LambdaQueryWrapper<Resume>()
+                .eq(Resume::getUserId, userId)
+                .orderByDesc(Resume::getCreatedAt));
+        if (resumes.isEmpty()) {
+            return List.of();
+        }
+
+        Map<Long, ResumeParseResult> parseResults = new LinkedHashMap<>();
+        resumeParseResultMapper.selectList(new LambdaQueryWrapper<ResumeParseResult>()
+                        .in(ResumeParseResult::getResumeId, resumes.stream().map(Resume::getId).toList()))
+                .forEach(result -> parseResults.put(result.getResumeId(), result));
+        return resumes.stream()
+                .map(resume -> toListVO(resume, parseResults.get(resume.getId())))
                 .toList();
     }
 
@@ -676,13 +684,15 @@ public class ResumeServiceImpl implements ResumeService {
         }
     }
 
-    private ResumeListVO toListVO(Resume resume) {
+    private ResumeListVO toListVO(Resume resume, ResumeParseResult parseResult) {
         return ResumeListVO.builder()
                 .id(resume.getId())
                 .originalFilename(resume.getOriginalFilename())
                 .fileType(resume.getFileType())
                 .fileSize(resume.getFileSize())
                 .uploadStatus(resume.getUploadStatus())
+                .parseStatus(parseResult == null ? "PENDING" : parseResult.getParseStatus())
+                .parseErrorMessage(parseResult == null ? null : parseResult.getErrorMessage())
                 .createdAt(resume.getCreatedAt())
                 .build();
     }

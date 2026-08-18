@@ -64,6 +64,15 @@ class AsyncTaskServiceImplTest {
     }
 
     @Test
+    void updateStageShouldStoreMessageWithoutInventingProgress() {
+        when(asyncTaskMapper.update(any(), any(Wrapper.class))).thenReturn(1);
+
+        service.updateStage(100L, "正在理解岗位要求");
+
+        verify(asyncTaskMapper).update(any(), any(Wrapper.class));
+    }
+
+    @Test
     void updateProgressShouldRejectInvalidProgress() {
         assertThatThrownBy(() -> service.updateProgress(100L, 101, "进度错误"))
                 .isInstanceOf(BusinessException.class)

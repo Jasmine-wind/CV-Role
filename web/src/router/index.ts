@@ -18,7 +18,7 @@ const router = createRouter({
       name: 'landing',
       component: () => import('@/views/landing/LandingView.vue'),
       meta: {
-        title: 'AI 简历优化与岗位匹配系统',
+        title: '岗位定向简历优化',
       },
     },
     {
@@ -27,7 +27,17 @@ const router = createRouter({
       component: () => import('@/views/HomeView.vue'),
       meta: {
         requiresAuth: true,
-        title: '工作台',
+        title: '首页',
+        layoutWidth: 'wide',
+      },
+    },
+    {
+      path: '/job-analysis',
+      name: 'job-analysis',
+      component: () => import('@/views/job/JobAnalysisView.vue'),
+      meta: {
+        requiresAuth: true,
+        title: '岗位分析',
         layoutWidth: 'wide',
       },
     },
@@ -38,71 +48,6 @@ const router = createRouter({
       meta: {
         requiresAuth: true,
         title: '我的简历',
-      },
-    },
-    {
-      path: '/jobs',
-      name: 'jobs',
-      component: () => import('@/views/job/JobListView.vue'),
-      meta: {
-        requiresAuth: true,
-        title: '岗位库',
-      },
-    },
-    {
-      path: '/jobs/:id',
-      name: 'job-detail',
-      component: () => import('@/views/job/JobDetailView.vue'),
-      meta: {
-        requiresAuth: true,
-        title: '岗位详情',
-      },
-    },
-    {
-      path: '/job-descriptions',
-      name: 'job-description-list',
-      component: () => import('@/views/job/JobDescriptionListView.vue'),
-      meta: {
-        requiresAuth: true,
-        title: '目标岗位',
-      },
-    },
-    {
-      path: '/job-descriptions/new',
-      name: 'job-description-create',
-      component: () => import('@/views/job/JobDescriptionCreateView.vue'),
-      meta: {
-        requiresAuth: true,
-        title: '新增目标岗位',
-      },
-    },
-    {
-      path: '/job-descriptions/:id',
-      name: 'job-description-detail',
-      component: () => import('@/views/job/JobDescriptionDetailView.vue'),
-      meta: {
-        requiresAuth: true,
-        title: '目标岗位详情',
-      },
-    },
-    {
-      path: '/ai-job-matches',
-      name: 'ai-job-matches',
-      component: () => import('@/views/job/AiJobMatchView.vue'),
-      meta: {
-        requiresAuth: true,
-        title: '匹配与优化',
-        layoutWidth: 'wide',
-      },
-    },
-    {
-      path: '/history',
-      name: 'history',
-      component: () => import('@/views/history/HistoryView.vue'),
-      meta: {
-        requiresAuth: true,
-        title: 'AI 历史',
-        layoutWidth: 'wide',
       },
     },
     {
@@ -122,6 +67,10 @@ const router = createRouter({
         guestOnly: true,
         title: '注册',
       },
+    },
+    {
+      path: '/:pathMatch(.*)*',
+      redirect: '/app',
     },
   ],
 })

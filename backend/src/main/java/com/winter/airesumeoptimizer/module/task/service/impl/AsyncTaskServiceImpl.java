@@ -67,6 +67,16 @@ public class AsyncTaskServiceImpl implements AsyncTaskService {
 
     @Override
     @Transactional
+    public void updateStage(Long taskId, String message) {
+        updateTask(taskId, new UpdateWrapper<AsyncTask>()
+                .eq("id", taskId)
+                .set("status", AsyncTaskStatus.RUNNING.name())
+                .set("message", truncate(message, MESSAGE_MAX_LENGTH))
+                .set("updated_at", LocalDateTime.now()));
+    }
+
+    @Override
+    @Transactional
     public void updateProgress(Long taskId, int progress, String message) {
         validateProgress(progress);
         updateTask(taskId, new UpdateWrapper<AsyncTask>()

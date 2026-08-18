@@ -87,8 +87,8 @@ public class ResumeAsyncTaskServiceImpl implements ResumeAsyncTaskService {
     private void runParseTask(Long taskId, Long userId, Long resumeId, ResumeParseOptionsDTO options) {
         try {
             asyncTaskService.markRunning(taskId, "简历解析任务已启动");
-            asyncTaskService.updateProgress(taskId, 10, "正在读取简历文件");
-            asyncTaskService.updateProgress(taskId, 30, "正在提取、清洗和结构化解析");
+            asyncTaskService.updateStage(taskId, "正在读取简历文件");
+            asyncTaskService.updateStage(taskId, "正在提取、清洗和结构化解析");
             ResumeParseResultVO result = resumeService.parse(userId, resumeId, options);
             if (!STATUS_SUCCESS.equals(result.getParseStatus())) {
                 asyncTaskService.markFailed(
@@ -97,7 +97,7 @@ public class ResumeAsyncTaskServiceImpl implements ResumeAsyncTaskService {
                         firstPresent(result.getErrorMessage(), "简历解析失败"));
                 return;
             }
-            asyncTaskService.updateProgress(taskId, 90, "正在保存解析结果");
+            asyncTaskService.updateStage(taskId, "正在保存解析结果");
             asyncTaskService.markSuccess(taskId, "RESUME_PARSE_RESULT", resumeId, "简历解析完成");
         } catch (RuntimeException exception) {
             asyncTaskFailureHandler.markFailed(taskId, null, exception);
