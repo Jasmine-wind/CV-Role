@@ -6,23 +6,18 @@ import PageHeader from '@/components/common/PageHeader.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import ErrorState from '@/components/common/ErrorState.vue'
 import SkeletonBlock from '@/components/common/SkeletonBlock.vue'
-import { getAiJobMatch } from '@/api/ai-job-match'
-import { getJobDescriptionDetail } from '@/api/job-description'
-import { getResumeList } from '@/api/resume'
-import type { AiJobMatchItem, AiJobMatchResult } from '@/types/ai-job-match'
-import type { JobDescriptionDetail } from '@/types/job-description'
-import type { ResumeListItem } from '@/types/resume'
+import { getOptimizationAnalysisResult } from '@/api/job-analysis'
+import type { AiJobMatchItem } from '@/types/ai-job-match'
+import type { OptimizationAnalysisResult } from '@/types/job-analysis'
 
 const route = useRoute()
 const router = useRouter()
 const loading = ref(false)
 const error = ref<string | null>(null)
-const result = ref<AiJobMatchResult | null>(null)
-const jobDescription = ref<JobDescriptionDetail | null>(null)
-const resume = ref<ResumeListItem | null>(null)
+const optimizationResult = ref<OptimizationAnalysisResult | null>(null)
 
-const resumeId = computed(() => parsePositiveId(route.query.resumeId))
-const jobDescriptionId = computed(() => parsePositiveId(route.query.jobDescriptionId))
+const optimizationTaskId = computed(() => parsePositiveId(route.params.optimizationTaskId))
+const result = computed(() => optimizationResult.value?.analysis ?? null)
 
 const priorityItems = computed(() => {
   const match = result.value
@@ -44,7 +39,7 @@ const priorityItems = computed(() => {
 })
 
 const loadResult = async () => {
-  if (!resumeId.value || !jobDescriptionId.value) {
+  if (!optimizationTaskId.value) {
     error.value = '岗位分析地址无效，请从首页重新开始。'
     return
   }
@@ -52,14 +47,7 @@ const loadResult = async () => {
   loading.value = true
   error.value = null
   try {
-    const [matchResult, job, resumeList] = await Promise.all([
-      getAiJobMatch(resumeId.value, jobDescriptionId.value),
-      getJobDescriptionDetail(jobDescriptionId.value),
-      getResumeList(),
-    ])
-    result.value = matchResult
-    jobDescription.value = job
-    resume.value = resumeList.find((item) => item.id === resumeId.value) ?? null
+    optimizationResult.value = await getOptimizationAnalysisResult(optimizationTaskId.value)
   } catch (loadError) {
     error.value = loadError instanceof Error ? loadError.message : '岗位分析结果加载失败'
     ElMessage.error(error.value)
@@ -83,8 +71,8 @@ onMounted(loadResult)
   <section class="analysis-result-page">
     <PageHeader
       eyebrow="岗位分析"
-      :title="jobDescription?.title || '岗位分析结果'"
-      :description="resume ? `基于 ${resume.originalFilename} 与目标岗位要求整理` : '基于你的真实简历与目标岗位要求整理'"
+      :title="optimizationResult?.jobTitle || '岗位分析结果'"
+      :description="optimizationResult?.resumeName ? `基于 ${optimizationResult.resumeName} 与目标岗位要求整理` : '基于你的真实简历与目标岗位要求整理'"
     >
       <template #actions>
         <el-button @click="router.push('/app')">分析新岗位</el-button>

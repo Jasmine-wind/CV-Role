@@ -70,6 +70,9 @@ import com.winter.airesumeoptimizer.module.job.vo.JobDescriptionVO;
 import com.winter.airesumeoptimizer.module.job.vo.JobDetailVO;
 import com.winter.airesumeoptimizer.module.job.vo.JobListVO;
 import com.winter.airesumeoptimizer.module.job.vo.JobMatchResultVO;
+import com.winter.airesumeoptimizer.module.optimization.controller.OptimizationTaskController;
+import com.winter.airesumeoptimizer.module.optimization.service.OptimizationTaskService;
+import com.winter.airesumeoptimizer.module.optimization.vo.OptimizationTaskVO;
 import com.winter.airesumeoptimizer.module.resume.controller.ResumeController;
 import com.winter.airesumeoptimizer.module.resume.service.ResumeService;
 import com.winter.airesumeoptimizer.module.resume.service.ResumeAsyncTaskService;
@@ -109,6 +112,7 @@ import org.springframework.web.multipart.MultipartFile;
         ResumeController.class,
         ResumeAnalysisController.class,
         JobAnalysisController.class,
+        OptimizationTaskController.class,
         JobOptimizationReportController.class,
         AiRewriteSuggestionController.class,
         JobController.class,
@@ -171,6 +175,9 @@ class Phase1ApiIntegrationTest {
 
     @MockitoBean
     private JobAnalysisService jobAnalysisService;
+
+    @MockitoBean
+    private OptimizationTaskService optimizationTaskService;
 
     @MockitoBean
     private JobOptimizationReportService jobOptimizationReportService;
@@ -400,14 +407,42 @@ class Phase1ApiIntegrationTest {
     void jobAnalysisEndpointShouldStartDefaultFlowAndValidateInput() throws Exception {
         when(jobAnalysisService.start(eq(1L), any())).thenReturn(JobAnalysisStartVO.builder()
                 .taskId(1000L)
+                .optimizationTaskId(2000L)
+                .sourceResumeVersionId(3000L)
+                .targetResumeVersionId(3001L)
+                .jobTargetId(4000L)
                 .resumeId(100L)
                 .jobDescriptionId(10L)
                 .build());
-        when(jobAnalysisService.retry(1L, 100L, 10L)).thenReturn(JobAnalysisStartVO.builder()
+        when(jobAnalysisService.retry(1L, 2000L)).thenReturn(JobAnalysisStartVO.builder()
                 .taskId(1001L)
+                .optimizationTaskId(2000L)
+                .sourceResumeVersionId(3000L)
+                .targetResumeVersionId(3001L)
+                .jobTargetId(4000L)
                 .resumeId(100L)
                 .jobDescriptionId(10L)
                 .build());
+        when(jobAnalysisService.retryLegacy(1L, 100L, 10L)).thenReturn(JobAnalysisStartVO.builder()
+                .taskId(1002L)
+                .optimizationTaskId(2000L)
+                .sourceResumeVersionId(3000L)
+                .targetResumeVersionId(3001L)
+                .jobTargetId(4000L)
+                .resumeId(100L)
+                .jobDescriptionId(10L)
+                .build());
+        when(optimizationTaskService.get(1L, 2000L)).thenReturn(OptimizationTaskVO.builder()
+                .optimizationTaskId(2000L)
+                .sourceResumeVersionId(3000L)
+                .targetResumeVersionId(3001L)
+                .jobTargetId(4000L)
+                .status("SUCCESS")
+                .jobTitle("Java 后端工程师")
+                .resumeName("resume.pdf")
+                .build());
+        when(optimizationTaskService.getAnalysisResult(1L, 2000L))
+                .thenReturn(buildAiJobMatchResult("SUCCESS"));
 
         mockMvc.perform(post("/api/job-analyses")
                         .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION)
@@ -418,15 +453,38 @@ class Phase1ApiIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.message").value("岗位分析已开始"))
                 .andExpect(jsonPath("$.data.taskId").value(1000))
+                .andExpect(jsonPath("$.data.optimizationTaskId").value(2000))
+                .andExpect(jsonPath("$.data.sourceResumeVersionId").value(3000))
+                .andExpect(jsonPath("$.data.targetResumeVersionId").value(3001))
+                .andExpect(jsonPath("$.data.jobTargetId").value(4000))
                 .andExpect(jsonPath("$.data.resumeId").value(100))
                 .andExpect(jsonPath("$.data.jobDescriptionId").value(10));
+
+        mockMvc.perform(post("/api/optimization-tasks/2000/retry")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("岗位分析已重新开始"))
+                .andExpect(jsonPath("$.data.taskId").value(1001))
+                .andExpect(jsonPath("$.data.optimizationTaskId").value(2000));
+
+        mockMvc.perform(get("/api/optimization-tasks/2000/analysis-result")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.optimizationTaskId").value(2000))
+                .andExpect(jsonPath("$.data.sourceResumeVersionId").value(3000))
+                .andExpect(jsonPath("$.data.targetResumeVersionId").value(3001))
+                .andExpect(jsonPath("$.data.jobTargetId").value(4000))
+                .andExpect(jsonPath("$.data.jobTitle").value("Java 后端工程师"))
+                .andExpect(jsonPath("$.data.resumeName").value("resume.pdf"))
+                .andExpect(jsonPath("$.data.analysis.matchId").value(400));
 
         mockMvc.perform(post("/api/job-analyses/10/retry")
                         .param("resumeId", "100")
                         .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.message").value("岗位分析已重新开始"))
-                .andExpect(jsonPath("$.data.taskId").value(1001))
+                .andExpect(jsonPath("$.data.taskId").value(1002))
+                .andExpect(jsonPath("$.data.optimizationTaskId").value(2000))
                 .andExpect(jsonPath("$.data.resumeId").value(100))
                 .andExpect(jsonPath("$.data.jobDescriptionId").value(10));
 

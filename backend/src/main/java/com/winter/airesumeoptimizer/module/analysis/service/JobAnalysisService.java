@@ -10,5 +10,7 @@ public interface JobAnalysisService {
 
     JobAnalysisStartVO start(Long userId, JobAnalysisStartRequestDTO request);
 
-    JobAnalysisStartVO retry(Long userId, Long resumeId, Long jobDescriptionId);
+    JobAnalysisStartVO retry(Long userId, Long optimizationTaskId);
+
+    JobAnalysisStartVO retryLegacy(Long userId, Long resumeId, Long jobDescriptionId);
 }

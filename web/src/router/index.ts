@@ -32,7 +32,7 @@ const router = createRouter({
       },
     },
     {
-      path: '/job-analysis',
+      path: '/job-analysis/:optimizationTaskId',
       name: 'job-analysis',
       component: () => import('@/views/job/JobAnalysisView.vue'),
       meta: {

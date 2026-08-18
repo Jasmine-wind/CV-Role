@@ -1,15 +1,17 @@
 package com.winter.airesumeoptimizer.module.analysis.service.impl;
 
 import com.winter.airesumeoptimizer.common.exception.BusinessException;
+import com.winter.airesumeoptimizer.infra.ai.AiClientService;
 import com.winter.airesumeoptimizer.module.analysis.dto.JobAnalysisStartRequestDTO;
 import com.winter.airesumeoptimizer.module.analysis.entity.AiJobMatchResult;
 import com.winter.airesumeoptimizer.module.analysis.service.AiJobMatchService;
 import com.winter.airesumeoptimizer.module.analysis.service.JobAnalysisService;
 import com.winter.airesumeoptimizer.module.analysis.vo.JobAnalysisStartVO;
-import com.winter.airesumeoptimizer.module.job.dto.JobDescriptionSubmitDTO;
 import com.winter.airesumeoptimizer.module.job.service.JobDescriptionParseService;
-import com.winter.airesumeoptimizer.module.job.service.JobDescriptionService;
 import com.winter.airesumeoptimizer.module.job.vo.JobDescriptionVO;
+import com.winter.airesumeoptimizer.module.optimization.service.OptimizationTaskService;
+import com.winter.airesumeoptimizer.module.optimization.service.OptimizationTaskService.ExecutionContext;
+import com.winter.airesumeoptimizer.module.optimization.vo.OptimizationTaskVO;
 import com.winter.airesumeoptimizer.module.resume.service.ResumeService;
 import com.winter.airesumeoptimizer.module.resume.vo.ResumeParseResultVO;
 import com.winter.airesumeoptimizer.module.task.enums.AsyncTaskErrorCode;
@@ -24,32 +26,39 @@ import org.springframework.stereotype.Service;
 @Service
 public class JobAnalysisServiceImpl implements JobAnalysisService {
 
+    private static final String STATUS_PENDING = "PENDING";
+    private static final String STATUS_RUNNING = "RUNNING";
     private static final String STATUS_SUCCESS = "SUCCESS";
-    private static final String BIZ_TYPE_JOB_ANALYSIS = "JOB_ANALYSIS";
+    private static final String BIZ_TYPE_OPTIMIZATION_TASK = "OPTIMIZATION_TASK";
+    private static final String RESULT_TYPE_OPTIMIZATION_TASK = "OPTIMIZATION_TASK";
+    private static final String PROVIDER_SYSTEM_DEFAULT = "SYSTEM_DEFAULT_OPENAI_COMPATIBLE";
     private static final int TITLE_MAX_LENGTH = 200;
 
     private final ResumeService resumeService;
-    private final JobDescriptionService jobDescriptionService;
     private final JobDescriptionParseService jobDescriptionParseService;
     private final AiJobMatchService aiJobMatchService;
+    private final OptimizationTaskService optimizationTaskService;
     private final AsyncTaskService asyncTaskService;
     private final AsyncTaskFailureHandler asyncTaskFailureHandler;
+    private final AiClientService aiClientService;
     private final TaskExecutor taskExecutor;
 
     public JobAnalysisServiceImpl(
             ResumeService resumeService,
-            JobDescriptionService jobDescriptionService,
             JobDescriptionParseService jobDescriptionParseService,
             AiJobMatchService aiJobMatchService,
+            OptimizationTaskService optimizationTaskService,
             AsyncTaskService asyncTaskService,
             AsyncTaskFailureHandler asyncTaskFailureHandler,
+            AiClientService aiClientService,
             @Qualifier("applicationTaskExecutor") TaskExecutor taskExecutor) {
         this.resumeService = resumeService;
-        this.jobDescriptionService = jobDescriptionService;
         this.jobDescriptionParseService = jobDescriptionParseService;
         this.aiJobMatchService = aiJobMatchService;
+        this.optimizationTaskService = optimizationTaskService;
         this.asyncTaskService = asyncTaskService;
         this.asyncTaskFailureHandler = asyncTaskFailureHandler;
+        this.aiClientService = aiClientService;
         this.taskExecutor = taskExecutor;
     }
 
@@ -67,86 +76,164 @@ public class JobAnalysisServiceImpl implements JobAnalysisService {
         }
         resumeService.getDetail(userId, request.getResumeId());
 
-        JobDescriptionSubmitDTO jobRequest = new JobDescriptionSubmitDTO();
-        jobRequest.setTitle(deriveTitle(request.getJobDescription()));
-        jobRequest.setRawText(request.getJobDescription());
-        JobDescriptionVO jobDescription = jobDescriptionService.submit(userId, jobRequest);
-
-        return submitAnalysis(userId, request.getResumeId(), jobDescription.getId());
+        OptimizationTaskVO optimizationTask = optimizationTaskService.create(
+                userId,
+                request.getResumeId(),
+                deriveTitle(request.getJobDescription()),
+                request.getJobDescription(),
+                PROVIDER_SYSTEM_DEFAULT,
+                aiClientService.modelName());
+        return submitAnalysis(userId, optimizationTask.getOptimizationTaskId());
     }
 
     @Override
-    public JobAnalysisStartVO retry(Long userId, Long resumeId, Long jobDescriptionId) {
+    public JobAnalysisStartVO retry(Long userId, Long optimizationTaskId) {
+        return submitAnalysis(userId, optimizationTaskId);
+    }
+
+    @Override
+    public JobAnalysisStartVO retryLegacy(Long userId, Long resumeId, Long jobDescriptionId) {
         validateResumeId(resumeId);
         if (jobDescriptionId == null || jobDescriptionId <= 0) {
             throw new BusinessException(400, "目标岗位 ID 必须大于 0");
         }
-        resumeService.getDetail(userId, resumeId);
-        jobDescriptionService.getDetail(userId, jobDescriptionId);
-        return submitAnalysis(userId, resumeId, jobDescriptionId);
+        OptimizationTaskVO task;
+        try {
+            task = optimizationTaskService.findByLegacyInputs(userId, resumeId, jobDescriptionId);
+        } catch (BusinessException exception) {
+            if (exception.getCode() != 404) {
+                throw exception;
+            }
+            task = optimizationTaskService.createFromExisting(
+                    userId,
+                    resumeId,
+                    jobDescriptionId,
+                    PROVIDER_SYSTEM_DEFAULT,
+                    aiClientService.modelName());
+        }
+        return submitAnalysis(userId, task.getOptimizationTaskId());
     }
 
-    private JobAnalysisStartVO submitAnalysis(Long userId, Long resumeId, Long jobDescriptionId) {
-        Long taskId = asyncTaskService.createTask(
+    private JobAnalysisStartVO submitAnalysis(Long userId, Long optimizationTaskId) {
+        OptimizationTaskVO formalTask = optimizationTaskService.get(userId, optimizationTaskId);
+        if (STATUS_SUCCESS.equals(formalTask.getStatus())) {
+            throw new BusinessException(409, "已完成的优化任务不能重试");
+        }
+        if (formalTask.getAsyncTaskId() != null
+                && (STATUS_PENDING.equals(formalTask.getStatus()) || STATUS_RUNNING.equals(formalTask.getStatus()))) {
+            throw new BusinessException(409, "岗位分析正在进行中");
+        }
+        ExecutionContext context = optimizationTaskService.getExecutionContext(userId, optimizationTaskId);
+        Long asyncTaskId = asyncTaskService.createTask(
                 userId,
                 AsyncTaskType.MATCH_ANALYSIS,
-                BIZ_TYPE_JOB_ANALYSIS,
-                jobDescriptionId);
+                BIZ_TYPE_OPTIMIZATION_TASK,
+                optimizationTaskId);
+        optimizationTaskService.attachAsyncTask(userId, optimizationTaskId, asyncTaskId);
         try {
-            taskExecutor.execute(() -> runAnalysis(taskId, userId, resumeId, jobDescriptionId));
+            taskExecutor.execute(() -> runAnalysis(asyncTaskId, userId, context));
         } catch (RejectedExecutionException exception) {
-            asyncTaskFailureHandler.markFailed(taskId, AsyncTaskErrorCode.TASK_REJECTED, exception);
+            try {
+                optimizationTaskService.markFailed(
+                        userId,
+                        optimizationTaskId,
+                        AsyncTaskErrorCode.TASK_REJECTED.name(),
+                        AsyncTaskErrorCode.TASK_REJECTED.getUserMessage());
+            } finally {
+                asyncTaskFailureHandler.markFailed(asyncTaskId, AsyncTaskErrorCode.TASK_REJECTED, exception);
+            }
         }
 
         return JobAnalysisStartVO.builder()
-                .taskId(taskId)
-                .resumeId(resumeId)
-                .jobDescriptionId(jobDescriptionId)
+                .taskId(asyncTaskId)
+                .optimizationTaskId(optimizationTaskId)
+                .sourceResumeVersionId(context.sourceResumeVersionId())
+                .targetResumeVersionId(context.targetResumeVersionId())
+                .jobTargetId(context.jobTargetId())
+                .resumeId(context.resumeId())
+                .jobDescriptionId(context.jobDescriptionId())
                 .build();
     }
 
-    private void runAnalysis(Long taskId, Long userId, Long resumeId, Long jobDescriptionId) {
+    private void runAnalysis(Long asyncTaskId, Long userId, ExecutionContext context) {
+        boolean formalTaskCompleted = false;
         try {
-            asyncTaskService.markRunning(taskId, "正在读取岗位要求");
-            asyncTaskService.updateStage(taskId, "正在准备简历内容");
-            ResumeParseResultVO resumeParseResult = ensureResumeReady(userId, resumeId);
+            optimizationTaskService.markRunning(userId, context.optimizationTaskId());
+            asyncTaskService.markRunning(asyncTaskId, "正在读取岗位要求");
+            asyncTaskService.updateStage(asyncTaskId, "正在准备简历内容");
+            ResumeParseResultVO resumeParseResult = ensureResumeReady(userId, context.resumeId());
             if (!STATUS_SUCCESS.equals(resumeParseResult.getParseStatus())) {
-                asyncTaskService.markFailed(
-                        taskId,
-                        AsyncTaskErrorCode.FILE_PARSE_FAILED.name(),
+                failTask(
+                        asyncTaskId,
+                        userId,
+                        context.optimizationTaskId(),
+                        AsyncTaskErrorCode.FILE_PARSE_FAILED,
                         firstPresent(resumeParseResult.getErrorMessage(), "未能读取简历内容"));
                 return;
             }
+            optimizationTaskService.captureResumeSnapshot(
+                    userId,
+                    context.optimizationTaskId(),
+                    resumeParseResult.getStructuredJson());
 
-            asyncTaskService.updateStage(taskId, "正在理解岗位要求");
-            JobDescriptionVO parsedJob = jobDescriptionParseService.parse(userId, jobDescriptionId);
+            asyncTaskService.updateStage(asyncTaskId, "正在理解岗位要求");
+            JobDescriptionVO parsedJob = jobDescriptionParseService.parse(userId, context.jobDescriptionId());
             if (!STATUS_SUCCESS.equals(parsedJob.getParseStatus())) {
-                asyncTaskService.markFailed(
-                        taskId,
-                        AsyncTaskErrorCode.AI_RESPONSE_INVALID.name(),
+                failTask(
+                        asyncTaskId,
+                        userId,
+                        context.optimizationTaskId(),
+                        AsyncTaskErrorCode.AI_RESPONSE_INVALID,
                         firstPresent(parsedJob.getErrorMessage(), "未能理解岗位要求"));
                 return;
             }
 
-            asyncTaskService.updateStage(taskId, "正在对比岗位与简历");
-            AiJobMatchResult matchResult = aiJobMatchService.match(userId, resumeId, jobDescriptionId);
+            asyncTaskService.updateStage(asyncTaskId, "正在对比岗位与简历");
+            AiJobMatchResult matchResult = aiJobMatchService.match(
+                    userId,
+                    context.resumeId(),
+                    context.jobDescriptionId());
             if (!STATUS_SUCCESS.equals(matchResult.getMatchStatus())) {
-                asyncTaskService.markFailed(
-                        taskId,
-                        AsyncTaskErrorCode.AI_RESPONSE_INVALID.name(),
+                failTask(
+                        asyncTaskId,
+                        userId,
+                        context.optimizationTaskId(),
+                        AsyncTaskErrorCode.AI_RESPONSE_INVALID,
                         firstPresent(matchResult.getErrorMessage(), "岗位分析失败"));
                 return;
             }
 
-            asyncTaskService.updateStage(taskId, "正在整理分析结果");
+            asyncTaskService.updateStage(asyncTaskId, "正在整理分析结果");
+            optimizationTaskService.markSuccess(userId, context.optimizationTaskId(), parsedJob, matchResult);
+            formalTaskCompleted = true;
             asyncTaskService.markSuccess(
-                    taskId,
-                    "JOB_ANALYSIS_RESULT",
-                    matchResult.getId(),
+                    asyncTaskId,
+                    RESULT_TYPE_OPTIMIZATION_TASK,
+                    context.optimizationTaskId(),
                     firstPresent(parsedJob.getTitle(), "岗位分析完成"));
         } catch (RuntimeException exception) {
-            asyncTaskFailureHandler.markFailed(taskId, null, exception);
+            try {
+                if (!formalTaskCompleted) {
+                    optimizationTaskService.markFailed(
+                            userId,
+                            context.optimizationTaskId(),
+                            AsyncTaskErrorCode.UNKNOWN_ERROR.name(),
+                            AsyncTaskErrorCode.UNKNOWN_ERROR.getUserMessage());
+                }
+            } finally {
+                asyncTaskFailureHandler.markFailed(asyncTaskId, null, exception);
+            }
         }
+    }
+
+    private void failTask(
+            Long asyncTaskId,
+            Long userId,
+            Long optimizationTaskId,
+            AsyncTaskErrorCode errorCode,
+            String message) {
+        optimizationTaskService.markFailed(userId, optimizationTaskId, errorCode.name(), message);
+        asyncTaskService.markFailed(asyncTaskId, errorCode.name(), message);
     }
 
     private ResumeParseResultVO ensureResumeReady(Long userId, Long resumeId) {

@@ -43,12 +43,13 @@ scripts/  生产运维脚本
 - `auth` / `user`：账号、登录和当前用户。
 - `resume`：简历文件、解析、质量检查与展示模型。
 - `job`：预置岗位、用户目标 JD、岗位解析和匹配。
-- `analysis`：诊断、AI 匹配、优化建议、局部改写和聚合报告。
+- `analysis`：诊断、AI 匹配、优化建议、局部改写和聚合报告；其中现有匹配结果是 Phase 2 正式任务暂用的兼容结果载荷。
+- `optimization`：`ResumeVersion`、`JobTarget`、`OptimizationTask`，负责版本派生、输入与配置快照、任务归属和正式结果入口。
 - `embedding`：文本分块、向量生成、相似度与 RAG 上下文。
 - `history`：旧历史聚合与 AI 结果回看。
-- `task`：单进程异步任务记录、归属校验和状态查询。
+- `task`：单进程异步执行记录、归属校验和状态查询；不再承担正式优化业务模型。
 
-前端按 `api/`、`components/`、`layout/`、`router/`、`stores/`、`types/`、`utils/`、`views/` 分层。Phase 1 后的页面路由只包括 Landing、首页、我的简历、岗位分析结果、登录和注册；一级导航只有首页和我的简历。
+前端按 `api/`、`components/`、`layout/`、`router/`、`stores/`、`types/`、`utils/`、`views/` 分层。Phase 2 后的页面路由只包括 Landing、首页、我的简历、按正式优化任务访问的岗位分析结果、登录和注册；一级导航只有首页和我的简历。
 
 ## 3. 当前主链路
 
@@ -56,16 +57,17 @@ scripts/  生产运维脚本
 注册 / 登录
 → 选择已有简历，或上传后由 ResumeIntakeService 自动提交准备任务
 → 在首页粘贴目标岗位 JD
-→ JobAnalysisService 保存原始 JD，并在一个后台任务内确保简历可用、解析 JD、生成匹配分析
-→ 失败时复用已保存的简历与 JD 重试，不重复创建目标岗位
-→ 岗位分析结果页展示已有优势、表达检查项和简历当前未体现的要求
+→ OptimizationTaskService 原子保存兼容 JD、正式 JobTarget、源 ResumeVersion、岗位派生 ResumeVersion 和 OptimizationTask
+→ JobAnalysisService 以 OptimizationTask 为业务主键，在后台确保简历可用并冻结输入快照，再解析 JD、生成兼容匹配结果
+→ 失败时按 OptimizationTask 重试，复用已保存输入且不创建新版本；成功任务不可重试改写
+→ 岗位分析结果页只通过 OptimizationTask 读取结果
 ```
 
-Phase 1 的 `ResumeIntakeService` 与 `JobAnalysisService` 是默认用户流的两个深模块 seam：前者负责上传、默认准备和准备失败恢复，后者负责首次分析与复用已保存输入的重试；调用方不需要编排 Parse、Embedding、Prompt 或供应商步骤。正式 `ResumeVersion`、`OptimizationTask`、Evidence / Gap 模型尚未建立，因此结果页不会把当前匹配输出宣称为稳定的能力缺口判断。
+`ResumeIntakeService`、`JobAnalysisService` 与 `OptimizationTaskService` 是默认用户流的深模块 seam：前者负责上传与准备，第二个负责后台分析编排，第三个负责正式业务身份、版本关系和快照。调用方不需要编排 Parse、Embedding、Prompt 或供应商步骤。Phase 2 已建立正式版本与任务模型，但 Evidence / Gap 尚未建立，因此结果页仍不会把当前匹配输出宣称为稳定的能力缺口判断。
 
 重要边界：
 
-- 岗位库、目标岗位管理、技术分类式 AI 历史和旧匹配编排页面已退出前端路由；对应后端表和服务暂时保留，供后续数据模型迁移与兼容读取，不能恢复为第二套用户主流程。
+- 岗位库、目标岗位管理、技术分类式 AI 历史和旧匹配编排页面已退出前端路由。`job_descriptions`、`ai_job_match_results`、旧服务与旧接口仍供解析、匹配和兼容读取；正式主链路不再用其 ID 作为前端路由或重试身份。
 - AI 输出通过受控 DTO / Schema 解析后持久化；不能把模型原文直接当可信业务数据。
 - 优化报告聚合已有结果，不为补全报告再次调用 AI。
 - Redis 只缓存可重新生成内容，不承担唯一业务状态。
@@ -83,16 +85,14 @@ Phase 1 的 `ResumeIntakeService` 与 `JobAnalysisService` 是默认用户流的
 
 ## 5. 后续 V2 目标架构边界
 
-Phase 1 已完成用户链路收敛，但 V2 不推翻前后端分离和模块化单体基础。后续能力应围绕 PRD 冻结链路建立：
+Phase 2 已完成核心领域模型和主链路迁移，但 V2 不推翻前后端分离和模块化单体基础。后续从 Phase 3 开始按 PRD 冻结链路建立：
 
 ```text
-Resume / ResumeVersion
-JobTarget
-OptimizationTask
-Evidence Mapping / Gap Analysis
-Workspace / Editor / Diff
-AI Gateway / Provider Credential
-Typst Preview / ExportArtifact
+已完成：Resume / ResumeVersion / JobTarget / OptimizationTask
+下一步：Evidence Mapping / Gap Analysis
+随后：Workspace / Editor / Diff
+      AI Gateway / Provider Credential
+      Typst Preview / ExportArtifact
 ```
 
 迁移时遵守：

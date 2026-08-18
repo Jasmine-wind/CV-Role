@@ -41,14 +41,15 @@ public class JobAnalysisController {
         return Result.success("岗位分析已开始", jobAnalysisService.start(authenticatedUser.getUserId(), request));
     }
 
+    @Deprecated
     @PostMapping("/{jobDescriptionId}/retry")
-    @Operation(summary = "重试岗位分析", description = "复用已保存的目标 JD 和简历重新执行岗位分析")
+    @Operation(summary = "兼容旧版岗位分析重试", description = "旧客户端可复用已迁移到正式模型的简历与目标 JD")
     public Result<JobAnalysisStartVO> retry(
             @PathVariable @Positive(message = "目标岗位 ID 必须大于 0") Long jobDescriptionId,
             @RequestParam @Positive(message = "简历 ID 必须大于 0") Long resumeId,
             Authentication authentication) {
         AuthenticatedUser authenticatedUser = (AuthenticatedUser) authentication.getPrincipal();
-        return Result.success("岗位分析已重新开始", jobAnalysisService.retry(
+        return Result.success("岗位分析已重新开始", jobAnalysisService.retryLegacy(
                 authenticatedUser.getUserId(),
                 resumeId,
                 jobDescriptionId));

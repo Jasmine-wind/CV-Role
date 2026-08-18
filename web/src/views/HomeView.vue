@@ -172,9 +172,8 @@ const openAnalysisResult = (analysis: JobAnalysisStartResult) => {
   clearActiveAnalysis()
   router.push({
     name: 'job-analysis',
-    query: {
-      resumeId: String(analysis.resumeId),
-      jobDescriptionId: String(analysis.jobDescriptionId),
+    params: {
+      optimizationTaskId: String(analysis.optimizationTaskId),
     },
   })
 }
@@ -252,7 +251,7 @@ const retryAnalysis = async () => {
   analysisError.value = null
   analysisTimedOut.value = false
   try {
-    const retried = await retryJobAnalysis(analysis.resumeId, analysis.jobDescriptionId)
+    const retried = await retryJobAnalysis(analysis.optimizationTaskId)
     saveActiveAnalysis(retried)
     startAnalysisPolling(retried)
   } catch (error) {
@@ -276,8 +275,7 @@ const restoreActiveAnalysis = () => {
   }
   try {
     const stored = JSON.parse(raw) as ActiveJobAnalysis
-    if (stored.taskId && stored.resumeId && stored.jobDescriptionId) {
-      selectedResumeId.value = stored.resumeId
+    if (stored.taskId && stored.optimizationTaskId && stored.sourceResumeVersionId && stored.targetResumeVersionId && stored.jobTargetId) {
       startAnalysisPolling(stored)
       return
     }
