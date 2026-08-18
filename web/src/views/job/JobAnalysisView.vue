@@ -8,6 +8,7 @@ import ErrorState from '@/components/common/ErrorState.vue'
 import SkeletonBlock from '@/components/common/SkeletonBlock.vue'
 import { getOptimizationAnalysisResult } from '@/api/job-analysis'
 import type { AiJobMatchItem } from '@/types/ai-job-match'
+import type { EvidenceRequirementItem } from '@/types/evidence-analysis'
 import type { OptimizationAnalysisResult } from '@/types/job-analysis'
 
 const route = useRoute()
@@ -17,10 +18,25 @@ const error = ref<string | null>(null)
 const optimizationResult = ref<OptimizationAnalysisResult | null>(null)
 
 const optimizationTaskId = computed(() => parsePositiveId(route.params.optimizationTaskId))
-const result = computed(() => optimizationResult.value?.analysis ?? null)
+const evidenceAnalysis = computed(() => optimizationResult.value?.evidenceAnalysis ?? null)
+const legacyResult = computed(() => optimizationResult.value?.legacyAnalysis ?? null)
 
-const priorityItems = computed(() => {
-  const match = result.value
+const matchedRequirements = computed(() => requirementsByLevel('MATCHED'))
+const expressionGapRequirements = computed(() => requirementsByLevel('EXPRESSION_GAP'))
+const noEvidenceRequirements = computed(() => requirementsByLevel('NO_EVIDENCE'))
+
+const requirementsByLevel = (level: string): EvidenceRequirementItem[] => {
+  const analysis = evidenceAnalysis.value
+  if (!analysis) {
+    return []
+  }
+  return analysis.requirements.filter((item) => item.matchLevel === level)
+}
+
+const totalChecked = computed(() => evidenceAnalysis.value?.requirements.length ?? 0)
+
+const legacyPriorityItems = computed(() => {
+  const match = legacyResult.value
   if (!match) {
     return []
   }
@@ -88,16 +104,122 @@ onMounted(loadResult)
       @action="router.push('/app')"
     />
 
-    <template v-else-if="result">
+    <template v-else-if="evidenceAnalysis">
       <section class="analysis-summary app-card">
         <div>
           <span>分析结论</span>
-          <strong>已找到 {{ result.strongMatches.length }} 项已有优势</strong>
+          <strong>共核对 {{ totalChecked }} 条岗位要求</strong>
           <p>
-            {{ priorityItems.length }} 项值得优先检查，{{ result.missingSkills.length }} 项在当前简历中尚未体现。
+            {{ evidenceAnalysis.matchedCount }} 条已有证据，{{ evidenceAnalysis.expressionGapCount }}
+            条有经历但表达不足，{{ evidenceAnalysis.noEvidenceCount }} 条当前材料未提供证据。
           </p>
         </div>
-        <p>以下结论只基于当前简历中的真实内容。没有证据的岗位要求不会被自动写入简历。</p>
+        <p>
+          每条结论都可以追溯到岗位要求和简历中的具体内容。没有证据的要求不会被自动写入简历。
+        </p>
+      </section>
+
+      <section class="analysis-section">
+        <header>
+          <div>
+            <span>优先修改</span>
+            <h2>你有相关经历，但简历没有写清楚</h2>
+          </div>
+          <strong>{{ expressionGapRequirements.length }}</strong>
+        </header>
+        <div v-if="expressionGapRequirements.length" class="analysis-list">
+          <article
+            v-for="item in expressionGapRequirements"
+            :key="`gap-${item.evidenceRequirementId}`"
+            class="app-card"
+          >
+            <div class="requirement-line">
+              <span>岗位要求</span>
+              <small v-if="item.importance === 'BONUS'">加分项</small>
+            </div>
+            <h3>{{ item.requirementText }}</h3>
+            <p v-if="item.conclusion">{{ item.conclusion }}</p>
+            <div v-if="item.evidences.length" class="evidence-list">
+              <p v-for="evidence in item.evidences" :key="evidence.requirementEvidenceId">
+                <span v-if="evidence.sectionLabel">{{ evidence.sectionLabel }}：</span>
+                「{{ evidence.evidenceText }}」
+              </p>
+            </div>
+            <p v-if="item.suggestion" class="suggestion">{{ item.suggestion }}</p>
+          </article>
+        </div>
+        <EmptyState v-else title="当前没有明显的表达缺口" description="现有简历已经较清楚地覆盖了主要岗位要求。" />
+      </section>
+
+      <section class="analysis-section">
+        <header>
+          <div>
+            <span>已有优势</span>
+            <h2>简历中已经有证据支持</h2>
+          </div>
+          <strong>{{ matchedRequirements.length }}</strong>
+        </header>
+        <div v-if="matchedRequirements.length" class="analysis-list">
+          <article
+            v-for="item in matchedRequirements"
+            :key="`matched-${item.evidenceRequirementId}`"
+            class="app-card"
+          >
+            <div class="requirement-line">
+              <span>岗位要求</span>
+              <small v-if="item.importance === 'BONUS'">加分项</small>
+            </div>
+            <h3>{{ item.requirementText }}</h3>
+            <p v-if="item.conclusion">{{ item.conclusion }}</p>
+            <div v-if="item.evidences.length" class="evidence-list">
+              <p v-for="evidence in item.evidences" :key="evidence.requirementEvidenceId">
+                <span v-if="evidence.sectionLabel">{{ evidence.sectionLabel }}：</span>
+                「{{ evidence.evidenceText }}」
+              </p>
+            </div>
+          </article>
+        </div>
+        <EmptyState v-else title="暂未识别到明确优势" description="这不代表你没有相关经历，可以检查简历是否遗漏了重要事实。" />
+      </section>
+
+      <section class="analysis-section">
+        <header>
+          <div>
+            <span>当前材料未体现</span>
+            <h2>需要你确认是否有真实经历</h2>
+          </div>
+          <strong>{{ noEvidenceRequirements.length }}</strong>
+        </header>
+        <div v-if="noEvidenceRequirements.length" class="analysis-list">
+          <article
+            v-for="item in noEvidenceRequirements"
+            :key="`missing-${item.evidenceRequirementId}`"
+            class="app-card is-gap"
+          >
+            <div class="requirement-line">
+              <span>岗位要求</span>
+              <small v-if="item.importance === 'BONUS'">加分项</small>
+            </div>
+            <h3>{{ item.requirementText }}</h3>
+            <p v-if="item.conclusion">{{ item.conclusion }}</p>
+            <p v-if="item.suggestion" class="suggestion">{{ item.suggestion }}</p>
+            <small>这只代表当前简历中没有找到证据，不代表你没有这项能力；如确有经历，可自行补充真实内容。</small>
+          </article>
+        </div>
+        <EmptyState v-else title="主要岗位要求在简历中已有体现" description="后续仍应结合真实经历检查表达是否准确。" />
+      </section>
+    </template>
+
+    <template v-else-if="legacyResult">
+      <section class="analysis-summary app-card">
+        <div>
+          <span>分析结论</span>
+          <strong>已找到 {{ legacyResult.strongMatches.length }} 项已有优势</strong>
+          <p>
+            {{ legacyPriorityItems.length }} 项值得优先检查，{{ legacyResult.missingSkills.length }} 项在当前简历中尚未体现。
+          </p>
+        </div>
+        <p>这是较早版本的分析结果。重新分析该岗位可以获得逐条可追溯的核对结果。</p>
       </section>
 
       <section class="analysis-section">
@@ -106,10 +228,10 @@ onMounted(loadResult)
             <span>优先修改</span>
             <h2>现有表达与岗位要求仍有差距</h2>
           </div>
-          <strong>{{ priorityItems.length }}</strong>
+          <strong>{{ legacyPriorityItems.length }}</strong>
         </header>
-        <div v-if="priorityItems.length" class="analysis-list">
-          <article v-for="(item, index) in priorityItems" :key="`${item.kind}-${item.title}-${index}`" class="app-card">
+        <div v-if="legacyPriorityItems.length" class="analysis-list">
+          <article v-for="(item, index) in legacyPriorityItems" :key="`${item.kind}-${item.title}-${index}`" class="app-card">
             <span>{{ item.kind === 'expression' ? '表达可以更清楚' : '建议核对相关经历' }}</span>
             <h3>{{ item.title || '相关经历' }}</h3>
             <p>{{ item.description || '建议回看对应经历并补充真实场景。' }}</p>
@@ -124,10 +246,10 @@ onMounted(loadResult)
             <span>已有优势</span>
             <h2>简历中已经有证据支持</h2>
           </div>
-          <strong>{{ result.strongMatches.length }}</strong>
+          <strong>{{ legacyResult.strongMatches.length }}</strong>
         </header>
-        <div v-if="result.strongMatches.length" class="analysis-list is-compact">
-          <article v-for="(item, index) in result.strongMatches" :key="itemKey(item, index)" class="app-card">
+        <div v-if="legacyResult.strongMatches.length" class="analysis-list is-compact">
+          <article v-for="(item, index) in legacyResult.strongMatches" :key="itemKey(item, index)" class="app-card">
             <h3>{{ item.item }}</h3>
             <p>{{ item.reason }}</p>
           </article>
@@ -141,10 +263,10 @@ onMounted(loadResult)
             <span>简历当前未体现</span>
             <h2>需要你确认是否有真实经历</h2>
           </div>
-          <strong>{{ result.missingSkills.length }}</strong>
+          <strong>{{ legacyResult.missingSkills.length }}</strong>
         </header>
-        <div v-if="result.missingSkills.length" class="analysis-list is-compact">
-          <article v-for="(item, index) in result.missingSkills" :key="itemKey(item, index)" class="app-card is-gap">
+        <div v-if="legacyResult.missingSkills.length" class="analysis-list is-compact">
+          <article v-for="(item, index) in legacyResult.missingSkills" :key="itemKey(item, index)" class="app-card is-gap">
             <h3>{{ item.item }}</h3>
             <p>{{ item.reason }}</p>
             <small>系统目前只能确认简历中没有证据；除非你确实有相关经历，否则不要加入简历。</small>
@@ -153,13 +275,19 @@ onMounted(loadResult)
         <EmptyState v-else title="主要岗位要求在简历中已有体现" description="后续仍应结合真实经历检查表达是否准确。" />
       </section>
 
-      <section v-if="result.riskNotes.length" class="analysis-notes app-card">
+      <section v-if="legacyResult.riskNotes.length" class="analysis-notes app-card">
         <h2>需要你确认</h2>
         <ul>
-          <li v-for="note in result.riskNotes" :key="note">{{ note }}</li>
+          <li v-for="note in legacyResult.riskNotes" :key="note">{{ note }}</li>
         </ul>
       </section>
     </template>
+
+    <EmptyState
+      v-else
+      title="分析结果尚未生成"
+      description="请从首页重新开始一次岗位分析。"
+    />
   </section>
 </template>
 
@@ -258,6 +386,50 @@ onMounted(loadResult)
   margin: 0;
   color: var(--app-text);
   font-size: 17px;
+}
+
+.requirement-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.requirement-line span {
+  color: var(--app-text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.requirement-line small {
+  color: var(--app-text-secondary);
+  border: 1px solid var(--el-border-color);
+  border-radius: 999px;
+  padding: 1px 10px;
+  font-size: 12px;
+}
+
+.evidence-list {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border-left: 3px solid var(--el-border-color-light);
+  background: var(--el-fill-color-lighter);
+  border-radius: 6px;
+}
+
+.evidence-list p {
+  font-size: 13px;
+}
+
+.evidence-list span {
+  color: var(--app-text-secondary);
+  font-weight: 700;
+}
+
+.suggestion {
+  color: var(--app-navy);
+  font-weight: 600;
 }
 
 .analysis-notes {

@@ -42,7 +42,7 @@ app:
       model: ${AI_MODEL}
       timeout-seconds: ${AI_TIMEOUT_SECONDS:90}
       temperature: ${AI_TEMPERATURE:0.2}
-      max-tokens: ${AI_MAX_TOKENS:4000}
+      max-tokens: ${AI_MAX_TOKENS:16000}
     embedding-compatible:
       api-key: ${EMBEDDING_API_KEY:}
       base-url: ${EMBEDDING_BASE_URL:https://api.siliconflow.cn/v1}

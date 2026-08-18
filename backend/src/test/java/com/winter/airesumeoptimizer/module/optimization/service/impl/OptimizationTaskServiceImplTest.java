@@ -10,8 +10,8 @@ import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.winter.airesumeoptimizer.common.exception.BusinessException;
-import com.winter.airesumeoptimizer.module.analysis.entity.AiJobMatchResult;
 import com.winter.airesumeoptimizer.module.analysis.mapper.AiJobMatchResultMapper;
+import com.winter.airesumeoptimizer.module.evidence.entity.EvidenceAnalysis;
 import com.winter.airesumeoptimizer.module.job.entity.JobDescription;
 import com.winter.airesumeoptimizer.module.job.mapper.JobDescriptionMapper;
 import com.winter.airesumeoptimizer.module.job.service.JobDescriptionService;
@@ -182,40 +182,39 @@ class OptimizationTaskServiceImplTest {
         when(jobTargetMapper.selectOne(any())).thenReturn(jobTarget());
         when(optimizationTaskMapper.update(any(), any())).thenReturn(1);
         when(jobTargetMapper.update(any(), any())).thenReturn(1);
-        AiJobMatchResult matchResult = new AiJobMatchResult();
-        matchResult.setId(60L);
-        matchResult.setResumeId(10L);
-        matchResult.setJobDescriptionId(20L);
-        matchResult.setMatchStatus("SUCCESS");
-        matchResult.setModelName("test-model");
-        matchResult.setPromptVersion("match-v1");
 
         service.markSuccess(
                 1L,
                 50L,
                 JobDescriptionVO.builder().title("高级 Java 工程师").promptVersion("job-v1").build(),
-                matchResult);
+                evidenceAnalysis(50L, 1L));
 
         verify(optimizationTaskMapper).update(any(), any());
         verify(jobTargetMapper).update(any(), any());
     }
 
     @Test
-    void markSuccessShouldRejectAnalysisResultFromAnotherOwnedResource() {
+    void markSuccessShouldRejectEvidenceAnalysisFromAnotherTask() {
         OptimizationTask task = task("RUNNING");
         task.setResumeInputSnapshot("{\"skills\":[\"Java\"]}");
         when(optimizationTaskMapper.selectOne(any())).thenReturn(task);
-        when(resumeVersionMapper.selectOne(any())).thenReturn(sourceVersion());
-        when(jobTargetMapper.selectOne(any())).thenReturn(jobTarget());
-        AiJobMatchResult matchResult = new AiJobMatchResult();
-        matchResult.setId(60L);
-        matchResult.setResumeId(999L);
-        matchResult.setJobDescriptionId(20L);
-        matchResult.setMatchStatus("SUCCESS");
 
-        assertThatThrownBy(() -> service.markSuccess(1L, 50L, null, matchResult))
+        assertThatThrownBy(() -> service.markSuccess(1L, 50L, null, evidenceAnalysis(999L, 1L)))
                 .isInstanceOf(BusinessException.class)
-                .hasMessage("岗位分析结果不属于当前优化任务");
+                .hasMessage("岗位证据分析不属于当前优化任务");
+
+        verify(optimizationTaskMapper, never()).update(any(), any());
+    }
+
+    @Test
+    void markSuccessShouldRejectEvidenceAnalysisOwnedByAnotherUser() {
+        OptimizationTask task = task("RUNNING");
+        task.setResumeInputSnapshot("{\"skills\":[\"Java\"]}");
+        when(optimizationTaskMapper.selectOne(any())).thenReturn(task);
+
+        assertThatThrownBy(() -> service.markSuccess(1L, 50L, null, evidenceAnalysis(50L, 2L)))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("岗位证据分析不属于当前优化任务");
 
         verify(optimizationTaskMapper, never()).update(any(), any());
     }
@@ -223,19 +222,25 @@ class OptimizationTaskServiceImplTest {
     @Test
     void markSuccessShouldFailWhenInputSnapshotWasNotCaptured() {
         when(optimizationTaskMapper.selectOne(any())).thenReturn(task("RUNNING"));
-        when(resumeVersionMapper.selectOne(any())).thenReturn(sourceVersion());
-        when(jobTargetMapper.selectOne(any())).thenReturn(jobTarget());
-        AiJobMatchResult matchResult = new AiJobMatchResult();
-        matchResult.setId(60L);
-        matchResult.setResumeId(10L);
-        matchResult.setJobDescriptionId(20L);
-        matchResult.setMatchStatus("SUCCESS");
 
-        assertThatThrownBy(() -> service.markSuccess(1L, 50L, null, matchResult))
+        assertThatThrownBy(() -> service.markSuccess(1L, 50L, null, evidenceAnalysis(50L, 1L)))
                 .isInstanceOf(BusinessException.class)
                 .hasMessage("优化任务缺少简历输入快照");
 
         verify(optimizationTaskMapper, never()).update(any(), any());
+    }
+
+    private EvidenceAnalysis evidenceAnalysis(Long optimizationTaskId, Long userId) {
+        EvidenceAnalysis analysis = new EvidenceAnalysis();
+        analysis.setId(60L);
+        analysis.setUserId(userId);
+        analysis.setOptimizationTaskId(optimizationTaskId);
+        analysis.setMatchedCount(1);
+        analysis.setExpressionGapCount(1);
+        analysis.setNoEvidenceCount(1);
+        analysis.setModelName("test-model");
+        analysis.setPromptVersion("evidence_match_v1");
+        return analysis;
     }
 
     private ResumeVersion sourceVersion() {

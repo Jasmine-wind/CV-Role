@@ -8,6 +8,7 @@ import com.winter.airesumeoptimizer.common.exception.BusinessException;
 import com.winter.airesumeoptimizer.common.logging.LogSanitizer;
 import com.winter.airesumeoptimizer.module.analysis.entity.AiJobMatchResult;
 import com.winter.airesumeoptimizer.module.analysis.mapper.AiJobMatchResultMapper;
+import com.winter.airesumeoptimizer.module.evidence.entity.EvidenceAnalysis;
 import com.winter.airesumeoptimizer.module.job.dto.JobDescriptionSubmitDTO;
 import com.winter.airesumeoptimizer.module.job.entity.JobDescription;
 import com.winter.airesumeoptimizer.module.job.mapper.JobDescriptionMapper;
@@ -224,28 +225,25 @@ public class OptimizationTaskServiceImpl implements OptimizationTaskService {
             Long userId,
             Long optimizationTaskId,
             JobDescriptionVO parsedJob,
-            AiJobMatchResult matchResult) {
+            EvidenceAnalysis evidenceAnalysis) {
         OptimizationTask task = getOwnedTask(userId, optimizationTaskId);
-        if (matchResult == null || matchResult.getId() == null || !STATUS_SUCCESS.equals(matchResult.getMatchStatus())) {
-            throw new BusinessException(400, "岗位分析结果未成功，不能完成优化任务");
+        if (evidenceAnalysis == null || evidenceAnalysis.getId() == null) {
+            throw new BusinessException(400, "岗位证据分析未成功，不能完成优化任务");
         }
-        ResumeVersion sourceVersion = getOwnedVersion(userId, task.getSourceResumeVersionId());
-        JobTarget jobTarget = getOwnedJobTarget(userId, task.getJobTargetId());
-        if (!sourceVersion.getResumeId().equals(matchResult.getResumeId())
-                || !jobTarget.getLegacyJobDescriptionId().equals(matchResult.getJobDescriptionId())) {
-            throw new BusinessException(400, "岗位分析结果不属于当前优化任务");
+        if (!task.getId().equals(evidenceAnalysis.getOptimizationTaskId())
+                || !userId.equals(evidenceAnalysis.getUserId())) {
+            throw new BusinessException(400, "岗位证据分析不属于当前优化任务");
         }
         if (task.getResumeInputSnapshot() == null || task.getResumeInputSnapshot().isBlank()) {
             throw new BusinessException(500, "优化任务缺少简历输入快照");
         }
 
         LocalDateTime now = LocalDateTime.now();
-        String promptSnapshot = serializePromptSnapshot(parsedJob, matchResult);
+        String promptSnapshot = serializePromptSnapshot(parsedJob, evidenceAnalysis);
         updateOwnedTask(userId, optimizationTaskId, new UpdateWrapper<OptimizationTask>()
                 .set("status", STATUS_SUCCESS)
-                .set("analysis_result_id", matchResult.getId())
                 .set("prompt_snapshot", promptSnapshot)
-                .set("model_snapshot", matchResult.getModelName())
+                .set("model_snapshot", evidenceAnalysis.getModelName())
                 .set("error_code", null)
                 .set("error_message", null)
                 .set("finished_at", now)
@@ -273,7 +271,7 @@ public class OptimizationTaskServiceImpl implements OptimizationTaskService {
     }
 
     @Override
-    public AiJobMatchResult getAnalysisResult(Long userId, Long optimizationTaskId) {
+    public AiJobMatchResult getLegacyAnalysisResult(Long userId, Long optimizationTaskId) {
         OptimizationTask task = getOwnedTask(userId, optimizationTaskId);
         if (task.getAnalysisResultId() == null) {
             throw new BusinessException(404, "岗位分析结果尚未生成");
@@ -493,11 +491,11 @@ public class OptimizationTaskServiceImpl implements OptimizationTaskService {
         }
     }
 
-    private String serializePromptSnapshot(JobDescriptionVO parsedJob, AiJobMatchResult matchResult) {
+    private String serializePromptSnapshot(JobDescriptionVO parsedJob, EvidenceAnalysis evidenceAnalysis) {
         try {
             return objectMapper.writeValueAsString(Map.of(
                     "jobParsePromptVersion", valueOrEmpty(parsedJob == null ? null : parsedJob.getPromptVersion()),
-                    "matchPromptVersion", valueOrEmpty(matchResult.getPromptVersion())));
+                    "evidenceMatchPromptVersion", valueOrEmpty(evidenceAnalysis.getPromptVersion())));
         } catch (JsonProcessingException exception) {
             throw new BusinessException(500, "任务配置快照保存失败");
         }

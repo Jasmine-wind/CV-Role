@@ -1,6 +1,7 @@
 package com.winter.airesumeoptimizer.module.optimization.service;
 
 import com.winter.airesumeoptimizer.module.analysis.entity.AiJobMatchResult;
+import com.winter.airesumeoptimizer.module.evidence.entity.EvidenceAnalysis;
 import com.winter.airesumeoptimizer.module.job.vo.JobDescriptionVO;
 import com.winter.airesumeoptimizer.module.optimization.vo.OptimizationTaskVO;
 
@@ -37,11 +38,15 @@ public interface OptimizationTaskService {
             Long userId,
             Long optimizationTaskId,
             JobDescriptionVO parsedJob,
-            AiJobMatchResult matchResult);
+            EvidenceAnalysis evidenceAnalysis);
 
     void markFailed(Long userId, Long optimizationTaskId, String errorCode, String errorMessage);
 
-    AiJobMatchResult getAnalysisResult(Long userId, Long optimizationTaskId);
+    /**
+     * 兼容读取：返回任务关联的 V1 匹配结果。Phase 3 起新任务不再生成该结果，
+     * 正式结果以 EvidenceAnalysis 为准。
+     */
+    AiJobMatchResult getLegacyAnalysisResult(Long userId, Long optimizationTaskId);
 
     record ExecutionContext(
             Long optimizationTaskId,

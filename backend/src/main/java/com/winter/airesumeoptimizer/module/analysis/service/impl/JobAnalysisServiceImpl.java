@@ -3,10 +3,10 @@ package com.winter.airesumeoptimizer.module.analysis.service.impl;
 import com.winter.airesumeoptimizer.common.exception.BusinessException;
 import com.winter.airesumeoptimizer.infra.ai.AiClientService;
 import com.winter.airesumeoptimizer.module.analysis.dto.JobAnalysisStartRequestDTO;
-import com.winter.airesumeoptimizer.module.analysis.entity.AiJobMatchResult;
-import com.winter.airesumeoptimizer.module.analysis.service.AiJobMatchService;
 import com.winter.airesumeoptimizer.module.analysis.service.JobAnalysisService;
 import com.winter.airesumeoptimizer.module.analysis.vo.JobAnalysisStartVO;
+import com.winter.airesumeoptimizer.module.evidence.entity.EvidenceAnalysis;
+import com.winter.airesumeoptimizer.module.evidence.service.EvidenceMatchService;
 import com.winter.airesumeoptimizer.module.job.service.JobDescriptionParseService;
 import com.winter.airesumeoptimizer.module.job.vo.JobDescriptionVO;
 import com.winter.airesumeoptimizer.module.optimization.service.OptimizationTaskService;
@@ -36,7 +36,7 @@ public class JobAnalysisServiceImpl implements JobAnalysisService {
 
     private final ResumeService resumeService;
     private final JobDescriptionParseService jobDescriptionParseService;
-    private final AiJobMatchService aiJobMatchService;
+    private final EvidenceMatchService evidenceMatchService;
     private final OptimizationTaskService optimizationTaskService;
     private final AsyncTaskService asyncTaskService;
     private final AsyncTaskFailureHandler asyncTaskFailureHandler;
@@ -46,7 +46,7 @@ public class JobAnalysisServiceImpl implements JobAnalysisService {
     public JobAnalysisServiceImpl(
             ResumeService resumeService,
             JobDescriptionParseService jobDescriptionParseService,
-            AiJobMatchService aiJobMatchService,
+            EvidenceMatchService evidenceMatchService,
             OptimizationTaskService optimizationTaskService,
             AsyncTaskService asyncTaskService,
             AsyncTaskFailureHandler asyncTaskFailureHandler,
@@ -54,7 +54,7 @@ public class JobAnalysisServiceImpl implements JobAnalysisService {
             @Qualifier("applicationTaskExecutor") TaskExecutor taskExecutor) {
         this.resumeService = resumeService;
         this.jobDescriptionParseService = jobDescriptionParseService;
-        this.aiJobMatchService = aiJobMatchService;
+        this.evidenceMatchService = evidenceMatchService;
         this.optimizationTaskService = optimizationTaskService;
         this.asyncTaskService = asyncTaskService;
         this.asyncTaskFailureHandler = asyncTaskFailureHandler;
@@ -188,23 +188,25 @@ public class JobAnalysisServiceImpl implements JobAnalysisService {
                 return;
             }
 
-            asyncTaskService.updateStage(asyncTaskId, "正在对比岗位与简历");
-            AiJobMatchResult matchResult = aiJobMatchService.match(
-                    userId,
-                    context.resumeId(),
-                    context.jobDescriptionId());
-            if (!STATUS_SUCCESS.equals(matchResult.getMatchStatus())) {
+            asyncTaskService.updateStage(asyncTaskId, "正在核对岗位要求与简历内容");
+            EvidenceAnalysis evidenceAnalysis;
+            try {
+                evidenceAnalysis = evidenceMatchService.analyze(
+                        userId,
+                        context.optimizationTaskId(),
+                        parsedJob);
+            } catch (BusinessException exception) {
                 failTask(
                         asyncTaskId,
                         userId,
                         context.optimizationTaskId(),
                         AsyncTaskErrorCode.AI_RESPONSE_INVALID,
-                        firstPresent(matchResult.getErrorMessage(), "岗位分析失败"));
+                        firstPresent(exception.getMessage(), "岗位分析失败"));
                 return;
             }
 
             asyncTaskService.updateStage(asyncTaskId, "正在整理分析结果");
-            optimizationTaskService.markSuccess(userId, context.optimizationTaskId(), parsedJob, matchResult);
+            optimizationTaskService.markSuccess(userId, context.optimizationTaskId(), parsedJob, evidenceAnalysis);
             formalTaskCompleted = true;
             asyncTaskService.markSuccess(
                     asyncTaskId,

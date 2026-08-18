@@ -47,6 +47,10 @@ import com.winter.airesumeoptimizer.module.auth.dto.LoginRequestDTO;
 import com.winter.airesumeoptimizer.module.auth.dto.RegisterRequestDTO;
 import com.winter.airesumeoptimizer.module.auth.service.AuthService;
 import com.winter.airesumeoptimizer.module.auth.vo.LoginVO;
+import com.winter.airesumeoptimizer.module.evidence.service.EvidenceMatchService;
+import com.winter.airesumeoptimizer.module.evidence.vo.EvidenceAnalysisResultVO;
+import com.winter.airesumeoptimizer.module.evidence.vo.EvidenceRequirementVO;
+import com.winter.airesumeoptimizer.module.evidence.vo.RequirementEvidenceVO;
 import com.winter.airesumeoptimizer.module.history.controller.HistoryController;
 import com.winter.airesumeoptimizer.module.history.controller.AiHistoryController;
 import com.winter.airesumeoptimizer.module.history.service.AiHistoryService;
@@ -178,6 +182,9 @@ class Phase1ApiIntegrationTest {
 
     @MockitoBean
     private OptimizationTaskService optimizationTaskService;
+
+    @MockitoBean
+    private EvidenceMatchService evidenceMatchService;
 
     @MockitoBean
     private JobOptimizationReportService jobOptimizationReportService;
@@ -441,7 +448,51 @@ class Phase1ApiIntegrationTest {
                 .jobTitle("Java 后端工程师")
                 .resumeName("resume.pdf")
                 .build());
-        when(optimizationTaskService.getAnalysisResult(1L, 2000L))
+        when(evidenceMatchService.getResult(1L, 2000L)).thenReturn(EvidenceAnalysisResultVO.builder()
+                .evidenceAnalysisId(500L)
+                .matchedCount(1)
+                .expressionGapCount(1)
+                .noEvidenceCount(0)
+                .requirements(List.of(
+                        EvidenceRequirementVO.builder()
+                                .evidenceRequirementId(501L)
+                                .requirementText("熟悉 Spring Boot 开发")
+                                .importance("REQUIRED")
+                                .matchLevel("MATCHED")
+                                .conclusion("简历已清楚描述 Spring Boot 开发经历")
+                                .evidences(List.of(RequirementEvidenceVO.builder()
+                                        .requirementEvidenceId(601L)
+                                        .sectionLabel("项目经历")
+                                        .evidenceText("基于 Spring Boot 完成业务接口开发")
+                                        .expressionStatus("ADEQUATE")
+                                        .build()))
+                                .build(),
+                        EvidenceRequirementVO.builder()
+                                .evidenceRequirementId(502L)
+                                .requirementText("具备 Redis 缓存设计经验")
+                                .importance("REQUIRED")
+                                .matchLevel("EXPRESSION_GAP")
+                                .conclusion("简历提到 Redis，但未说明使用场景")
+                                .suggestion("补充 Redis 的真实使用场景")
+                                .evidences(List.of(RequirementEvidenceVO.builder()
+                                        .requirementEvidenceId(602L)
+                                        .sectionLabel("技能")
+                                        .evidenceText("熟悉 Redis")
+                                        .expressionStatus("WEAK")
+                                        .build()))
+                                .build()))
+                .build());
+        when(optimizationTaskService.get(1L, 2001L)).thenReturn(OptimizationTaskVO.builder()
+                .optimizationTaskId(2001L)
+                .sourceResumeVersionId(3000L)
+                .targetResumeVersionId(3001L)
+                .jobTargetId(4000L)
+                .status("SUCCESS")
+                .jobTitle("历史任务")
+                .resumeName("resume.pdf")
+                .build());
+        when(evidenceMatchService.getResult(1L, 2001L)).thenReturn(null);
+        when(optimizationTaskService.getLegacyAnalysisResult(1L, 2001L))
                 .thenReturn(buildAiJobMatchResult("SUCCESS"));
 
         mockMvc.perform(post("/api/job-analyses")
@@ -476,7 +527,23 @@ class Phase1ApiIntegrationTest {
                 .andExpect(jsonPath("$.data.jobTargetId").value(4000))
                 .andExpect(jsonPath("$.data.jobTitle").value("Java 后端工程师"))
                 .andExpect(jsonPath("$.data.resumeName").value("resume.pdf"))
-                .andExpect(jsonPath("$.data.analysis.matchId").value(400));
+                .andExpect(jsonPath("$.data.analysisMode").value("EVIDENCE"))
+                .andExpect(jsonPath("$.data.evidenceAnalysis.evidenceAnalysisId").value(500))
+                .andExpect(jsonPath("$.data.evidenceAnalysis.matchedCount").value(1))
+                .andExpect(jsonPath("$.data.evidenceAnalysis.expressionGapCount").value(1))
+                .andExpect(jsonPath("$.data.evidenceAnalysis.requirements", hasSize(2)))
+                .andExpect(jsonPath("$.data.evidenceAnalysis.requirements[0].matchLevel").value("MATCHED"))
+                .andExpect(jsonPath("$.data.evidenceAnalysis.requirements[0].evidences[0].evidenceText")
+                        .value("基于 Spring Boot 完成业务接口开发"))
+                .andExpect(jsonPath("$.data.evidenceAnalysis.requirements[1].matchLevel").value("EXPRESSION_GAP"))
+                .andExpect(jsonPath("$.data.legacyAnalysis").doesNotExist());
+
+        mockMvc.perform(get("/api/optimization-tasks/2001/analysis-result")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.analysisMode").value("LEGACY_COMPAT"))
+                .andExpect(jsonPath("$.data.evidenceAnalysis").doesNotExist())
+                .andExpect(jsonPath("$.data.legacyAnalysis.matchId").value(400));
 
         mockMvc.perform(post("/api/job-analyses/10/retry")
                         .param("resumeId", "100")

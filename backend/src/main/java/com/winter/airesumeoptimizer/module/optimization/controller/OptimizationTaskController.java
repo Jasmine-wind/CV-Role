@@ -1,9 +1,13 @@
 package com.winter.airesumeoptimizer.module.optimization.controller;
 
+import com.winter.airesumeoptimizer.common.exception.BusinessException;
 import com.winter.airesumeoptimizer.common.result.Result;
 import com.winter.airesumeoptimizer.module.analysis.assembler.AnalysisVoAssembler;
 import com.winter.airesumeoptimizer.module.analysis.service.JobAnalysisService;
+import com.winter.airesumeoptimizer.module.analysis.vo.AiJobMatchResultVO;
 import com.winter.airesumeoptimizer.module.analysis.vo.JobAnalysisStartVO;
+import com.winter.airesumeoptimizer.module.evidence.service.EvidenceMatchService;
+import com.winter.airesumeoptimizer.module.evidence.vo.EvidenceAnalysisResultVO;
 import com.winter.airesumeoptimizer.module.optimization.service.OptimizationTaskService;
 import com.winter.airesumeoptimizer.module.optimization.vo.OptimizationAnalysisResultVO;
 import com.winter.airesumeoptimizer.module.optimization.vo.OptimizationTaskVO;
@@ -27,16 +31,22 @@ import org.springframework.web.bind.annotation.RestController;
 @SecurityRequirement(name = "bearerAuth")
 public class OptimizationTaskController {
 
+    private static final String ANALYSIS_MODE_EVIDENCE = "EVIDENCE";
+    private static final String ANALYSIS_MODE_LEGACY_COMPAT = "LEGACY_COMPAT";
+
     private final OptimizationTaskService optimizationTaskService;
     private final JobAnalysisService jobAnalysisService;
+    private final EvidenceMatchService evidenceMatchService;
     private final AnalysisVoAssembler analysisVoAssembler;
 
     public OptimizationTaskController(
             OptimizationTaskService optimizationTaskService,
             JobAnalysisService jobAnalysisService,
+            EvidenceMatchService evidenceMatchService,
             AnalysisVoAssembler analysisVoAssembler) {
         this.optimizationTaskService = optimizationTaskService;
         this.jobAnalysisService = jobAnalysisService;
+        this.evidenceMatchService = evidenceMatchService;
         this.analysisVoAssembler = analysisVoAssembler;
     }
 
@@ -61,12 +71,18 @@ public class OptimizationTaskController {
     }
 
     @GetMapping("/{optimizationTaskId}/analysis-result")
-    @Operation(summary = "查看岗位分析结果", description = "通过正式优化任务读取对应的兼容分析结果")
+    @Operation(summary = "查看岗位分析结果", description = "优先返回正式岗位证据分析；历史任务无正式分析时兼容读取旧匹配结果")
     public Result<OptimizationAnalysisResultVO> getAnalysisResult(
             @PathVariable @Positive(message = "优化任务 ID 必须大于 0") Long optimizationTaskId,
             Authentication authentication) {
         AuthenticatedUser user = (AuthenticatedUser) authentication.getPrincipal();
         OptimizationTaskVO task = optimizationTaskService.get(user.getUserId(), optimizationTaskId);
+        EvidenceAnalysisResultVO evidenceAnalysis =
+                evidenceMatchService.getResult(user.getUserId(), optimizationTaskId);
+        AiJobMatchResultVO legacyAnalysis = null;
+        if (evidenceAnalysis == null) {
+            legacyAnalysis = loadLegacyAnalysis(user.getUserId(), optimizationTaskId);
+        }
         return Result.success(OptimizationAnalysisResultVO.builder()
                 .optimizationTaskId(task.getOptimizationTaskId())
                 .sourceResumeVersionId(task.getSourceResumeVersionId())
@@ -75,8 +91,21 @@ public class OptimizationTaskController {
                 .status(task.getStatus())
                 .jobTitle(task.getJobTitle())
                 .resumeName(task.getResumeName())
-                .analysis(analysisVoAssembler.toAiJobMatchResultVO(
-                        optimizationTaskService.getAnalysisResult(user.getUserId(), optimizationTaskId)))
+                .analysisMode(evidenceAnalysis != null ? ANALYSIS_MODE_EVIDENCE : ANALYSIS_MODE_LEGACY_COMPAT)
+                .evidenceAnalysis(evidenceAnalysis)
+                .legacyAnalysis(legacyAnalysis)
                 .build());
+    }
+
+    private AiJobMatchResultVO loadLegacyAnalysis(Long userId, Long optimizationTaskId) {
+        try {
+            return analysisVoAssembler.toAiJobMatchResultVO(
+                    optimizationTaskService.getLegacyAnalysisResult(userId, optimizationTaskId));
+        } catch (BusinessException exception) {
+            if (exception.getCode() != null && exception.getCode() == 404) {
+                return null;
+            }
+            throw exception;
+        }
     }
 }

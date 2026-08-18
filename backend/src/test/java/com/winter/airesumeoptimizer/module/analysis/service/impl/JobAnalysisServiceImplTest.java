@@ -11,9 +11,9 @@ import static org.mockito.Mockito.when;
 import com.winter.airesumeoptimizer.common.exception.BusinessException;
 import com.winter.airesumeoptimizer.infra.ai.AiClientService;
 import com.winter.airesumeoptimizer.module.analysis.dto.JobAnalysisStartRequestDTO;
-import com.winter.airesumeoptimizer.module.analysis.entity.AiJobMatchResult;
-import com.winter.airesumeoptimizer.module.analysis.service.AiJobMatchService;
 import com.winter.airesumeoptimizer.module.analysis.vo.JobAnalysisStartVO;
+import com.winter.airesumeoptimizer.module.evidence.entity.EvidenceAnalysis;
+import com.winter.airesumeoptimizer.module.evidence.service.EvidenceMatchService;
 import com.winter.airesumeoptimizer.module.job.service.JobDescriptionParseService;
 import com.winter.airesumeoptimizer.module.job.vo.JobDescriptionVO;
 import com.winter.airesumeoptimizer.module.optimization.service.OptimizationTaskService;
@@ -35,7 +35,7 @@ class JobAnalysisServiceImplTest {
 
     private final ResumeService resumeService = mock(ResumeService.class);
     private final JobDescriptionParseService jobDescriptionParseService = mock(JobDescriptionParseService.class);
-    private final AiJobMatchService aiJobMatchService = mock(AiJobMatchService.class);
+    private final EvidenceMatchService evidenceMatchService = mock(EvidenceMatchService.class);
     private final OptimizationTaskService optimizationTaskService = mock(OptimizationTaskService.class);
     private final AsyncTaskService asyncTaskService = mock(AsyncTaskService.class);
     private final AsyncTaskFailureHandler asyncTaskFailureHandler = mock(AsyncTaskFailureHandler.class);
@@ -43,7 +43,7 @@ class JobAnalysisServiceImplTest {
     private final JobAnalysisServiceImpl service = new JobAnalysisServiceImpl(
             resumeService,
             jobDescriptionParseService,
-            aiJobMatchService,
+            evidenceMatchService,
             optimizationTaskService,
             asyncTaskService,
             asyncTaskFailureHandler,
@@ -87,7 +87,7 @@ class JobAnalysisServiceImplTest {
                 org.mockito.ArgumentMatchers.eq(1L),
                 org.mockito.ArgumentMatchers.eq(50L),
                 any(JobDescriptionVO.class),
-                any(AiJobMatchResult.class));
+                any(EvidenceAnalysis.class));
         verify(asyncTaskService).markSuccess(100L, "OPTIMIZATION_TASK", 50L, "Java 后端工程师");
 
         ArgumentCaptor<String> titleCaptor = ArgumentCaptor.forClass(String.class);
@@ -183,13 +183,17 @@ class JobAnalysisServiceImplTest {
                 .thenThrow(new BusinessException(404, "简历尚未解析"));
         when(resumeService.parse(1L, 10L)).thenReturn(successfulResumeParse());
         when(jobDescriptionParseService.parse(1L, 20L)).thenReturn(successfulJob());
-        when(aiJobMatchService.match(1L, 10L, 20L)).thenReturn(successfulMatch());
+        when(evidenceMatchService.analyze(org.mockito.ArgumentMatchers.eq(1L),
+                org.mockito.ArgumentMatchers.eq(50L),
+                any(JobDescriptionVO.class))).thenReturn(successfulEvidenceAnalysis());
 
         service.start(1L, request("目标岗位 JD"));
 
         verify(resumeService).parse(1L, 10L);
         verify(optimizationTaskService).captureResumeSnapshot(1L, 50L, "{\"skills\":[\"Java\"]}");
-        verify(aiJobMatchService).match(1L, 10L, 20L);
+        verify(evidenceMatchService).analyze(org.mockito.ArgumentMatchers.eq(1L),
+                org.mockito.ArgumentMatchers.eq(50L),
+                any(JobDescriptionVO.class));
     }
 
     @Test
@@ -217,13 +221,38 @@ class JobAnalysisServiceImplTest {
                 AsyncTaskErrorCode.FILE_PARSE_FAILED.name(),
                 "无法读取简历");
         verify(jobDescriptionParseService, never()).parse(1L, 20L);
-        verify(aiJobMatchService, never()).match(1L, 10L, 20L);
+        verify(evidenceMatchService, never()).analyze(any(), any(), any());
+    }
+
+    @Test
+    void startShouldFailBothTaskStatesWhenEvidenceAnalysisRejected() {
+        when(resumeService.getParseResult(1L, 10L)).thenReturn(successfulResumeParse());
+        when(jobDescriptionParseService.parse(1L, 20L)).thenReturn(successfulJob());
+        when(evidenceMatchService.analyze(org.mockito.ArgumentMatchers.eq(1L),
+                org.mockito.ArgumentMatchers.eq(50L),
+                any(JobDescriptionVO.class)))
+                .thenThrow(new BusinessException(502, "岗位证据分析结果不是合法 JSON"));
+
+        service.start(1L, request("目标岗位 JD"));
+
+        verify(optimizationTaskService).markFailed(
+                1L,
+                50L,
+                AsyncTaskErrorCode.AI_RESPONSE_INVALID.name(),
+                "岗位证据分析结果不是合法 JSON");
+        verify(asyncTaskService).markFailed(
+                100L,
+                AsyncTaskErrorCode.AI_RESPONSE_INVALID.name(),
+                "岗位证据分析结果不是合法 JSON");
+        verify(optimizationTaskService, never()).markSuccess(any(), any(), any(), any());
     }
 
     private void prepareSuccessfulAnalysis() {
         when(resumeService.getParseResult(1L, 10L)).thenReturn(successfulResumeParse());
         when(jobDescriptionParseService.parse(1L, 20L)).thenReturn(successfulJob());
-        when(aiJobMatchService.match(1L, 10L, 20L)).thenReturn(successfulMatch());
+        when(evidenceMatchService.analyze(org.mockito.ArgumentMatchers.eq(1L),
+                org.mockito.ArgumentMatchers.eq(50L),
+                any(JobDescriptionVO.class))).thenReturn(successfulEvidenceAnalysis());
     }
 
     private ResumeParseResultVO successfulResumeParse() {
@@ -243,13 +272,17 @@ class JobAnalysisServiceImplTest {
                 .build();
     }
 
-    private AiJobMatchResult successfulMatch() {
-        AiJobMatchResult match = new AiJobMatchResult();
-        match.setId(60L);
-        match.setMatchStatus("SUCCESS");
-        match.setModelName("test-model");
-        match.setPromptVersion("match-v1");
-        return match;
+    private EvidenceAnalysis successfulEvidenceAnalysis() {
+        EvidenceAnalysis analysis = new EvidenceAnalysis();
+        analysis.setId(60L);
+        analysis.setUserId(1L);
+        analysis.setOptimizationTaskId(50L);
+        analysis.setMatchedCount(1);
+        analysis.setExpressionGapCount(1);
+        analysis.setNoEvidenceCount(1);
+        analysis.setModelName("test-model");
+        analysis.setPromptVersion("evidence_match_v1");
+        return analysis;
     }
 
     private OptimizationTaskVO taskVO() {
