@@ -1,9 +1,9 @@
 # =========================
-# Project docs / generated help
+# Generated help / local agent state
 # =========================
 HELP.md
-AGENTS.md
 .codex
+.pi/
 # =========================
 # Java / Maven
 # =========================
@@ -80,8 +80,10 @@ coverage/
 !.env.production.example
 
 # =========================
-# OS / desktop files
+# Python / OS / desktop files
 # =========================
+__pycache__/
+*.py[cod]
 .DS_Store
 Thumbs.db
 .directory
@@ -110,16 +112,3 @@ temp/
 /storage/
 /minio-data/
 /postgres-data/
-
-# =========================
-# Resume parse regression private samples
-# =========================
-docs/evaluation/parse/regression/private-inputs/
-docs/demo/private/
-docs/demo/*private*
-
-# Local-only presentation images
-
-
-docs/project-package.md
-AGENTS.md
