@@ -21,7 +21,7 @@ public class EvidenceAnalysis {
 
     private Integer matchedCount;
 
-    private Integer expressionGapCount;
+    private Integer partialEvidenceCount;
 
     private Integer noEvidenceCount;
 

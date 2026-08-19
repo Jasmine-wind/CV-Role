@@ -1,4 +1,4 @@
-export type EvidenceMatchLevel = 'MATCHED' | 'EXPRESSION_GAP' | 'NO_EVIDENCE'
+export type EvidenceMatchLevel = 'MATCHED' | 'PARTIAL_EVIDENCE' | 'NO_EVIDENCE'
 
 export type RequirementImportance = 'REQUIRED' | 'BONUS'
 
@@ -6,7 +6,7 @@ export interface RequirementEvidenceItem {
   requirementEvidenceId: number
   sectionLabel: string | null
   evidenceText: string
-  expressionStatus: 'ADEQUATE' | 'WEAK' | string
+  supportLevel: 'SUFFICIENT' | 'PARTIAL' | string
 }
 
 export interface EvidenceRequirementItem {
@@ -22,7 +22,7 @@ export interface EvidenceRequirementItem {
 export interface EvidenceAnalysisResult {
   evidenceAnalysisId: number
   matchedCount: number
-  expressionGapCount: number
+  partialEvidenceCount: number
   noEvidenceCount: number
   requirements: EvidenceRequirementItem[]
 }

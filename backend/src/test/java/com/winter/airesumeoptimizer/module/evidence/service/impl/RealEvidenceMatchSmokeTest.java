@@ -19,6 +19,12 @@ import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
  */
 class RealEvidenceMatchSmokeTest {
 
+    private static final String JOB_DESCRIPTION = """
+            Java 后端开发工程师。熟练掌握 Java，熟悉 Spring Boot；熟悉 Redis，具备缓存设计经验；
+            熟练使用 Git 进行团队协作。有后端项目开发经验，具备高并发系统优化经验。
+            负责业务接口开发和维护。具备 Kafka 消息队列使用经验者优先。
+            """;
+
     private static final String JOB_STRUCTURED = """
             {"jobTitle":"Java 后端开发工程师",
             "requiredSkills":["熟练掌握 Java，熟悉 Spring Boot","熟悉 Redis，具备缓存设计经验","熟练使用 Git 进行团队协作"],
@@ -52,20 +58,20 @@ class RealEvidenceMatchSmokeTest {
 
         AiClientService aiClientService = new OpenAiCompatibleAiClientService(properties, new ObjectMapper());
         AiEvidenceMatchingStrategyImpl strategy = new AiEvidenceMatchingStrategyImpl(
-                new EvidenceMatchPromptServiceImpl(new PromptTemplateService()),
+                new EvidenceMatchPromptServiceImpl(new PromptTemplateService(), new ObjectMapper()),
                 new EvidenceMatchOutputParserImpl(new ObjectMapper()),
                 aiClientService);
 
-        EvidenceMatchOutcomeDTO outcome = strategy.match(JOB_STRUCTURED, RESUME_STRUCTURED);
+        EvidenceMatchOutcomeDTO outcome = strategy.match(JOB_DESCRIPTION, JOB_STRUCTURED, RESUME_STRUCTURED);
 
         assertThat(outcome.getRequirements()).isNotEmpty();
         for (EvidenceRequirementEvaluationDTO requirement : outcome.getRequirements()) {
             // 硬不变量：任何保留下来的证据引用必须真实出现在简历快照中。
             for (EvidenceQuoteDTO quote : requirement.getEvidences()) {
-                assertThat(normalized(RESUME_STRUCTURED)).contains(normalized(quote.getQuote()));
+                assertThat(RESUME_STRUCTURED).contains(quote.getQuote());
             }
             if (requirement.getMatchLevel().name().equals("MATCHED")
-                    || requirement.getMatchLevel().name().equals("EXPRESSION_GAP")) {
+                    || requirement.getMatchLevel().name().equals("PARTIAL_EVIDENCE")) {
                 assertThat(requirement.getEvidences()).isNotEmpty();
             }
             System.out.printf("[evidence-smoke] %s | %s | %s | 证据 %d 条 | %s%n",
@@ -82,17 +88,6 @@ class RealEvidenceMatchSmokeTest {
                 .forEach(requirement -> assertThat(requirement.getMatchLevel().name())
                         .as("Kafka 在简历中不存在，不允许判定为有证据")
                         .isEqualTo("NO_EVIDENCE"));
-    }
-
-    private String normalized(String value) {
-        StringBuilder builder = new StringBuilder(value.length());
-        for (int index = 0; index < value.length(); index++) {
-            char current = value.charAt(index);
-            if (!Character.isWhitespace(current)) {
-                builder.append(Character.toLowerCase(current));
-            }
-        }
-        return builder.toString();
     }
 
     private String requiredProperty(String name) {

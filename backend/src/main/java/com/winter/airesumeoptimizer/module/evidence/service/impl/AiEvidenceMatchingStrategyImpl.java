@@ -32,7 +32,10 @@ public class AiEvidenceMatchingStrategyImpl implements EvidenceMatchingStrategy 
     }
 
     @Override
-    public EvidenceMatchOutcomeDTO match(String jobStructuredContent, String resumeStructuredContent) {
+    public EvidenceMatchOutcomeDTO match(
+            String frozenJobDescription,
+            String jobStructuredContent,
+            String resumeStructuredContent) {
         EvidenceMatchPromptDTO prompt = evidenceMatchPromptService.buildPrompt(
                 jobStructuredContent,
                 resumeStructuredContent);
@@ -46,11 +49,15 @@ public class AiEvidenceMatchingStrategyImpl implements EvidenceMatchingStrategy 
             throw new BusinessException(502, "AI 服务暂时不可用，请稍后重试");
         }
         // 引用校核使用完整简历快照，而不是截断后的 Prompt 输入。
-        return evidenceMatchOutputParser.parse(aiOutput, resumeStructuredContent);
-    }
-
-    @Override
-    public String promptVersion() {
-        return EvidenceMatchPromptService.PROMPT_VERSION;
+        EvidenceMatchOutcomeDTO parsed = evidenceMatchOutputParser.parse(
+                aiOutput,
+                frozenJobDescription,
+                jobStructuredContent,
+                resumeStructuredContent);
+        return EvidenceMatchOutcomeDTO.builder()
+                .requirements(parsed.getRequirements())
+                .modelName(aiClientService.modelName())
+                .promptVersion(prompt.getPromptVersion())
+                .build();
     }
 }

@@ -1,6 +1,6 @@
 # CV-Role V2 重构计划
 
-本计划只把 [PRD.md](PRD.md) 已冻结的决策转成实施顺序，不扩展产品范围。当前仓库已完成 **Phase 2 核心领域模型** 与 **Phase 3 Evidence Matching 与 Gap Analysis**；Phase 4 尚未开始。
+本计划只把 [PRD.md](PRD.md) 已冻结的决策转成实施顺序，不扩展产品范围。当前仓库已完成 **Phase 2 核心领域模型** 与 **Phase 3 Evidence Matching / Gap Analysis**。Phase 3 已把三态收紧为当前材料能够证明的 MATCHED / PARTIAL_EVIDENCE / NO_EVIDENCE，并通过重新执行的 Gate；Phase 4 尚未在正式仓库中开始。
 
 ## 目标
 
@@ -9,7 +9,7 @@
 ```text
 我的简历 + 目标 JD
 → 一键岗位分析
-→ 区分可通过表达优化解决的问题与真实能力缺口
+→ 区分当前材料中的足够证据、部分证据与未体现要求
 → 用户编辑 + 受约束 AI 修改
 → 岗位优化版本
 → Preview / PDF
@@ -56,15 +56,17 @@
 
 完成状态：正式表使用复合外键保持用户归属；每次新分析建立独立源快照版本和岗位派生版本；任务保存 Resume / JD、Prompt、Rules、Provider、Model、Template 快照；旧匹配数据已可验证回填，迁移不修改或删除 V1 数据，旧应用可直接回滚；前端不再以 `resumeId + jobDescriptionId` 组织主流程。
 
-### Phase 3 — Evidence Matching 与 Gap Analysis（已完成）
+### Phase 3 — Evidence Matching 与 Gap Analysis（已完成，Gate 已通过）
 
-- 建立岗位要求、真实经历证据和当前表达的映射。
-- 区分“有经历但没写清楚”与“当前经历暂未覆盖”。
+- 建立岗位要求与当前冻结 ResumeVersion 证据的映射。
+- 区分“当前材料足够支持”“当前材料只有部分证据”“当前材料未找到支持证据”。
 - 无证据内容不得进入后续自动改写。
 
 门禁：每条可修改建议都有来源；能力缺口不会被 AI 强行写入简历。
 
-完成状态：正式分析结果以每个 OptimizationTask 一条 `evidence_analyses` 及其 `evidence_requirements` / `requirement_evidences` 行为 Source of Truth，V20 加法式迁移新建三张表，不回填、不修改 V1 数据；主链路在 JD 解析后直接生成正式证据分析，不再产生新的 `ai_job_match_results` 行；每条要求可判定为已有证据 / 有经历但表达不足 / 当前材料未提供证据，证据引用必须逐字命中冻结简历快照，否则被丢弃并降级为无证据；匹配策略位于 `EvidenceMatchingStrategy` 接口之后，首版不依赖 Embedding / RAG；结果页按自然语言展示并保留历史任务旧结果兼容读取；Workspace、AI Rewrite、Diff、Typst 未提前实现。
+完成状态：正式分析结果以每个 OptimizationTask 一条 `evidence_analyses` 及其 `evidence_requirements` / `requirement_evidences` 行为 Source of Truth，V20 新建正式表，V20.1 原位移除 EXPRESSION_GAP / expression_status 错误语义并将旧正式派生结果安全失效供重试；V1 历史数据不变。Requirement 必须回溯到冻结 JD；MATCHED / PARTIAL_EVIDENCE 必须有逐字命中冻结 ResumeVersion 且与要求相关的 Evidence，NO_EVIDENCE 不得保存 Evidence。PARTIAL_EVIDENCE 不代表用户现实中具有未被材料证明的经历，也不授权后续 AI 新增事实。失败重试保留冻结输入，正式结果与任务成功状态原子提交。匹配策略位于 `EvidenceMatchingStrategy` interface 之后，不依赖 Embedding / RAG；结果页使用“已有优势 / 建议完善 / 当前材料未体现”并保留历史 V1 兼容读取；Workspace、AI Rewrite、Diff、Typst 未在 Phase 3 中实现。
+
+Gate 结论：当前正式三态只陈述冻结材料可以支持的结论；引用真实性、用户归属、无证据降级、旧写入口、重试与结果原子性均已验证。真正的“有经历但没有写出来”明确留给未来用户确认或独立事实来源，不是 Phase 3 的隐含能力。
 
 ### Phase 4 — Optimization Workspace
 

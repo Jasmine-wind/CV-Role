@@ -174,6 +174,32 @@ class OptimizationTaskServiceImplTest {
     }
 
     @Test
+    void captureResumeSnapshotShouldNotReplaceFrozenInputOnRetry() {
+        OptimizationTask task = task("RUNNING");
+        task.setResumeInputSnapshot("{\"skills\":[\"原始快照\"]}");
+        when(optimizationTaskMapper.selectOne(any())).thenReturn(task);
+
+        service.captureResumeSnapshot(1L, 50L, "{\"skills\":[\"后来内容\"]}");
+
+        verify(optimizationTaskMapper, never()).update(any(), any());
+        verify(resumeVersionMapper, never()).update(any(), any());
+    }
+
+    @Test
+    void attachAsyncTaskShouldRejectLostConcurrentClaim() {
+        OptimizationTask failed = task("FAILED");
+        failed.setAsyncTaskId(90L);
+        when(optimizationTaskMapper.selectOne(any())).thenReturn(failed);
+        when(optimizationTaskMapper.update(any(), any())).thenReturn(0);
+
+        assertThatThrownBy(() -> service.attachAsyncTask(1L, 50L, 100L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("岗位分析正在进行中或已完成");
+
+        verify(optimizationTaskMapper).update(any(), any());
+    }
+
+    @Test
     void markSuccessShouldRequireSnapshotAndPersistResultConfiguration() {
         OptimizationTask task = task("RUNNING");
         task.setResumeInputSnapshot("{\"skills\":[\"Java\"]}");
@@ -236,7 +262,7 @@ class OptimizationTaskServiceImplTest {
         analysis.setUserId(userId);
         analysis.setOptimizationTaskId(optimizationTaskId);
         analysis.setMatchedCount(1);
-        analysis.setExpressionGapCount(1);
+        analysis.setPartialEvidenceCount(1);
         analysis.setNoEvidenceCount(1);
         analysis.setModelName("test-model");
         analysis.setPromptVersion("evidence_match_v1");

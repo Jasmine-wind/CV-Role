@@ -25,7 +25,7 @@ public class RequirementEvidence {
 
     private String evidenceText;
 
-    private String expressionStatus;
+    private String supportLevel;
 
     private LocalDateTime createdAt;
 }

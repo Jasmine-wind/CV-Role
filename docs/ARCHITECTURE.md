@@ -43,7 +43,7 @@ scripts/  生产运维脚本
 - `auth` / `user`：账号、登录和当前用户。
 - `resume`：简历文件、解析、质量检查与展示模型。
 - `job`：预置岗位、用户目标 JD、岗位解析和旧匹配。
-- `analysis`：诊断、优化建议、局部改写和聚合报告；旧 AI 匹配仍在其中，仅服务兼容读取，不再是主链路正式结果。
+- `analysis`：诊断、优化建议、局部改写和聚合报告；旧 AI 匹配仍在其中，公开写入口已停用，仅服务历史兼容读取，不再是主链路正式结果。
 - `optimization`：`ResumeVersion`、`JobTarget`、`OptimizationTask`，负责版本派生、输入与配置快照、任务归属和正式结果入口。
 - `evidence`：Phase 3 正式 Evidence Matching 与 Gap Analysis；岗位要求、简历证据与匹配结论的正式 Source of Truth。
 - `embedding`：文本分块、向量生成、相似度与 RAG 上下文；当前不进入正式证据匹配主链路。
@@ -64,12 +64,13 @@ scripts/  生产运维脚本
 → 岗位分析结果页只通过 OptimizationTask 读取正式证据分析；历史任务无正式分析时兼容读取旧匹配结果
 ```
 
-`ResumeIntakeService`、`JobAnalysisService` 与 `OptimizationTaskService` 是默认用户流的深模块 seam：前者负责上传与准备，第二个负责后台分析编排，第三个负责正式业务身份、版本关系和快照。调用方不需要编排 Parse、Embedding、Prompt 或供应商步骤。Phase 3 已建立正式 Evidence / Gap 模型：正式分析结果是每个任务一条 `evidence_analyses` 及其 `evidence_requirements` / `requirement_evidences` 行，每条岗位要求被判定为已有证据（MATCHED）、有经历但表达不足（EXPRESSION_GAP）或当前材料未提供证据（NO_EVIDENCE）；具体匹配实现位于 `EvidenceMatchingStrategy` 接口之后（当前为单次 AI 结构化输出 + 引用逐字校核），后续可在不改动编排的情况下替换。结果页不再把旧匹配输出当作能力缺口结论。
+`ResumeIntakeService`、`JobAnalysisService` 与 `OptimizationTaskService` 是默认用户流的深模块 seam：前者负责上传与准备，第二个负责后台分析编排，第三个负责正式业务身份、版本关系和快照。调用方不需要编排 Parse、Embedding、Prompt 或供应商步骤。Phase 3 已建立正式 Evidence / Gap 模型：正式分析结果是每个任务一条 `evidence_analyses` 及其 `evidence_requirements` / `requirement_evidences` 行，每条岗位要求只按当前冻结材料的支持强度判定为足够支持（MATCHED）、存在相关但不完整证据（PARTIAL_EVIDENCE）或未找到支持证据（NO_EVIDENCE）。具体匹配实现位于 `EvidenceMatchingStrategy` interface 之后（当前为单次 AI 结构化输出 + Requirement / quote / ResumeVersion 代码校核），后续可在不改动编排的情况下替换。该模型不判断用户现实世界中的完整能力，也不保留 EXPRESSION_GAP 兼容语义。
 
 重要边界：
 
 - 岗位库、目标岗位管理、技术分类式 AI 历史和旧匹配编排页面已退出前端路由。`job_descriptions`、`ai_job_match_results`、旧服务与旧接口仍供解析与兼容读取；正式主链路不再写入新的旧匹配行，也不用其 ID 作为前端路由或重试身份。
-- AI 输出通过受控 DTO / Schema 解析后持久化；不能把模型原文直接当可信业务数据。正式证据分析额外要求证据引用逐字命中冻结简历快照，未命中的引用被丢弃，失去全部证据的要求被降级为无证据。
+- AI 输出通过受控 DTO / Schema 解析后持久化；不能把模型原文直接当可信业务数据。MATCHED / PARTIAL_EVIDENCE 都必须有逐字命中冻结 ResumeVersion 且与 Requirement 相关的 Evidence；失去全部有效 Evidence 时强制降级为 NO_EVIDENCE，NO_EVIDENCE 不保存 Evidence。
+- PARTIAL_EVIDENCE 只表示当前材料的证据不完整，不授权后续 AI 增加材料中不存在的能力、技术、数字或成果；真正判断“有经历但没有写出来”需要用户补充 / 确认或独立事实来源，不在 Phase 3 实现。
 - 优化报告聚合已有结果，不为补全报告再次调用 AI。
 - Redis 只缓存可重新生成内容，不承担唯一业务状态。
 - 文件访问经过后端鉴权；MinIO bucket 不作为公开下载入口。
@@ -79,6 +80,7 @@ scripts/  生产运维脚本
 ## 4. 数据与外部系统
 
 - PostgreSQL 是账号、简历元数据、解析结果、岗位、分析结果、向量和任务的事实来源。
+- V20.1 将 Phase 3 正式状态原位收敛为 MATCHED / PARTIAL_EVIDENCE / NO_EVIDENCE，并把 Evidence 支持程度收敛为 SUFFICIENT / PARTIAL；旧语义生成的派生分析会失效并保留冻结输入供重试，V1 历史结果不受影响。
 - pgvector 当前用于简历 / JD 分块语义检索；向量不可用时部分 AI 链路可以降级。
 - 简历原文件由 `FileStorageService` 抽象访问，本地开发默认 local，生产默认 MinIO。
 - Chat 与 Embedding 都通过后端兼容客户端调用，密钥不得进入前端、日志或 Git。
@@ -86,7 +88,7 @@ scripts/  生产运维脚本
 
 ## 5. 后续 V2 目标架构边界
 
-Phase 2 已完成核心领域模型和主链路迁移，Phase 3 已完成 Evidence Matching 与 Gap Analysis 正式模型，但 V2 不推翻前后端分离和模块化单体基础。后续从 Phase 4 开始按 PRD 冻结链路建立：
+Phase 2 已完成核心领域模型和主链路迁移。Phase 3 已把 Evidence Matching 与 Gap Analysis 收紧为当前材料可证明的三态，并通过重新执行的 Gate；Phase 4 尚未在正式仓库中实施。V2 不推翻前后端分离和模块化单体基础，后续仍按 PRD 冻结链路建立：
 
 ```text
 已完成：Resume / ResumeVersion / JobTarget / OptimizationTask
@@ -100,7 +102,7 @@ Phase 2 已完成核心领域模型和主链路迁移，Phase 3 已完成 Eviden
 
 1. **先收敛用户链路，再迁移内部模型**；不得先把 Provider、Prompt、Embedding、Task 暴露给普通用户。
 2. **原始简历、原始 JD 与用户修改可追溯**；岗位版本不得静默污染原简历。
-3. **事实约束先于生成能力**；Expression Gap 与 Capability Gap 必须基于可验证证据区分。
+3. **事实约束先于生成能力**；当前材料的证据强度与用户现实能力必须明确分开，未获用户确认或独立事实来源支持时不得推断现实能力。
 4. **所有资源显式归属用户**；查询至少包含 `current_user + resource_id`。
 5. **OptimizationTask 保存输入和配置快照**；后续配置变化不得改写历史解释。
 6. **Structured Resume JSON 是编辑和导出的业务数据源**；Typst 只是输出基础设施。

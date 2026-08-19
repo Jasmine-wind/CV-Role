@@ -16,8 +16,8 @@ public class EvidenceAnalysisResultVO {
     @Schema(description = "已有证据的要求数量", example = "3")
     private Integer matchedCount;
 
-    @Schema(description = "有经历但表达不足的要求数量", example = "2")
-    private Integer expressionGapCount;
+    @Schema(description = "当前材料存在相关但不完整证据的要求数量", example = "2")
+    private Integer partialEvidenceCount;
 
     @Schema(description = "当前材料未提供证据的要求数量", example = "1")
     private Integer noEvidenceCount;

@@ -451,7 +451,7 @@ class Phase1ApiIntegrationTest {
         when(evidenceMatchService.getResult(1L, 2000L)).thenReturn(EvidenceAnalysisResultVO.builder()
                 .evidenceAnalysisId(500L)
                 .matchedCount(1)
-                .expressionGapCount(1)
+                .partialEvidenceCount(1)
                 .noEvidenceCount(0)
                 .requirements(List.of(
                         EvidenceRequirementVO.builder()
@@ -464,21 +464,21 @@ class Phase1ApiIntegrationTest {
                                         .requirementEvidenceId(601L)
                                         .sectionLabel("项目经历")
                                         .evidenceText("基于 Spring Boot 完成业务接口开发")
-                                        .expressionStatus("ADEQUATE")
+                                        .supportLevel("SUFFICIENT")
                                         .build()))
                                 .build(),
                         EvidenceRequirementVO.builder()
                                 .evidenceRequirementId(502L)
                                 .requirementText("具备 Redis 缓存设计经验")
                                 .importance("REQUIRED")
-                                .matchLevel("EXPRESSION_GAP")
+                                .matchLevel("PARTIAL_EVIDENCE")
                                 .conclusion("简历提到 Redis，但未说明使用场景")
                                 .suggestion("补充 Redis 的真实使用场景")
                                 .evidences(List.of(RequirementEvidenceVO.builder()
                                         .requirementEvidenceId(602L)
                                         .sectionLabel("技能")
                                         .evidenceText("熟悉 Redis")
-                                        .expressionStatus("WEAK")
+                                        .supportLevel("PARTIAL")
                                         .build()))
                                 .build()))
                 .build());
@@ -530,12 +530,16 @@ class Phase1ApiIntegrationTest {
                 .andExpect(jsonPath("$.data.analysisMode").value("EVIDENCE"))
                 .andExpect(jsonPath("$.data.evidenceAnalysis.evidenceAnalysisId").value(500))
                 .andExpect(jsonPath("$.data.evidenceAnalysis.matchedCount").value(1))
-                .andExpect(jsonPath("$.data.evidenceAnalysis.expressionGapCount").value(1))
+                .andExpect(jsonPath("$.data.evidenceAnalysis.partialEvidenceCount").value(1))
                 .andExpect(jsonPath("$.data.evidenceAnalysis.requirements", hasSize(2)))
                 .andExpect(jsonPath("$.data.evidenceAnalysis.requirements[0].matchLevel").value("MATCHED"))
                 .andExpect(jsonPath("$.data.evidenceAnalysis.requirements[0].evidences[0].evidenceText")
                         .value("基于 Spring Boot 完成业务接口开发"))
-                .andExpect(jsonPath("$.data.evidenceAnalysis.requirements[1].matchLevel").value("EXPRESSION_GAP"))
+                .andExpect(jsonPath("$.data.evidenceAnalysis.requirements[0].evidences[0].supportLevel")
+                        .value("SUFFICIENT"))
+                .andExpect(jsonPath("$.data.evidenceAnalysis.requirements[0].evidences[0].expressionStatus")
+                        .doesNotExist())
+                .andExpect(jsonPath("$.data.evidenceAnalysis.requirements[1].matchLevel").value("PARTIAL_EVIDENCE"))
                 .andExpect(jsonPath("$.data.legacyAnalysis").doesNotExist());
 
         mockMvc.perform(get("/api/optimization-tasks/2001/analysis-result")
@@ -839,12 +843,8 @@ class Phase1ApiIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(aiJobMatchRequest)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.message").value("匹配分析完成"))
-                .andExpect(jsonPath("$.data.matchId").value(400))
-                .andExpect(jsonPath("$.data.resumeId").value(100))
-                .andExpect(jsonPath("$.data.jobDescriptionId").value(10))
-                .andExpect(jsonPath("$.data.overallScore").value(82))
-                .andExpect(jsonPath("$.data.matchStatus").value("SUCCESS"));
+                .andExpect(jsonPath("$.code").value(410))
+                .andExpect(jsonPath("$.message").value("旧匹配分析已停用，请从首页发起正式岗位分析"));
 
         aiJobMatchRequest.setJobDescriptionId(11L);
         mockMvc.perform(post("/api/resumes/100/ai-job-matches")
@@ -852,9 +852,7 @@ class Phase1ApiIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(aiJobMatchRequest)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.message").value("匹配分析失败"))
-                .andExpect(jsonPath("$.data.matchStatus").value("FAILED"))
-                .andExpect(jsonPath("$.data.errorMessage").value("AI 匹配结果不是合法 JSON"));
+                .andExpect(jsonPath("$.code").value(410));
 
         aiJobMatchRequest.setJobDescriptionId(10L);
         mockMvc.perform(post("/api/resumes/101/ai-job-matches")
@@ -862,8 +860,7 @@ class Phase1ApiIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(aiJobMatchRequest)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.code").value(400))
-                .andExpect(jsonPath("$.message").value("简历解析未成功，不能进行匹配分析"));
+                .andExpect(jsonPath("$.code").value(410));
 
         aiJobMatchRequest.setJobDescriptionId(null);
         mockMvc.perform(post("/api/resumes/100/ai-job-matches")

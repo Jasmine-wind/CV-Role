@@ -18,6 +18,6 @@ public class RequirementEvidenceVO {
     @Schema(description = "简历原文引用")
     private String evidenceText;
 
-    @Schema(description = "当前表达情况", example = "ADEQUATE")
-    private String expressionStatus;
+    @Schema(description = "当前材料对岗位要求的支持程度", example = "SUFFICIENT")
+    private String supportLevel;
 }

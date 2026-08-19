@@ -8,7 +8,7 @@ public interface EvidenceMatchService {
 
     /**
      * 为正式优化任务生成岗位证据分析。输入只使用任务已冻结的简历快照与刚完成的岗位解析结果；
-     * 同一任务的旧分析会被整体替换，保证失败重试后的幂等。
+     * 同一任务的旧分析会被整体替换，并与任务成功状态在同一事务提交，保证失败重试后的幂等与状态一致。
      */
     EvidenceAnalysis analyze(Long userId, Long optimizationTaskId, JobDescriptionVO parsedJob);
 

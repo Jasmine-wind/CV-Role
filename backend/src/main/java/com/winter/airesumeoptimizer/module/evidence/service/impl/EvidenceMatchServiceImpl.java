@@ -2,7 +2,6 @@ package com.winter.airesumeoptimizer.module.evidence.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.winter.airesumeoptimizer.common.exception.BusinessException;
-import com.winter.airesumeoptimizer.infra.ai.AiClientService;
 import com.winter.airesumeoptimizer.module.evidence.dto.EvidenceMatchOutcomeDTO;
 import com.winter.airesumeoptimizer.module.evidence.dto.EvidenceQuoteDTO;
 import com.winter.airesumeoptimizer.module.evidence.dto.EvidenceRequirementEvaluationDTO;
@@ -19,8 +18,13 @@ import com.winter.airesumeoptimizer.module.evidence.vo.EvidenceAnalysisResultVO;
 import com.winter.airesumeoptimizer.module.evidence.vo.EvidenceRequirementVO;
 import com.winter.airesumeoptimizer.module.evidence.vo.RequirementEvidenceVO;
 import com.winter.airesumeoptimizer.module.job.vo.JobDescriptionVO;
+import com.winter.airesumeoptimizer.module.optimization.entity.JobTarget;
 import com.winter.airesumeoptimizer.module.optimization.entity.OptimizationTask;
+import com.winter.airesumeoptimizer.module.optimization.entity.ResumeVersion;
+import com.winter.airesumeoptimizer.module.optimization.mapper.JobTargetMapper;
 import com.winter.airesumeoptimizer.module.optimization.mapper.OptimizationTaskMapper;
+import com.winter.airesumeoptimizer.module.optimization.mapper.ResumeVersionMapper;
+import com.winter.airesumeoptimizer.module.optimization.service.OptimizationTaskService;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -41,7 +45,9 @@ public class EvidenceMatchServiceImpl implements EvidenceMatchService {
     private final EvidenceRequirementMapper evidenceRequirementMapper;
     private final RequirementEvidenceMapper requirementEvidenceMapper;
     private final EvidenceMatchingStrategy evidenceMatchingStrategy;
-    private final AiClientService aiClientService;
+    private final JobTargetMapper jobTargetMapper;
+    private final ResumeVersionMapper resumeVersionMapper;
+    private final OptimizationTaskService optimizationTaskService;
 
     public EvidenceMatchServiceImpl(
             OptimizationTaskMapper optimizationTaskMapper,
@@ -49,13 +55,17 @@ public class EvidenceMatchServiceImpl implements EvidenceMatchService {
             EvidenceRequirementMapper evidenceRequirementMapper,
             RequirementEvidenceMapper requirementEvidenceMapper,
             EvidenceMatchingStrategy evidenceMatchingStrategy,
-            AiClientService aiClientService) {
+            JobTargetMapper jobTargetMapper,
+            ResumeVersionMapper resumeVersionMapper,
+            OptimizationTaskService optimizationTaskService) {
         this.optimizationTaskMapper = optimizationTaskMapper;
         this.evidenceAnalysisMapper = evidenceAnalysisMapper;
         this.evidenceRequirementMapper = evidenceRequirementMapper;
         this.requirementEvidenceMapper = requirementEvidenceMapper;
         this.evidenceMatchingStrategy = evidenceMatchingStrategy;
-        this.aiClientService = aiClientService;
+        this.jobTargetMapper = jobTargetMapper;
+        this.resumeVersionMapper = resumeVersionMapper;
+        this.optimizationTaskService = optimizationTaskService;
     }
 
     @Override
@@ -70,21 +80,26 @@ public class EvidenceMatchServiceImpl implements EvidenceMatchService {
         if (jobStructuredContent == null || jobStructuredContent.isBlank()) {
             throw new BusinessException(400, "目标岗位结构化解析结果为空");
         }
+        validateTaskInputs(userId, task, parsedJob);
 
-        log.info("Evidence match started: userId={}, optimizationTaskId={}, model={}",
+        log.info("Evidence match started: userId={}, optimizationTaskId={}",
                 userId,
-                optimizationTaskId,
-                aiClientService.modelName());
+                optimizationTaskId);
 
-        EvidenceMatchOutcomeDTO outcome = evidenceMatchingStrategy.match(jobStructuredContent, resumeSnapshot);
+        EvidenceMatchOutcomeDTO outcome = evidenceMatchingStrategy.match(
+                task.getJobInputSnapshot(),
+                jobStructuredContent,
+                resumeSnapshot);
         deleteExistingAnalysis(userId, optimizationTaskId);
         EvidenceAnalysis analysis = saveAnalysis(userId, task, outcome);
+        // 与正式结果落库共享当前事务；完成状态更新失败时，旧结果删除和新结果写入一并回滚。
+        optimizationTaskService.markSuccess(userId, optimizationTaskId, parsedJob, analysis);
 
-        log.info("Evidence match succeeded: userId={}, optimizationTaskId={}, matched={}, expressionGap={}, noEvidence={}",
+        log.info("Evidence match succeeded: userId={}, optimizationTaskId={}, matched={}, partialEvidence={}, noEvidence={}",
                 userId,
                 optimizationTaskId,
                 analysis.getMatchedCount(),
-                analysis.getExpressionGapCount(),
+                analysis.getPartialEvidenceCount(),
                 analysis.getNoEvidenceCount());
         return analysis;
     }
@@ -112,13 +127,13 @@ public class EvidenceMatchServiceImpl implements EvidenceMatchService {
     private EvidenceAnalysis saveAnalysis(Long userId, OptimizationTask task, EvidenceMatchOutcomeDTO outcome) {
         LocalDateTime now = LocalDateTime.now();
         int matched = 0;
-        int expressionGap = 0;
+        int partialEvidence = 0;
         int noEvidence = 0;
         for (EvidenceRequirementEvaluationDTO evaluation : outcome.getRequirements()) {
             if (evaluation.getMatchLevel() == EvidenceMatchLevel.MATCHED) {
                 matched++;
-            } else if (evaluation.getMatchLevel() == EvidenceMatchLevel.EXPRESSION_GAP) {
-                expressionGap++;
+            } else if (evaluation.getMatchLevel() == EvidenceMatchLevel.PARTIAL_EVIDENCE) {
+                partialEvidence++;
             } else {
                 noEvidence++;
             }
@@ -128,10 +143,10 @@ public class EvidenceMatchServiceImpl implements EvidenceMatchService {
         analysis.setUserId(userId);
         analysis.setOptimizationTaskId(task.getId());
         analysis.setMatchedCount(matched);
-        analysis.setExpressionGapCount(expressionGap);
+        analysis.setPartialEvidenceCount(partialEvidence);
         analysis.setNoEvidenceCount(noEvidence);
-        analysis.setModelName(aiClientService.modelName());
-        analysis.setPromptVersion(evidenceMatchingStrategy.promptVersion());
+        analysis.setModelName(outcome.getModelName());
+        analysis.setPromptVersion(outcome.getPromptVersion());
         analysis.setCreatedAt(now);
         analysis.setUpdatedAt(now);
         if (evidenceAnalysisMapper.insert(analysis) != 1 || analysis.getId() == null) {
@@ -161,7 +176,7 @@ public class EvidenceMatchServiceImpl implements EvidenceMatchService {
                 evidence.setSourceResumeVersionId(task.getSourceResumeVersionId());
                 evidence.setSectionLabel(nullIfBlank(quote.getSectionLabel()));
                 evidence.setEvidenceText(quote.getQuote());
-                evidence.setExpressionStatus(quote.getExpressionStatus().name());
+                evidence.setSupportLevel(quote.getSupportLevel().name());
                 evidence.setCreatedAt(now);
                 if (requirementEvidenceMapper.insert(evidence) != 1 || evidence.getId() == null) {
                     throw new BusinessException(500, "岗位证据分析保存失败");
@@ -219,7 +234,7 @@ public class EvidenceMatchServiceImpl implements EvidenceMatchService {
                                         .requirementEvidenceId(evidence.getId())
                                         .sectionLabel(evidence.getSectionLabel())
                                         .evidenceText(evidence.getEvidenceText())
-                                        .expressionStatus(evidence.getExpressionStatus())
+                                        .supportLevel(evidence.getSupportLevel())
                                         .build())
                                 .toList())
                         .build())
@@ -227,7 +242,7 @@ public class EvidenceMatchServiceImpl implements EvidenceMatchService {
         return EvidenceAnalysisResultVO.builder()
                 .evidenceAnalysisId(analysis.getId())
                 .matchedCount(analysis.getMatchedCount())
-                .expressionGapCount(analysis.getExpressionGapCount())
+                .partialEvidenceCount(analysis.getPartialEvidenceCount())
                 .noEvidenceCount(analysis.getNoEvidenceCount())
                 .requirements(requirementVOs)
                 .build();
@@ -247,6 +262,41 @@ public class EvidenceMatchServiceImpl implements EvidenceMatchService {
             throw new BusinessException(404, "优化任务不存在");
         }
         return task;
+    }
+
+    private void validateTaskInputs(Long userId, OptimizationTask task, JobDescriptionVO parsedJob) {
+        JobTarget target = jobTargetMapper.selectOne(new LambdaQueryWrapper<JobTarget>()
+                .eq(JobTarget::getId, task.getJobTargetId())
+                .eq(JobTarget::getUserId, userId));
+        if (target == null
+                || parsedJob.getId() == null
+                || !parsedJob.getId().equals(target.getLegacyJobDescriptionId())
+                || target.getRawJd() == null
+                || !target.getRawJd().equals(task.getJobInputSnapshot())) {
+            throw new BusinessException(500, "优化任务与冻结目标岗位不一致");
+        }
+
+        ResumeVersion source = getOwnedVersion(userId, task.getSourceResumeVersionId());
+        ResumeVersion targeted = getOwnedVersion(userId, task.getTargetResumeVersionId());
+        if (!"SOURCE".equals(source.getVersionType())
+                || !"TARGETED".equals(targeted.getVersionType())
+                || !source.getId().equals(targeted.getSourceVersionId())
+                || !task.getJobTargetId().equals(targeted.getJobTargetId())
+                || !source.getResumeId().equals(targeted.getResumeId())
+                || source.getStructuredContent() == null
+                || !source.getStructuredContent().equals(task.getResumeInputSnapshot())) {
+            throw new BusinessException(500, "优化任务与冻结简历版本不一致");
+        }
+    }
+
+    private ResumeVersion getOwnedVersion(Long userId, Long versionId) {
+        ResumeVersion version = resumeVersionMapper.selectOne(new LambdaQueryWrapper<ResumeVersion>()
+                .eq(ResumeVersion::getId, versionId)
+                .eq(ResumeVersion::getUserId, userId));
+        if (version == null) {
+            throw new BusinessException(500, "优化任务引用的简历版本不存在");
+        }
+        return version;
     }
 
     private String nullIfBlank(String value) {

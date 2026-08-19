@@ -14,7 +14,7 @@ const valuePoints = [
   },
   {
     title: '清晰结果',
-    description: '集中查看已有优势、表达检查项和当前简历尚未体现的要求。',
+    description: '集中查看已有优势、建议完善项和当前材料尚未体现的要求。',
   },
 ]
 </script>

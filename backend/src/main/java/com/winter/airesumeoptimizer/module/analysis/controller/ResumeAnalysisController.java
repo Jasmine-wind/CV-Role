@@ -101,18 +101,15 @@ public class ResumeAnalysisController {
     }
 
     @PostMapping("/{id}/ai-job-matches")
-    @Operation(summary = "触发匹配分析", description = "基于已解析简历和已解析目标岗位生成匹配分析结果")
+    @Operation(
+            summary = "旧匹配写入口（已停用）",
+            description = "Phase 3 起正式主链路只生成 Evidence Analysis；旧匹配结果仅保留历史读取",
+            deprecated = true)
     public Result<AiJobMatchTriggerVO> matchJobDescription(
             @PathVariable @Positive(message = "简历 ID 必须大于 0") Long id,
             @Valid @RequestBody AiJobMatchRequestDTO request,
             Authentication authentication) {
-        AuthenticatedUser authenticatedUser = (AuthenticatedUser) authentication.getPrincipal();
-        AiJobMatchResult matchResult = aiJobMatchService.match(
-                authenticatedUser.getUserId(),
-                id,
-                request.getJobDescriptionId());
-        String message = "FAILED".equals(matchResult.getMatchStatus()) ? "匹配分析失败" : "匹配分析完成";
-        return Result.success(message, analysisVoAssembler.toAiJobMatchTriggerVO(matchResult));
+        throw new BusinessException(410, "旧匹配分析已停用，请从首页发起正式岗位分析");
     }
 
     @PostMapping("/{id}/ai-suggestions")

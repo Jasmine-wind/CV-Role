@@ -1,6 +1,6 @@
 package com.winter.airesumeoptimizer.module.evidence.dto;
 
-import com.winter.airesumeoptimizer.module.evidence.enums.EvidenceExpressionStatus;
+import com.winter.airesumeoptimizer.module.evidence.enums.EvidenceSupportLevel;
 import lombok.Builder;
 import lombok.Getter;
 
@@ -12,5 +12,5 @@ public class EvidenceQuoteDTO {
 
     private String quote;
 
-    private EvidenceExpressionStatus expressionStatus;
+    private EvidenceSupportLevel supportLevel;
 }

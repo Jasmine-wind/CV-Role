@@ -9,4 +9,8 @@ import lombok.Getter;
 public class EvidenceMatchOutcomeDTO {
 
     private List<EvidenceRequirementEvaluationDTO> requirements;
+
+    private String modelName;
+
+    private String promptVersion;
 }

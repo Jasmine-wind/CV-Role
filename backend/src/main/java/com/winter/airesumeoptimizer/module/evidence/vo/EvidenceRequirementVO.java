@@ -19,7 +19,7 @@ public class EvidenceRequirementVO {
     @Schema(description = "要求重要程度", example = "REQUIRED")
     private String importance;
 
-    @Schema(description = "匹配情况", example = "EXPRESSION_GAP")
+    @Schema(description = "当前材料支持情况", example = "PARTIAL_EVIDENCE")
     private String matchLevel;
 
     @Schema(description = "匹配结论")

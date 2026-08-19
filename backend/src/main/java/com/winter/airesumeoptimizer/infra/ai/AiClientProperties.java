@@ -17,7 +17,7 @@ public class AiClientProperties {
 
     private Double temperature = 0.2;
 
-    private Integer maxTokens = 4000;
+    private Integer maxTokens = 16000;
 
     public String getApiKey() {
         return apiKey;

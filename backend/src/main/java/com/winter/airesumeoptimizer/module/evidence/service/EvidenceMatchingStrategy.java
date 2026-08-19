@@ -12,7 +12,8 @@ public interface EvidenceMatchingStrategy {
      * 基于冻结的任务输入（岗位结构化解析结果与简历结构化快照）产出逐条要求的证据评估。
      * 实现必须保证证据引用来自简历原文；无法找到证据的要求只能判定为无证据。
      */
-    EvidenceMatchOutcomeDTO match(String jobStructuredContent, String resumeStructuredContent);
-
-    String promptVersion();
+    EvidenceMatchOutcomeDTO match(
+            String frozenJobDescription,
+            String jobStructuredContent,
+            String resumeStructuredContent);
 }

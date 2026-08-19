@@ -22,7 +22,7 @@ const evidenceAnalysis = computed(() => optimizationResult.value?.evidenceAnalys
 const legacyResult = computed(() => optimizationResult.value?.legacyAnalysis ?? null)
 
 const matchedRequirements = computed(() => requirementsByLevel('MATCHED'))
-const expressionGapRequirements = computed(() => requirementsByLevel('EXPRESSION_GAP'))
+const partialEvidenceRequirements = computed(() => requirementsByLevel('PARTIAL_EVIDENCE'))
 const noEvidenceRequirements = computed(() => requirementsByLevel('NO_EVIDENCE'))
 
 const requirementsByLevel = (level: string): EvidenceRequirementItem[] => {
@@ -110,8 +110,8 @@ onMounted(loadResult)
           <span>分析结论</span>
           <strong>共核对 {{ totalChecked }} 条岗位要求</strong>
           <p>
-            {{ evidenceAnalysis.matchedCount }} 条已有证据，{{ evidenceAnalysis.expressionGapCount }}
-            条有经历但表达不足，{{ evidenceAnalysis.noEvidenceCount }} 条当前材料未提供证据。
+            {{ evidenceAnalysis.matchedCount }} 条已有优势，{{ evidenceAnalysis.partialEvidenceCount }}
+            条建议完善，{{ evidenceAnalysis.noEvidenceCount }} 条当前材料未体现。
           </p>
         </div>
         <p>
@@ -122,14 +122,14 @@ onMounted(loadResult)
       <section class="analysis-section">
         <header>
           <div>
-            <span>优先修改</span>
-            <h2>你有相关经历，但简历没有写清楚</h2>
+            <span>建议完善</span>
+            <h2>当前材料有相关证据，但还不足以完整支持要求</h2>
           </div>
-          <strong>{{ expressionGapRequirements.length }}</strong>
+          <strong>{{ partialEvidenceRequirements.length }}</strong>
         </header>
-        <div v-if="expressionGapRequirements.length" class="analysis-list">
+        <div v-if="partialEvidenceRequirements.length" class="analysis-list">
           <article
-            v-for="item in expressionGapRequirements"
+            v-for="item in partialEvidenceRequirements"
             :key="`gap-${item.evidenceRequirementId}`"
             class="app-card"
           >
@@ -148,7 +148,7 @@ onMounted(loadResult)
             <p v-if="item.suggestion" class="suggestion">{{ item.suggestion }}</p>
           </article>
         </div>
-        <EmptyState v-else title="当前没有明显的表达缺口" description="现有简历已经较清楚地覆盖了主要岗位要求。" />
+        <EmptyState v-else title="当前没有需要完善的证据" description="现有材料已经足以支持已识别的相关岗位要求。" />
       </section>
 
       <section class="analysis-section">

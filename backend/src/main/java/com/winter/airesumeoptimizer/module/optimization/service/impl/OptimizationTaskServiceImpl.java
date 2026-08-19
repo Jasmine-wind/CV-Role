@@ -180,17 +180,34 @@ public class OptimizationTaskServiceImpl implements OptimizationTaskService {
         if (STATUS_SUCCESS.equals(task.getStatus())) {
             throw new BusinessException(409, "已完成的优化任务不能重试");
         }
+        if (task.getAsyncTaskId() != null
+                && (STATUS_PENDING.equals(task.getStatus()) || STATUS_RUNNING.equals(task.getStatus()))) {
+            throw new BusinessException(409, "岗位分析正在进行中");
+        }
         if (asyncTaskId == null) {
             throw new BusinessException(400, "后台任务 ID 不能为空");
         }
         LocalDateTime now = LocalDateTime.now();
-        updateOwnedTask(userId, optimizationTaskId, new UpdateWrapper<OptimizationTask>()
+        int rows = optimizationTaskMapper.update(null, new UpdateWrapper<OptimizationTask>()
+                .eq("id", optimizationTaskId)
+                .eq("user_id", userId)
+                .ne("status", STATUS_SUCCESS)
+                .and(wrapper -> wrapper.isNull("async_task_id")
+                        .or()
+                        .in("status", STATUS_FAILED, "CANCELLED"))
                 .set("async_task_id", asyncTaskId)
                 .set("status", STATUS_PENDING)
                 .set("error_code", null)
                 .set("error_message", null)
                 .set("finished_at", null)
                 .set("updated_at", now));
+        if (rows != 1) {
+            OptimizationTask current = getOwnedTask(userId, optimizationTaskId);
+            if (STATUS_SUCCESS.equals(current.getStatus())) {
+                throw new BusinessException(409, "已完成的优化任务不能重试");
+            }
+            throw new BusinessException(409, "岗位分析正在进行中或已完成");
+        }
     }
 
     @Override
@@ -200,12 +217,25 @@ public class OptimizationTaskServiceImpl implements OptimizationTaskService {
             throw new BusinessException(400, "简历结构化内容不能为空");
         }
         OptimizationTask task = getOwnedTask(userId, optimizationTaskId);
+        if (task.getResumeInputSnapshot() != null && !task.getResumeInputSnapshot().isBlank()) {
+            return;
+        }
         LocalDateTime now = LocalDateTime.now();
-        updateOwnedVersion(userId, task.getSourceResumeVersionId(), structuredContent, now);
-        updateOwnedVersion(userId, task.getTargetResumeVersionId(), structuredContent, now);
-        updateOwnedTask(userId, optimizationTaskId, new UpdateWrapper<OptimizationTask>()
+        int claimed = optimizationTaskMapper.update(null, new UpdateWrapper<OptimizationTask>()
+                .eq("id", optimizationTaskId)
+                .eq("user_id", userId)
+                .isNull("resume_input_snapshot")
                 .set("resume_input_snapshot", structuredContent)
                 .set("updated_at", now));
+        if (claimed != 1) {
+            OptimizationTask current = getOwnedTask(userId, optimizationTaskId);
+            if (current.getResumeInputSnapshot() != null && !current.getResumeInputSnapshot().isBlank()) {
+                return;
+            }
+            throw new BusinessException(409, "简历输入快照正在保存，请稍后重试");
+        }
+        updateOwnedVersion(userId, task.getSourceResumeVersionId(), structuredContent, now);
+        updateOwnedVersion(userId, task.getTargetResumeVersionId(), structuredContent, now);
     }
 
     @Override
@@ -213,10 +243,17 @@ public class OptimizationTaskServiceImpl implements OptimizationTaskService {
     public void markRunning(Long userId, Long optimizationTaskId) {
         getOwnedTask(userId, optimizationTaskId);
         LocalDateTime now = LocalDateTime.now();
-        updateOwnedTask(userId, optimizationTaskId, new UpdateWrapper<OptimizationTask>()
+        int rows = optimizationTaskMapper.update(null, new UpdateWrapper<OptimizationTask>()
+                .eq("id", optimizationTaskId)
+                .eq("user_id", userId)
+                .eq("status", STATUS_PENDING)
+                .isNotNull("async_task_id")
                 .set("status", STATUS_RUNNING)
                 .set("started_at", now)
                 .set("updated_at", now));
+        if (rows != 1) {
+            throw new BusinessException(409, "优化任务当前状态不允许开始分析");
+        }
     }
 
     @Override
@@ -240,7 +277,10 @@ public class OptimizationTaskServiceImpl implements OptimizationTaskService {
 
         LocalDateTime now = LocalDateTime.now();
         String promptSnapshot = serializePromptSnapshot(parsedJob, evidenceAnalysis);
-        updateOwnedTask(userId, optimizationTaskId, new UpdateWrapper<OptimizationTask>()
+        int rows = optimizationTaskMapper.update(null, new UpdateWrapper<OptimizationTask>()
+                .eq("id", optimizationTaskId)
+                .eq("user_id", userId)
+                .eq("status", STATUS_RUNNING)
                 .set("status", STATUS_SUCCESS)
                 .set("prompt_snapshot", promptSnapshot)
                 .set("model_snapshot", evidenceAnalysis.getModelName())
@@ -248,6 +288,9 @@ public class OptimizationTaskServiceImpl implements OptimizationTaskService {
                 .set("error_message", null)
                 .set("finished_at", now)
                 .set("updated_at", now));
+        if (rows != 1) {
+            throw new BusinessException(409, "优化任务当前状态不允许完成分析");
+        }
 
         if (parsedJob != null && parsedJob.getTitle() != null && !parsedJob.getTitle().isBlank()) {
             updateOwnedJobTargetTitle(userId, task.getJobTargetId(), parsedJob.getTitle(), now);
@@ -257,17 +300,23 @@ public class OptimizationTaskServiceImpl implements OptimizationTaskService {
     @Override
     @Transactional
     public void markFailed(Long userId, Long optimizationTaskId, String errorCode, String errorMessage) {
-        OptimizationTask task = getOwnedTask(userId, optimizationTaskId);
-        if (STATUS_SUCCESS.equals(task.getStatus())) {
-            return;
-        }
+        getOwnedTask(userId, optimizationTaskId);
         LocalDateTime now = LocalDateTime.now();
-        updateOwnedTask(userId, optimizationTaskId, new UpdateWrapper<OptimizationTask>()
+        int rows = optimizationTaskMapper.update(null, new UpdateWrapper<OptimizationTask>()
+                .eq("id", optimizationTaskId)
+                .eq("user_id", userId)
+                .ne("status", STATUS_SUCCESS)
                 .set("status", STATUS_FAILED)
                 .set("error_code", truncate(errorCode, 100))
                 .set("error_message", truncate(LogSanitizer.sanitize(errorMessage), ERROR_MESSAGE_MAX_LENGTH))
                 .set("finished_at", now)
                 .set("updated_at", now));
+        if (rows == 0) {
+            OptimizationTask current = getOwnedTask(userId, optimizationTaskId);
+            if (!STATUS_SUCCESS.equals(current.getStatus())) {
+                throw new BusinessException(409, "优化任务当前状态不允许标记失败");
+            }
+        }
     }
 
     @Override

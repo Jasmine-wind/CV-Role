@@ -122,7 +122,7 @@ public class OpenAiCompatibleAiClientService implements AiClientService {
             if (content.isBlank()) {
                 String finishReason = choiceNode.path("finish_reason").asText("");
                 if ("length".equals(finishReason)) {
-                    throw new AiClientException("AI 响应中缺少文本内容，可能是 max_tokens 不足，请调大 OPENAI_MAX_TOKENS 后重试");
+                    throw new AiClientException("AI 响应中缺少文本内容，可能是 max_tokens 不足，请调大 AI_MAX_TOKENS 后重试");
                 }
                 String refusal = messageNode.path("refusal").asText("");
                 if (!refusal.isBlank()) {
@@ -183,7 +183,7 @@ public class OpenAiCompatibleAiClientService implements AiClientService {
 
     private int resolveMaxTokens() {
         if (properties.getMaxTokens() == null || properties.getMaxTokens() <= 0) {
-            return 4000;
+            return 16000;
         }
         return properties.getMaxTokens();
     }

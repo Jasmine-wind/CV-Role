@@ -21,7 +21,7 @@ class AiEvidenceMatchingStrategyImplTest {
 
     private final AiClientService aiClientService = mock(AiClientService.class);
     private final EvidenceMatchPromptServiceImpl promptService =
-            new EvidenceMatchPromptServiceImpl(new PromptTemplateService());
+            new EvidenceMatchPromptServiceImpl(new PromptTemplateService(), new ObjectMapper());
     private final EvidenceMatchOutputParserImpl parser =
             new EvidenceMatchOutputParserImpl(new ObjectMapper());
     private final AiEvidenceMatchingStrategyImpl strategy =
@@ -31,34 +31,32 @@ class AiEvidenceMatchingStrategyImplTest {
     void matchShouldBuildPromptFromFrozenInputsAndValidateQuotesAgainstFullSnapshot() {
         String resumeSnapshot = "{\"skills\":[\"熟悉 Java\"]}";
         String jobStructured = "{\"requiredSkills\":[\"Java\"]}";
+        when(aiClientService.modelName()).thenReturn("test-model");
         when(aiClientService.complete(anyString())).thenReturn("""
                 {"requirements":[{"requirement":"熟悉 Java","importance":"REQUIRED",
                 "matchLevel":"MATCHED","conclusion":"已有证据","suggestion":"",
-                "evidences":[{"section":"技能","quote":"熟悉 Java","expression":"ADEQUATE"}]}]}
+                "evidences":[{"section":"技能","quote":"熟悉 Java","supportLevel":"SUFFICIENT"}]}]}
                 """);
 
-        EvidenceMatchOutcomeDTO outcome = strategy.match(jobStructured, resumeSnapshot);
+        EvidenceMatchOutcomeDTO outcome = strategy.match("岗位要求 Java", jobStructured, resumeSnapshot);
 
         ArgumentCaptor<String> promptCaptor = ArgumentCaptor.forClass(String.class);
         verify(aiClientService).complete(promptCaptor.capture());
         assertThat(promptCaptor.getValue())
-                .contains("evidence_match_v1")
+                .contains("evidence_match_v3")
                 .contains("熟悉 Java")
                 .contains("requiredSkills");
         assertThat(outcome.getRequirements().get(0).getMatchLevel()).isEqualTo(EvidenceMatchLevel.MATCHED);
-    }
-
-    @Test
-    void matchShouldExposePromptVersionForTaskSnapshot() {
-        assertThat(strategy.promptVersion()).isEqualTo("evidence_match_v1");
+        assertThat(outcome.getModelName()).isEqualTo("test-model");
+        assertThat(outcome.getPromptVersion()).isEqualTo("evidence_match_v3");
     }
 
     @Test
     void matchShouldRejectBlankInputsBeforeCallingAi() {
-        assertThatThrownBy(() -> strategy.match(" ", "{\"skills\":[]}"))
+        assertThatThrownBy(() -> strategy.match("岗位要求 Java", " ", "{\"skills\":[]}"))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("目标岗位结构化解析结果");
-        assertThatThrownBy(() -> strategy.match("{\"requiredSkills\":[]}", " "))
+        assertThatThrownBy(() -> strategy.match("岗位要求 Java", "{\"requiredSkills\":[]}", " "))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("简历结构化解析结果");
     }
@@ -67,7 +65,10 @@ class AiEvidenceMatchingStrategyImplTest {
     void matchShouldMapAiClientFailureToBusinessException() {
         when(aiClientService.complete(anyString())).thenThrow(new AiClientException("connection timeout"));
 
-        assertThatThrownBy(() -> strategy.match("{\"requiredSkills\":[\"Java\"]}", "{\"skills\":[\"Java\"]}"))
+        assertThatThrownBy(() -> strategy.match(
+                "岗位要求 Java",
+                "{\"requiredSkills\":[\"Java\"]}",
+                "{\"skills\":[\"Java\"]}"))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("AI 服务暂时不可用");
     }

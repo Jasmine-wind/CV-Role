@@ -83,11 +83,6 @@ class JobAnalysisServiceImplTest {
         assertThat(result.getJobTargetId()).isEqualTo(30L);
         verify(optimizationTaskService).attachAsyncTask(1L, 50L, 100L);
         verify(optimizationTaskService).captureResumeSnapshot(1L, 50L, "{\"skills\":[\"Java\"]}");
-        verify(optimizationTaskService).markSuccess(
-                org.mockito.ArgumentMatchers.eq(1L),
-                org.mockito.ArgumentMatchers.eq(50L),
-                any(JobDescriptionVO.class),
-                any(EvidenceAnalysis.class));
         verify(asyncTaskService).markSuccess(100L, "OPTIMIZATION_TASK", 50L, "Java 后端工程师");
 
         ArgumentCaptor<String> titleCaptor = ArgumentCaptor.forClass(String.class);
@@ -278,7 +273,7 @@ class JobAnalysisServiceImplTest {
         analysis.setUserId(1L);
         analysis.setOptimizationTaskId(50L);
         analysis.setMatchedCount(1);
-        analysis.setExpressionGapCount(1);
+        analysis.setPartialEvidenceCount(1);
         analysis.setNoEvidenceCount(1);
         analysis.setModelName("test-model");
         analysis.setPromptVersion("evidence_match_v1");

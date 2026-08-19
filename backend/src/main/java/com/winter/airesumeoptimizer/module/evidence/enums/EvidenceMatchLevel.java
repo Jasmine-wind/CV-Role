@@ -2,6 +2,6 @@ package com.winter.airesumeoptimizer.module.evidence.enums;
 
 public enum EvidenceMatchLevel {
     MATCHED,
-    EXPRESSION_GAP,
+    PARTIAL_EVIDENCE,
     NO_EVIDENCE
 }

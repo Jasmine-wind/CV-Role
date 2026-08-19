@@ -46,7 +46,7 @@ class OpenAiCompatibleAiClientServiceTest {
 
         assertThatThrownBy(() -> service.extractContent(responseBody))
                 .isInstanceOf(AiClientException.class)
-                .hasMessage("AI 响应中缺少文本内容，可能是 max_tokens 不足，请调大 OPENAI_MAX_TOKENS 后重试");
+                .hasMessage("AI 响应中缺少文本内容，可能是 max_tokens 不足，请调大 AI_MAX_TOKENS 后重试");
     }
 
     @Test
