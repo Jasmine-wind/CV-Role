@@ -8,6 +8,7 @@ import SkeletonBlock from '@/components/common/SkeletonBlock.vue'
 import ResumeEditor from '@/components/workspace/ResumeEditor.vue'
 import WorkspaceSuggestions from '@/components/workspace/WorkspaceSuggestions.vue'
 import type { OptimizationAnalysisResult } from '@/types/job-analysis'
+import { useBulletSuggest } from '@/utils/useBulletSuggest'
 import { useWorkspaceEditor } from '@/utils/useWorkspaceEditor'
 
 const props = defineProps<{
@@ -15,6 +16,7 @@ const props = defineProps<{
 }>()
 
 const editor = useWorkspaceEditor(props.optimizationTaskId)
+const bulletSuggest = useBulletSuggest(props.optimizationTaskId, editor)
 
 const analysisResult = ref<OptimizationAnalysisResult | null>(null)
 const analysisLoading = ref(false)
@@ -23,6 +25,9 @@ const analysisError = ref<string | null>(null)
 const restoring = ref(false)
 
 const jobTitle = computed(() => analysisResult.value?.jobTitle ?? '简历编辑')
+
+// 岗位定向改写只对拥有正式证据分析的任务开放；旧版兼容任务由服务端 fail closed 兜底。
+const suggestEnabled = computed(() => analysisResult.value?.analysisMode === 'EVIDENCE')
 
 const saveStatusText = computed(() => {
   switch (editor.status.value) {
@@ -130,6 +135,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  bulletSuggest.dispose()
   editor.dispose()
   window.removeEventListener('beforeunload', beforeUnloadHandler)
 })
@@ -204,7 +210,12 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
         :loading="analysisLoading"
         :error="analysisError"
       />
-      <ResumeEditor :document="editor.draft.value" @change="handleEditorChange" />
+      <ResumeEditor
+        :document="editor.draft.value"
+        :suggest="bulletSuggest"
+        :suggest-enabled="suggestEnabled"
+        @change="handleEditorChange"
+      />
     </div>
   </section>
 </template>

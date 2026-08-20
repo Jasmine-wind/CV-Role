@@ -3,6 +3,7 @@ package com.winter.airesumeoptimizer.module.resume.service.impl;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.winter.airesumeoptimizer.infra.ai.AiChatMessage;
 import com.winter.airesumeoptimizer.infra.ai.AiClientService;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeDisplayModelDTO;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeProjectDTO;
@@ -176,7 +177,7 @@ class ResumeDisplayModelServiceImplTest {
         }
 
         @Override
-        public String complete(String prompt) {
+        public String complete(java.util.List<AiChatMessage> messages) {
             callCount++;
             return output;
         }

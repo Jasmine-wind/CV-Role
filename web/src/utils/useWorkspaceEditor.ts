@@ -65,6 +65,8 @@ export function useWorkspaceEditor(
 
   const undoStack = ref<ResumeDocument[]>([])
   const redoStack = ref<ResumeDocument[]>([])
+  /** 草稿变更序号：任何用户侧草稿变化（编辑/Undo/Redo/恢复/采纳服务端）都递增，供 AI 建议判别失效。 */
+  const mutationSequence = ref(0)
   const canUndo = computed(() => undoStack.value.length > 0)
   const canRedo = computed(() => redoStack.value.length > 0)
   const hasUnsavedChanges = computed(
@@ -106,6 +108,7 @@ export function useWorkspaceEditor(
       revision.value = content.revision
       draft.value = clone(content.document)
       draftSequence = 0
+      mutationSequence.value = 0
       undoStack.value = []
       redoStack.value = []
       conflictRevision.value = null
@@ -192,6 +195,7 @@ export function useWorkspaceEditor(
 
   const markDirty = () => {
     draftSequence += 1
+    mutationSequence.value = draftSequence
     if (conflictRevision.value !== null) {
       status.value = 'conflict'
       return
@@ -275,6 +279,7 @@ export function useWorkspaceEditor(
     redoStack.value = []
     draft.value = clone(latest.document)
     draftSequence += 1
+    mutationSequence.value = draftSequence
     conflictRevision.value = null
     saveError.value = null
     pendingSince = null
@@ -310,6 +315,7 @@ export function useWorkspaceEditor(
         redoStack.value = []
         draft.value = clone(result.document)
         draftSequence += 1
+        mutationSequence.value = draftSequence
         status.value = 'saved'
         return 'saved'
       }
@@ -342,6 +348,7 @@ export function useWorkspaceEditor(
     status,
     conflictRevision,
     saveError,
+    mutationSequence,
     canUndo,
     canRedo,
     hasUnsavedChanges,

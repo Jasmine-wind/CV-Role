@@ -44,13 +44,11 @@ public class OpenAiCompatibleAiClientService implements AiClientService {
     }
 
     @Override
-    public String complete(String prompt) {
+    public String complete(List<AiChatMessage> messages) {
         validateConfig();
-        if (prompt == null || prompt.isBlank()) {
-            throw new AiClientException("AI 输入不能为空");
-        }
+        List<AiChatMessage> validatedMessages = validateMessages(messages);
 
-        HttpRequest request = buildRequest(prompt);
+        HttpRequest request = buildRequest(validatedMessages);
         try {
             log.info("AI completion request started: model={}, timeoutSeconds={}",
                     properties.getModel(),
@@ -89,15 +87,18 @@ public class OpenAiCompatibleAiClientService implements AiClientService {
         return properties.getModel();
     }
 
-    private HttpRequest buildRequest(String prompt) {
+    private HttpRequest buildRequest(List<AiChatMessage> messages) {
         try {
+            List<Map<String, String>> messagePayload = messages.stream()
+                    .map(message -> Map.of(
+                            "role", message.role().name().toLowerCase(),
+                            "content", message.content()))
+                    .toList();
             String requestBody = objectMapper.writeValueAsString(Map.of(
                     "model", properties.getModel(),
                     "temperature", properties.getTemperature(),
                     "max_tokens", resolveMaxTokens(),
-                    "messages", List.of(Map.of(
-                            "role", "user",
-                            "content", prompt))));
+                    "messages", messagePayload));
 
             return HttpRequest.newBuilder()
                     .uri(URI.create(normalizeBaseUrl(properties.getBaseUrl()) + "/chat/completions"))
@@ -160,6 +161,19 @@ public class OpenAiCompatibleAiClientService implements AiClientService {
             return legacyTextNode.asText();
         }
         return "";
+    }
+
+    private List<AiChatMessage> validateMessages(List<AiChatMessage> messages) {
+        if (messages == null || messages.isEmpty()) {
+            throw new AiClientException("AI 输入不能为空");
+        }
+        for (AiChatMessage message : messages) {
+            if (message == null || message.role() == null || message.content() == null
+                    || message.content().isBlank()) {
+                throw new AiClientException("AI 输入不能为空");
+            }
+        }
+        return List.copyOf(messages);
     }
 
     private void validateConfig() {

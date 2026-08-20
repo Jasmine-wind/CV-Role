@@ -1,15 +1,20 @@
 <script setup lang="ts">
 import { ElMessage } from 'element-plus'
 import { ref } from 'vue'
+import BulletSuggestionCard from '@/components/workspace/BulletSuggestionCard.vue'
 import type {
   ResumeDocument,
   ResumeDocumentBasics,
   ResumeDocumentEntry,
   ResumeDocumentSection,
 } from '@/types/resume-document'
+import type { BulletSuggestIntent } from '@/types/workspace'
+import type { BulletSuggestController } from '@/utils/useBulletSuggest'
 
 const props = defineProps<{
   document: ResumeDocument
+  suggest?: BulletSuggestController | null
+  suggestEnabled?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -131,6 +136,37 @@ const addBullet = (sectionId: string, entryId: string) => {
   updateEntry(sectionId, entryId, (target) => {
     target.bullets.push({ id: newId(), text: '' })
   })
+}
+
+const SUGGEST_INTENTS: Array<{ command: BulletSuggestIntent | 'CUSTOM'; label: string }> = [
+  { command: 'JOB_TARGETED', label: '岗位定向优化' },
+  { command: 'SIMPLIFY', label: '精简' },
+  { command: 'TECHNICAL_DEPTH', label: '强化技术深度' },
+  { command: 'HIGHLIGHT_OUTCOME', label: '突出成果' },
+  { command: 'CUSTOM', label: '自定义要求' },
+]
+
+type SuggestCardMode = 'composing' | 'requesting' | 'ready' | 'stale' | 'rejected' | 'error'
+
+const suggestActive = (bulletId: string) =>
+  !!props.suggest && props.suggest.activeBulletId.value === bulletId
+
+const suggestCardMode = (bulletId: string): SuggestCardMode | null => {
+  const controller = props.suggest
+  if (!controller || controller.activeBulletId.value !== bulletId) return null
+  const phase = controller.phase.value
+  if (phase === 'idle') return null
+  if (phase === 'ready' && controller.candidateStale.value) return 'stale'
+  return phase
+}
+
+const handleSuggestCommand = (bulletId: string, command: BulletSuggestIntent | 'CUSTOM') => {
+  if (!props.suggest || props.suggest.busy.value) return
+  if (command === 'CUSTOM') {
+    props.suggest.startCustomCompose(bulletId)
+    return
+  }
+  props.suggest.suggest(bulletId, command)
 }
 </script>
 
@@ -285,34 +321,75 @@ const addBullet = (sectionId: string, entryId: string) => {
         <div
           v-for="bullet in entry.bullets"
           :key="bullet.id"
-          class="bullet-line"
+          class="bullet-block"
         >
-          <el-input
-            type="textarea"
-            :autosize="{ minRows: 1, maxRows: 6 }"
-            :model-value="bullet.text"
-            :maxlength="LIMITS.bullet"
-            placeholder="要点内容"
-            @update:model-value="
-              (value: string) =>
-                updateEntry(section.id, entry.id, (target) => {
-                  const targetBullet = target.bullets.find((item) => item.id === bullet.id)
-                  if (targetBullet) targetBullet.text = value
-                })
-            "
+          <div class="bullet-line">
+            <el-input
+              type="textarea"
+              :autosize="{ minRows: 1, maxRows: 6 }"
+              :model-value="bullet.text"
+              :maxlength="LIMITS.bullet"
+              placeholder="要点内容"
+              @update:model-value="
+                (value: string) =>
+                  updateEntry(section.id, entry.id, (target) => {
+                    const targetBullet = target.bullets.find((item) => item.id === bullet.id)
+                    if (targetBullet) targetBullet.text = value
+                  })
+              "
+            />
+            <div class="bullet-actions">
+              <el-dropdown
+                v-if="suggestEnabled && suggest"
+                trigger="click"
+                @command="(command: unknown) => handleSuggestCommand(bullet.id, command as BulletSuggestIntent | 'CUSTOM')"
+              >
+                <el-button
+                  size="small"
+                  :disabled="suggest.busy.value || suggestActive(bullet.id) || !bullet.text.trim()"
+                >
+                  优化
+                </el-button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item
+                      v-for="item in SUGGEST_INTENTS"
+                      :key="item.command"
+                      :command="item.command"
+                    >
+                      {{ item.label }}
+                    </el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+              <el-button
+                text
+                type="danger"
+                aria-label="删除要点"
+                @click="
+                  updateEntry(section.id, entry.id, (target) => {
+                    target.bullets = target.bullets.filter((item) => item.id !== bullet.id)
+                  })
+                "
+              >
+                删除
+              </el-button>
+            </div>
+          </div>
+          <BulletSuggestionCard
+            v-if="suggest && suggestCardMode(bullet.id)"
+            :mode="suggestCardMode(bullet.id)!"
+            :original-text="suggest.candidate.value?.originalText ?? bullet.text"
+            :suggested-text="suggest.candidate.value?.suggestedText ?? null"
+            :reason="suggest.candidate.value?.reason ?? null"
+            :reject-message="suggest.rejectInfo.value?.message ?? null"
+            :error-message="suggest.errorMessage.value ?? null"
+            @apply="suggest?.apply()"
+            @reject="suggest?.reject()"
+            @regenerate="suggest?.regenerate()"
+            @cancel="suggest?.cancelCompose()"
+            @submit-custom="(text: string) => suggest?.submitCustom(bullet.id, text)"
           />
-          <el-button
-            text
-            type="danger"
-            aria-label="删除要点"
-            @click="
-              updateEntry(section.id, entry.id, (target) => {
-                target.bullets = target.bullets.filter((item) => item.id !== bullet.id)
-              })
-            "
-          >
-            删除
-          </el-button>
         </div>
 
         <div class="entry-actions">
@@ -420,11 +497,22 @@ const addBullet = (sectionId: string, entryId: string) => {
   align-items: center;
 }
 
+.bullet-block {
+  display: grid;
+  gap: 8px;
+}
+
 .bullet-line {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
   align-items: start;
+}
+
+.bullet-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .entry-actions,

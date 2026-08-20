@@ -1,0 +1,223 @@
+package com.winter.airesumeoptimizer.module.workspace.service.impl;
+
+import com.winter.airesumeoptimizer.common.exception.BusinessException;
+import com.winter.airesumeoptimizer.common.logging.LogSanitizer;
+import com.winter.airesumeoptimizer.infra.ai.AiChatMessage;
+import com.winter.airesumeoptimizer.infra.ai.AiClientException;
+import com.winter.airesumeoptimizer.infra.ai.AiClientService;
+import com.winter.airesumeoptimizer.module.evidence.service.EvidenceMatchService;
+import com.winter.airesumeoptimizer.module.evidence.vo.EvidenceAnalysisResultVO;
+import com.winter.airesumeoptimizer.module.workspace.dto.BulletRewriteOutputDTO;
+import com.winter.airesumeoptimizer.module.workspace.dto.BulletRewritePromptDTO;
+import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentBulletDTO;
+import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentDTO;
+import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentEntryDTO;
+import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentSectionDTO;
+import com.winter.airesumeoptimizer.module.workspace.dto.RewriteFactValidationResult;
+import com.winter.airesumeoptimizer.module.workspace.dto.WorkspaceBulletSuggestRequestDTO;
+import com.winter.airesumeoptimizer.module.workspace.enums.BulletSuggestIntent;
+import com.winter.airesumeoptimizer.module.workspace.service.BulletRewriteOutputParser;
+import com.winter.airesumeoptimizer.module.workspace.service.BulletRewritePromptService;
+import com.winter.airesumeoptimizer.module.workspace.service.BulletRewriteRefusedException;
+import com.winter.airesumeoptimizer.module.workspace.service.BulletRewriteService;
+import com.winter.airesumeoptimizer.module.workspace.service.RewriteFactValidator;
+import com.winter.airesumeoptimizer.module.workspace.service.WorkspaceContentService;
+import com.winter.airesumeoptimizer.module.workspace.vo.WorkspaceBulletSuggestionVO;
+import com.winter.airesumeoptimizer.module.workspace.vo.WorkspaceContentVO;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
+import java.util.List;
+import java.util.regex.Pattern;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Service;
+
+@Service
+public class BulletRewriteServiceImpl implements BulletRewriteService {
+
+    private static final Logger log = LoggerFactory.getLogger(BulletRewriteServiceImpl.class);
+
+    private static final Pattern REQUEST_ID_PATTERN = Pattern.compile(
+            "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}");
+
+    private final WorkspaceContentService workspaceContentService;
+    private final EvidenceMatchService evidenceMatchService;
+    private final BulletRewritePromptService bulletRewritePromptService;
+    private final BulletRewriteOutputParser bulletRewriteOutputParser;
+    private final RewriteFactValidator rewriteFactValidator;
+    private final AiClientService aiClientService;
+
+    public BulletRewriteServiceImpl(
+            WorkspaceContentService workspaceContentService,
+            EvidenceMatchService evidenceMatchService,
+            BulletRewritePromptService bulletRewritePromptService,
+            BulletRewriteOutputParser bulletRewriteOutputParser,
+            RewriteFactValidator rewriteFactValidator,
+            AiClientService aiClientService) {
+        this.workspaceContentService = workspaceContentService;
+        this.evidenceMatchService = evidenceMatchService;
+        this.bulletRewritePromptService = bulletRewritePromptService;
+        this.bulletRewriteOutputParser = bulletRewriteOutputParser;
+        this.rewriteFactValidator = rewriteFactValidator;
+        this.aiClientService = aiClientService;
+    }
+
+    @Override
+    public WorkspaceBulletSuggestionVO suggestBulletRewrite(
+            Long userId, Long optimizationTaskId, WorkspaceBulletSuggestRequestDTO request) {
+        validateRequest(request);
+
+        // 旧版兼容任务没有正式证据分析：岗位定向改写必须 fail closed，
+        // 不得把不可追溯的历史输出当作事实依据。
+        EvidenceAnalysisResultVO evidenceAnalysis =
+                evidenceMatchService.getResult(userId, optimizationTaskId);
+        if (evidenceAnalysis == null) {
+            throw new BusinessException(409, "该任务没有正式证据分析，暂不能启用岗位定向改写");
+        }
+
+        // Phase 4 seam：任务归属、版本链校验与 TARGET 文档读取全部复用既有服务；
+        // 跨用户访问、任务未完成、版本链异常都在此 fail closed。
+        WorkspaceContentVO content = workspaceContentService.getContent(userId, optimizationTaskId);
+        long currentRevision = content.getRevision();
+        if (!request.getBaseRevision().equals(currentRevision)) {
+            throw stale("简历内容已有更新的版本，本次建议请求已过期");
+        }
+
+        ResumeDocumentBulletDTO bullet = findBullet(content.getDocument(), request.getBulletId());
+        if (bullet == null) {
+            throw stale("目标要点不存在或已被删除，本次建议请求已过期");
+        }
+        String persistedOriginal = bullet.getText() == null ? "" : bullet.getText().strip();
+        if (persistedOriginal.isBlank()) {
+            throw stale("目标要点内容为空，本次建议请求已过期");
+        }
+        String expectedHash = sha256Hex(persistedOriginal);
+        if (!expectedHash.equalsIgnoreCase(request.getOriginalTextHash())
+                || !expectedHash.equals(sha256Hex(request.getOriginalText().strip()))) {
+            throw stale("目标要点已被修改，本次建议请求已过期");
+        }
+
+        BulletRewritePromptDTO prompt = bulletRewritePromptService.buildPrompt(
+                request.getIntent(),
+                request.getIntent() == BulletSuggestIntent.CUSTOM ? request.getUserInstruction() : null,
+                persistedOriginal,
+                evidenceAnalysis);
+
+        log.info("Bullet rewrite started: userId={}, optimizationTaskId={}, intent={}, revision={}",
+                userId, optimizationTaskId, request.getIntent(), currentRevision);
+
+        String aiOutput;
+        try {
+            // 平台可信策略进 SYSTEM；简历 / 岗位 / 用户要求等不可信数据进 USER 数据区。
+            aiOutput = aiClientService.complete(List.of(
+                    AiChatMessage.system(prompt.getSystemPolicy()),
+                    AiChatMessage.user(prompt.getUserContent())));
+        } catch (AiClientException exception) {
+            log.warn("Bullet rewrite AI call failed: model={}, reason={}",
+                    aiClientService.modelName(),
+                    LogSanitizer.sanitize(exception.getMessage()));
+            throw new BusinessException(502, "AI 服务暂时不可用，请稍后重试");
+        }
+
+        BulletRewriteOutputDTO output;
+        try {
+            output = bulletRewriteOutputParser.parse(aiOutput);
+        } catch (BulletRewriteRefusedException exception) {
+            log.info("Bullet rewrite refused by AI: optimizationTaskId={}", optimizationTaskId);
+            return rejected(request, currentRevision, persistedOriginal,
+                    WorkspaceBulletSuggestionVO.REJECT_CODE_REFUSED,
+                    "AI 无法在不新增事实的情况下改写这条要点，请继续手工编辑");
+        }
+
+        // 事实校验只以当前 Bullet 原文为闭包基线：不跨 Bullet 搬运事实。
+        RewriteFactValidationResult factCheck =
+                rewriteFactValidator.validate(persistedOriginal, output.suggestedText());
+        if (!factCheck.passed()) {
+            log.info("Bullet rewrite rejected by fact validator: optimizationTaskId={}, code={}",
+                    optimizationTaskId, factCheck.code());
+            return rejected(request, currentRevision, persistedOriginal,
+                    factCheck.code().name(),
+                    factCheck.message() + "，建议已拒绝，请继续手工编辑");
+        }
+
+        return WorkspaceBulletSuggestionVO.builder()
+                .requestId(request.getRequestId())
+                .state(WorkspaceBulletSuggestionVO.STATE_READY)
+                .baseRevision(currentRevision)
+                .bulletId(request.getBulletId())
+                .originalText(persistedOriginal)
+                .suggestedText(output.suggestedText())
+                .reason(output.reason())
+                .modelName(aiClientService.modelName())
+                .build();
+    }
+
+    private WorkspaceBulletSuggestionVO rejected(
+            WorkspaceBulletSuggestRequestDTO request,
+            long baseRevision,
+            String persistedOriginal,
+            String rejectCode,
+            String rejectMessage) {
+        return WorkspaceBulletSuggestionVO.builder()
+                .requestId(request.getRequestId())
+                .state(WorkspaceBulletSuggestionVO.STATE_REJECTED)
+                .baseRevision(baseRevision)
+                .bulletId(request.getBulletId())
+                .originalText(persistedOriginal)
+                .rejectCode(rejectCode)
+                .rejectMessage(rejectMessage)
+                .modelName(aiClientService.modelName())
+                .build();
+    }
+
+    /** 只按用户明确选中的 ID 精确查找，不做任何模糊 / 内容匹配。 */
+    private ResumeDocumentBulletDTO findBullet(ResumeDocumentDTO document, String bulletId) {
+        if (document == null || document.getSections() == null) {
+            return null;
+        }
+        for (ResumeDocumentSectionDTO section : document.getSections()) {
+            if (section.getEntries() == null) {
+                continue;
+            }
+            for (ResumeDocumentEntryDTO entry : section.getEntries()) {
+                if (entry.getBullets() == null) {
+                    continue;
+                }
+                for (ResumeDocumentBulletDTO bullet : entry.getBullets()) {
+                    if (bulletId.equals(bullet.getId())) {
+                        return bullet;
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    private void validateRequest(WorkspaceBulletSuggestRequestDTO request) {
+        if (request == null) {
+            throw new BusinessException(400, "缺少改写建议请求");
+        }
+        if (!REQUEST_ID_PATTERN.matcher(request.getRequestId()).matches()) {
+            throw new BusinessException(400, "请求 ID 格式不正确");
+        }
+        if (request.getIntent() == BulletSuggestIntent.CUSTOM
+                && (request.getUserInstruction() == null || request.getUserInstruction().isBlank())) {
+            throw new BusinessException(400, "自定义改写必须填写本次要求");
+        }
+    }
+
+    private BusinessException stale(String message) {
+        return new BusinessException(409, message);
+    }
+
+    private String sha256Hex(String value) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            return HexFormat.of().formatHex(digest.digest(value.getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException exception) {
+            throw new BusinessException(500, "内容校验失败");
+        }
+    }
+}

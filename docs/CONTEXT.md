@@ -1,12 +1,12 @@
 # 项目上下文与当前状态
 
-更新基线：V2 Phase 4（Optimization Workspace 与结构化简历编辑）已完成并通过 Gate。本文只记录**当前事实、已确认决策和已知差距**；产品目标见 [PRD.md](PRD.md)，实现顺序见 [PLAN.md](PLAN.md)。
+更新基线：V2 Phase 5（单 Bullet AI Suggest / Diff / Apply / Reject / Regenerate 与事实闭包校验）已完成并通过 Gate。本文只记录**当前事实、已确认决策和已知差距**；产品目标见 [PRD.md](PRD.md)，实现顺序见 [PLAN.md](PLAN.md)。
 
 ## 1. 当前定位
 
 仓库当前是在 V1 模块化单体上完成 Phase 1 用户链路收敛、Phase 2 正式领域模型迁移、Phase 3 正式证据分析与 Phase 4 优化工作区的实现。普通用户仍只需选择或上传真实简历、粘贴目标 JD 并开始分析；分析成功后可进入两栏优化工作区，左栏只读展示分析时的三态结论与 SOURCE Evidence，右栏编辑当前任务的 TARGET 岗位版本，编辑自动保存并可恢复本次优化前版本。正式三态已收紧到当前冻结材料能够证明的范围，Phase 3 Gate 已通过；Phase 4 Gate 已通过。
 
-Phase 4 建立了以 optimizationTaskId 为唯一入口的 Workspace：服务端解析并校验 Task → SOURCE / TARGET / JobTarget / Resume / User 版本链，只有 TARGET 可编辑；结构化简历文档（RESUME_DOCUMENT_V1）落在既有 `resume_versions.structured_content`，未新增第二套内容字段；自动保存以 `content_revision` 乐观并发控制，SOURCE、resume_input_snapshot 与证据分析全程只读。AI Diff / Apply、Typst / PDF、BYOK 等后续能力尚未实现。
+Phase 4 建立了以 optimizationTaskId 为唯一入口的 Workspace：服务端解析并校验 Task → SOURCE / TARGET / JobTarget / Resume / User 版本链，只有 TARGET 可编辑；结构化简历文档（RESUME_DOCUMENT_V1）落在既有 `resume_versions.structured_content`，未新增第二套内容字段；自动保存以 `content_revision` 乐观并发控制，SOURCE、resume_input_snapshot 与证据分析全程只读。Phase 5 在该 seam 上建立了单 Bullet 岗位定向 AI Suggest：用户明确选中 Bullet 后请求受约束改写，服务端只读生成候选并经事实闭包校验，前端展示代码 Diff，显式采纳后进入既有 Undo / Auto Save / CAS。Typst / PDF、BYOK、用户 Profile / Rules 等后续能力尚未实现。
 
 ## 2. 真实已有能力
 
@@ -21,6 +21,8 @@ Phase 4 建立了以 optimizationTaskId 为唯一入口的 Workspace：服务端
 | 正式证据分析 | 每个成功任务一条 `evidence_analyses` 及其 `evidence_requirements` / `requirement_evidences` 行；要求必须来自冻结 JD，证据必须逐字命中冻结 ResumeVersion 并与要求相关；MATCHED / PARTIAL_EVIDENCE 必须有 Evidence，NO_EVIDENCE 不保存 Evidence，三态由保留证据及其支持程度推导 |
 | 重试与结果 | 失败重试按 `OptimizationTask` 复用已冻结输入和版本，并整体替换旧的正式分析行；正式结果与任务 SUCCESS 在同一事务提交，并发提交通过条件更新只允许一个执行占用；成功任务不可被重试改写；历史任务无正式分析时兼容读取旧匹配结果 |
 | 优化工作区 | 以 `optimizationTaskId` 为唯一入口的两栏工作区：左栏只读展示分析时三态结论与 SOURCE Evidence，右栏编辑 TARGET 岗位版本的结构化简历文档；支持基础信息 / Section / Entry / Bullet 编辑、Bullet 增删、Section 排序、会话内 Undo / Redo、debounce 自动保存与恢复优化前版本 |
+| AI Suggest | 单 Bullet 岗位定向改写（岗位定向 / 精简 / 强化技术深度 / 突出成果 / 自定义要求）：SYSTEM 承载平台真实性策略、USER 承载不可信数据的 role-separated 调用；建议只存在于当前会话、不落库、无服务端 Apply；代码确定性 Diff；Apply 前重验候选、单 Undo 节点、复用 Auto Save / CAS；无正式证据分析的任务 fail closed |
+| 事实闭包校验 | 确定性 RewriteFactValidator：以当前 Bullet 原文为唯一事实基线，拒绝新增 / 升级技术、实体、数字 / 中文量化、责任级别、成果、范围、时间；同义改写放行；AI 输出 malformed / truncated / refusal / provider failure 全部 fail closed |
 | 内容并发控制 | `resume_versions.content_revision`（V21，NOT NULL DEFAULT 0）承担乐观并发；保存携带 expectedRevision，仅版本一致时单条条件 UPDATE 写入并递增；冲突返回服务端当前版本并保留本地草稿；恢复优化前版本基于任务冻结的 resume_input_snapshot 确定性重生成并作为新 revision 写入 |
 | 旧后端能力 | `job_descriptions`、`ai_job_match_results`、简历诊断、优化建议、局部改写、聚合报告、预置岗位和旧历史仍存在；`ai_job_match_results` 的公开写入口已停用，仅保留历史读取，正式主链路也不再写入新的旧匹配行 |
 | 向量 | pgvector、Embedding、分块、语义相似度、可选 RAG 上下文；不作为用户步骤，也不进入正式证据匹配主链路 |
@@ -71,13 +73,13 @@ Phase 4 建立了以 optimizationTaskId 为唯一入口的 Workspace：服务端
 
 当前尚未具备：
 
-- Diff、Apply / Reject 与事实校验组成的完整可控修改体验，以及受约束的上下文 AI Suggest / Rewrite；无证据内容仍不得进入自动改写。
 - “缺少事实时询问用户确认”的交互（PRD 第 8 节）；当前 NO_EVIDENCE 只做提示，不收集用户确认事实。
+- 用户 Profile / Rules 与平台策略的分层组合（Phase 5 只实现平台默认策略 + 本次自定义要求，高级设置未暴露）。
 - Structured Resume JSON 驱动的 Typst Preview / PDF Export。
 - 每用户 BYOK、Credential 加密、AI Gateway 与自定义 Base URL SSRF 防护。
 - 用户数据导出 / 全量删除和长期多 JD 方向洞察。
 
-Phase 5 是计划中的下一阶段，Phase 4 Gate 已通过。不得在 Phase 5 中实现无证据写入，也不得把 NO_EVIDENCE 直接宣称为用户没有能力。
+Phase 6 是计划中的下一阶段，Phase 5 Gate 已通过。不得在后续阶段中实现无证据写入，也不得把 NO_EVIDENCE 直接宣称为用户没有能力。
 
 ## 6. 已确认并保留的决策
 
@@ -96,6 +98,15 @@ Phase 4 统一语言与边界：
 - **乐观并发**：保存必须携带 expectedRevision，仅版本一致时原子写入并递增；冲突保留本地草稿并停止盲目重试，不提供绕过 revision 的无条件强写；用户显式覆盖时基于重新获取的最新服务端 revision 发起新的条件保存。
 - **恢复优化前版本**：显式确认后基于任务冻结快照确定性重生成，作为新 revision 写入，遵循相同并发规则。
 - **会话边界**：Undo / Redo 只属当前页面编辑会话；刷新 / 重新进入只恢复最后成功持久化的服务端内容；localStorage / sessionStorage 不作为正式简历恢复源。
+
+Phase 5 统一语言与边界：
+
+- **事实闭包**：Rewrite 校验的事实基线只有被改写 Bullet 的当前原文（TARGET Bullet 本身是用户已明确输入的事实来源）；不跨 Bullet、不引用 SOURCE / Evidence 文本搬运事实。允许同义改写、语法调整与语言重组；新增或升级实体、技术、数字 / 量化、责任级别、成果、因果、范围、时间一律拒绝；无法可靠判断时 fail closed。
+- **建议会话性**：Suggestion 只存在于当前会话，服务端不持久化建议 / 历史 / 变更事件，也没有服务端 Apply 写入链路；Suggest / Reject / Regenerate 不修改 TARGET 或 revision。
+- **候选绑定与失效**：候选绑定 requestId、baseRevision、草稿变更序号、bulletId 与原文哈希；人工编辑、Undo / Redo、Restore、revision 变化、保存冲突、任务 / 路由切换、Regenerate 替代、乱序旧响应都使候选确定失效，失效候选不可 Apply。
+- **Apply 语义**：显式点击、Apply 前重新验证、只替换对应 Bullet 文本、形成单个 Undo 节点，随后完全进入既有 dirty → Auto Save → CAS；Apply 后保存冲突沿用 Phase 4 冲突处置，不绕过。
+- **Evidence 边界**：NO_EVIDENCE 要求不进入改写上下文；PARTIAL_EVIDENCE 只作为表达侧重参考，不得被补成完整能力；无正式证据分析（LEGACY_COMPAT）的任务不启用岗位定向改写。
+- **AI 角色分离**：平台可信策略只进 SYSTEM 消息；简历、JD、证据、用户本次要求全部进 USER 数据区并显式标注不可信；Prompt 模板单遍替换；AI 不得生成元素 ID、Patch 或完整文档；AI 输出经严格解析与事实校验后才可展示为可采纳候选。
 
 - 模块化单体和前后端分离足以支撑 V2；不引入微服务、消息队列或 Kubernetes。
 - 上传的原始文件、`resumes` 元数据和 `resume_parse_results` 不因岗位版本派生而改变。
@@ -130,8 +141,20 @@ Phase 4 统一语言与边界：
 - Workspace 并发争用目前由单条条件 UPDATE 的服务端语义加单元 / Web MVC 测试验证，尚缺真实 PostgreSQL 多线程并发保存集成测试；前端冲突处置（保留草稿、显式覆盖、采用服务端版本）可兼容该窗口，仍作为遗留测试风险保留。
 - 工作区初始化优先使用冻结快照的 `rawSections` 完整文本与顺序，并用 `rawText` 补回未进入章节的原始行；历史快照缺少章节时保守退回完整 `rawText`，再无原始文本时才使用 structuredData、合法旧版顶层字段或 displayModel。未知或错误类型字段、超限内容和无法完整转换的内容会整体拒绝，不会用不完整投影覆盖 TARGET；少量不符合当前解析 Schema 的旧快照可能需要重新解析。
 - 前端主 chunk 体积已超过 Vite 500 kB 提示阈值（element-plus 全量引入）；不影响正确性，后续视觉 / 体验阶段可评估按需引入。
+- RewriteFactValidator 是保守的词表 / 规则式确定性防线，存在结构性残余盲区：名单外的新技术词、纯中文新事实名词、隐式因果等可能漏检；设计取向是宁可错拒（误拒时用户可重新生成或手工编辑），不引入第二次 LLM 作为唯一真实性裁判。词表需要随真实使用持续扩充。
+- AI Suggest 为同步请求：服务端 AI 调用默认超时 30 秒，前端请求超时 65 秒；生成期间目标 Bullet 的人工编辑会使候选失效。Suggest 端点无限流，依赖用户会话频率，后续运维可按需加频控。
+- Suggest 在 AI 调用前校验 baseRevision 与原文哈希；AI 耗时窗口内 revision 被并发推进时，候选由前端绑定字段确定判为 stale，落库仍由 Phase 4 CAS 兜底，无实际写入风险。
 
-## 8. Phase 4 验证
+## 8. Phase 5 验证
+
+- 后端 `./mvnw -Dmaven.compiler.proc=full test`：全量 487 个测试，0 失败、0 错误，3 个真实外部服务 smoke test 默认跳过。
+- 新增：AiClientService role-separated messages 序列化与空输入拒绝；RewriteFactValidator 29 个用例（同义改写放行、伪造技术 / 数字 / 中文量化 / 成果 / 责任升级 / 范围 / 时间 / 元素 ID 拒绝、数字 token 精确匹配、跨 Bullet 不搬运、超限 fail closed）；BulletRewriteService 18 个用例（READY 零写入、stale revision / 哈希 / 删除 Bullet、legacy fail closed、跨用户拒绝、AI 失败与 malformed / truncated 输出 fail closed、refusal、伪造事实拒绝、Prompt Injection 与 role separation、CUSTOM 校验）；Prompt 组装（NO_EVIDENCE 排除、SYSTEM 只承载策略、占位符单遍替换回归）；输出解析 fail closed 全谱。
+- 前端 `npm test`：30 个测试通过，其中 Suggest 状态机 14 个用例覆盖 Apply 单 Undo 节点与 Auto Save 衔接、人工编辑 / Undo / Redo / Restore / revision / 冲突失效、乱序响应与 Regenerate requestId 替代、Reject 无副作用、AI 失败不动草稿、dispose / 任务切换隔离、自定义要求流；Diff 工具确定性用例 6 个；既有 Workspace 状态机 10 个用例回归通过。
+- `npm run build`（type-check + 生产构建）、`oxlint`、`eslint` 通过；`git diff --check` 通过。
+- 独立 reviewer 对后端与前端切片分别审查：零持久化、无服务端 Apply、SOURCE 只读、role 分离、Phase 4 语义保持均确认；提出的 validator 盲区（数字子串包含、中文量化、词表缺口）、模板二次展开、conflict 失效缺口、requesting 卡片不可达等问题已全部修复并补回归测试。
+- 尚缺真实 PostgreSQL 下的并发争用集成测试（与 Phase 3 / 4 相同处置）；Suggest 本身无写入路径，不受该缺口影响。
+
+Phase 4 验证（历史基线）：
 
 - 后端 `./mvnw -Dmaven.compiler.proc=full test`：独立 Gate 修复后全量运行 421 个测试，0 失败、0 错误，3 个真实外部服务 smoke test 默认跳过。
 - 新增：转换器确定性、rawSections / rawText 完整性与上限 fail-closed 测试（含扩展联系方式保留、未知 / 错误类型拒绝、超限拒绝而非截断）；Workspace 服务的完整 Task → SOURCE / TARGET / JobTarget / Resume / User 链、共享 TARGET fail-closed、同简历双任务独立 TARGET、SOURCE / 快照不变、同 revision 竞争、恢复确定性与冲突；API 集成测试覆盖 workspace 读取 / 保存 / 恢复 / 参数校验 / 匿名拒绝。
