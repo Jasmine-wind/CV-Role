@@ -27,7 +27,7 @@ Product conflicts are resolved by `docs/PRD.md`. Current behavior is determined 
 
 ## Current phase
 
-Phase 1 (information architecture and main-flow simplification) is complete. Phase 2 is the next approved phase; do not present Phase 2 or later P0/P1/P2 capabilities as already implemented, and do not start later phases opportunistically.
+Phases 1–4 are complete. Phase 5 is the next approved phase; do not present Phase 5 or later P0/P1/P2 capabilities as already implemented, and do not start later phases opportunistically.
 
 Do not introduce microservices, message queues, Kubernetes, crawlers, auto-apply, a job marketplace, a chatbot-first UI, a complex ATS score system, a template marketplace, or a new technology stack unless the product baseline is explicitly revised.
 

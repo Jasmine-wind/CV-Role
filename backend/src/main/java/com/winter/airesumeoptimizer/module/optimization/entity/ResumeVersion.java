@@ -33,6 +33,8 @@ public class ResumeVersion {
 
     private String structuredContent;
 
+    private Long contentRevision;
+
     private LocalDateTime createdAt;
 
     private LocalDateTime updatedAt;

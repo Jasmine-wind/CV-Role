@@ -1,6 +1,6 @@
 # CV-Role V2 重构计划
 
-本计划只把 [PRD.md](PRD.md) 已冻结的决策转成实施顺序，不扩展产品范围。当前仓库已完成 **Phase 2 核心领域模型** 与 **Phase 3 Evidence Matching / Gap Analysis**。Phase 3 已把三态收紧为当前材料能够证明的 MATCHED / PARTIAL_EVIDENCE / NO_EVIDENCE，并通过重新执行的 Gate；Phase 4 尚未在正式仓库中开始。
+本计划只把 [PRD.md](PRD.md) 已冻结的决策转成实施顺序，不扩展产品范围。当前仓库已完成 **Phase 2 核心领域模型**、**Phase 3 Evidence Matching / Gap Analysis** 与 **Phase 4 Optimization Workspace**。Phase 3 已把三态收紧为当前材料能够证明的 MATCHED / PARTIAL_EVIDENCE / NO_EVIDENCE，并通过重新执行的 Gate；Phase 4 已建立两栏工作区、结构化简历编辑、Section 排序、Undo / Redo、自动保存与恢复优化前版本，并通过 Gate。Phase 5 尚未开始。
 
 ## 目标
 
@@ -68,12 +68,14 @@
 
 Gate 结论：当前正式三态只陈述冻结材料可以支持的结论；引用真实性、用户归属、无证据降级、旧写入口、重试与结果原子性均已验证。真正的“有经历但没有写出来”明确留给未来用户确认或独立事实来源，不是 Phase 3 的隐含能力。
 
-### Phase 4 — Optimization Workspace
+### Phase 4 — Optimization Workspace（已完成，Gate 已通过）
 
 - 两栏主工作区：建议与编辑器；Preview 使用切换、Drawer 或独立模式。
 - 支持 Section / Bullet 编辑、拖拽、Undo / Redo、自动保存和恢复本次优化前版本。
 
 门禁：离开页面后编辑不丢失；失败不要求用户重做前置步骤。
+
+完成状态：Workspace 以 `optimizationTaskId` 为唯一入口，服务端由任务解析 SOURCE / TARGET / JobTarget 完整版本链，前端不能指定可写 ResumeVersion；只有当前任务的 TARGET 岗位版本可编辑，SOURCE、resume_input_snapshot 与正式证据分析全程只读。结构化简历文档（RESUME_DOCUMENT_V1）是唯一编辑与持久化内容，落在既有 `resume_versions.structured_content`，未新增第二套内容字段；V21 只补充 `content_revision`（NOT NULL DEFAULT 0）用于乐观并发。保存必须携带 expectedRevision，仅版本一致时条件更新并递增；冲突返回服务端当前版本并保留本地草稿，用户显式覆盖时基于重新获取的最新 revision 再次条件保存。恢复优化前版本基于任务冻结的 resume_input_snapshot 确定性重生成并作为新 revision 写入。两栏页面左栏只读展示分析时三态结论与 SOURCE Evidence，并明确 TARGET 编辑后不实时重算；前端自动保存状态机覆盖 dirty / saving / saved / failed / conflict，离开守卫防止静默丢失；Undo / Redo 仅属当前会话。Preview / PDF、AI Rewrite、Diff、Apply / Reject 未在本 Phase 实现。
 
 ### Phase 5 — AI Suggest、Diff 与用户策略
 

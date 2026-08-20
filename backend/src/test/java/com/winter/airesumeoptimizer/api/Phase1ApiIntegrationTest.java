@@ -9,6 +9,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -89,6 +90,11 @@ import com.winter.airesumeoptimizer.module.task.vo.AsyncTaskVO;
 import com.winter.airesumeoptimizer.module.user.controller.UserController;
 import com.winter.airesumeoptimizer.module.user.service.UserService;
 import com.winter.airesumeoptimizer.module.user.vo.UserProfileVO;
+import com.winter.airesumeoptimizer.module.workspace.controller.WorkspaceContentController;
+import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentDTO;
+import com.winter.airesumeoptimizer.module.workspace.service.WorkspaceContentService;
+import com.winter.airesumeoptimizer.module.workspace.vo.WorkspaceContentSaveResultVO;
+import com.winter.airesumeoptimizer.module.workspace.vo.WorkspaceContentVO;
 import com.winter.airesumeoptimizer.security.JwtAccessDeniedHandler;
 import com.winter.airesumeoptimizer.security.JwtAuthenticationEntryPoint;
 import com.winter.airesumeoptimizer.security.JwtAuthenticationFilter;
@@ -123,7 +129,8 @@ import org.springframework.web.multipart.MultipartFile;
         JobDescriptionController.class,
         JobMatchController.class,
         AiHistoryController.class,
-        HistoryController.class
+        HistoryController.class,
+        WorkspaceContentController.class
 })
 @Import({
         SecurityConfig.class,
@@ -206,6 +213,9 @@ class Phase1ApiIntegrationTest {
 
     @MockitoBean
     private AiHistoryService aiHistoryService;
+
+    @MockitoBean
+    private WorkspaceContentService workspaceContentService;
 
     @MockitoBean
     private JwtTokenProvider jwtTokenProvider;
@@ -574,6 +584,92 @@ class Phase1ApiIntegrationTest {
                         .content(objectMapper.writeValueAsString(Map.of(
                                 "resumeId", 100,
                                 "jobDescription", "Java 后端工程师"))))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void workspaceEndpointsShouldLoadSaveRestoreAndRejectAnonymousAccess() throws Exception {
+        ResumeDocumentDTO document = ResumeDocumentDTO.builder()
+                .schemaVersion(ResumeDocumentDTO.SCHEMA_VERSION)
+                .sections(List.of())
+                .build();
+        when(workspaceContentService.getContent(eq(1L), eq(2000L))).thenReturn(WorkspaceContentVO.builder()
+                .optimizationTaskId(2000L)
+                .revision(0L)
+                .document(document)
+                .build());
+        when(workspaceContentService.saveContent(eq(1L), eq(2000L), any())).thenAnswer(invocation -> {
+            com.winter.airesumeoptimizer.module.workspace.dto.WorkspaceContentSaveRequestDTO request =
+                    invocation.getArgument(2);
+            if (request.getExpectedRevision() == 0L) {
+                return WorkspaceContentSaveResultVO.builder()
+                        .saved(true).conflict(false).revision(1L).document(document).build();
+            }
+            return WorkspaceContentSaveResultVO.builder().saved(false).conflict(true).revision(1L).build();
+        });
+        when(workspaceContentService.restorePreOptimizationContent(eq(1L), eq(2000L), eq(1L)))
+                .thenReturn(WorkspaceContentSaveResultVO.builder()
+                        .saved(true).conflict(false).revision(2L).document(document).build());
+
+        mockMvc.perform(get("/api/workspace/2000/content")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.optimizationTaskId").value(2000))
+                .andExpect(jsonPath("$.data.revision").value(0))
+                .andExpect(jsonPath("$.data.document.schemaVersion").value("RESUME_DOCUMENT_V1"));
+
+        String saveBody = objectMapper.writeValueAsString(Map.of(
+                "expectedRevision", 0,
+                "document", Map.of(
+                        "schemaVersion", "RESUME_DOCUMENT_V1",
+                        "sections", List.of())));
+        mockMvc.perform(put("/api/workspace/2000/content")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(saveBody))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.saved").value(true))
+                .andExpect(jsonPath("$.data.conflict").value(false))
+                .andExpect(jsonPath("$.data.revision").value(1))
+                .andExpect(jsonPath("$.data.document.schemaVersion").value("RESUME_DOCUMENT_V1"));
+
+        String staleSaveBody = objectMapper.writeValueAsString(Map.of(
+                "expectedRevision", 5,
+                "document", Map.of(
+                        "schemaVersion", "RESUME_DOCUMENT_V1",
+                        "sections", List.of())));
+        mockMvc.perform(put("/api/workspace/2000/content")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(staleSaveBody))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.saved").value(false))
+                .andExpect(jsonPath("$.data.conflict").value(true))
+                .andExpect(jsonPath("$.data.revision").value(1));
+
+        mockMvc.perform(put("/api/workspace/2000/content")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "document", Map.of("schemaVersion", "RESUME_DOCUMENT_V1")))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(400))
+                .andExpect(jsonPath("$.message").value("缺少内容版本号"));
+
+        mockMvc.perform(post("/api/workspace/2000/restore-pre-optimization")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("expectedRevision", 1))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.saved").value(true))
+                .andExpect(jsonPath("$.data.revision").value(2))
+                .andExpect(jsonPath("$.data.document.schemaVersion").value("RESUME_DOCUMENT_V1"));
+
+        mockMvc.perform(get("/api/workspace/2000/content"))
+                .andExpect(status().isUnauthorized());
+        mockMvc.perform(put("/api/workspace/2000/content")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(saveBody))
                 .andExpect(status().isUnauthorized());
     }
 

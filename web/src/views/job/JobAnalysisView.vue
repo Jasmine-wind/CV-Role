@@ -91,6 +91,13 @@ onMounted(loadResult)
       :description="optimizationResult?.resumeName ? `基于 ${optimizationResult.resumeName} 与目标岗位要求整理` : '基于你的真实简历与目标岗位要求整理'"
     >
       <template #actions>
+        <el-button
+          v-if="optimizationResult && optimizationResult.status === 'SUCCESS'"
+          type="primary"
+          @click="router.push(`/workspace/${optimizationTaskId}`)"
+        >
+          编辑这份简历
+        </el-button>
         <el-button @click="router.push('/app')">分析新岗位</el-button>
       </template>
     </PageHeader>

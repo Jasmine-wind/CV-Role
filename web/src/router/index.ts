@@ -42,6 +42,16 @@ const router = createRouter({
       },
     },
     {
+      path: '/workspace/:optimizationTaskId',
+      name: 'workspace',
+      component: () => import('@/views/workspace/WorkspaceView.vue'),
+      meta: {
+        requiresAuth: true,
+        title: '优化工作区',
+        layoutWidth: 'wide',
+      },
+    },
+    {
       path: '/resumes',
       name: 'resumes',
       component: () => import('@/views/resume/ResumeView.vue'),
