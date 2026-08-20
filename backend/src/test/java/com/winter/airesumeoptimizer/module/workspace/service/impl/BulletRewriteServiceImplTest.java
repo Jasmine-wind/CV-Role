@@ -69,12 +69,17 @@ class BulletRewriteServiceImplTest {
     }
 
     private WorkspaceBulletSuggestRequestDTO request(BulletSuggestIntent intent, String instruction) {
+        return requestForText(ORIGINAL_TEXT, intent, instruction);
+    }
+
+    private WorkspaceBulletSuggestRequestDTO requestForText(
+            String originalText, BulletSuggestIntent intent, String instruction) {
         return WorkspaceBulletSuggestRequestDTO.builder()
                 .requestId(REQUEST_ID)
                 .bulletId(BULLET_ID)
                 .baseRevision(REVISION)
-                .originalText(ORIGINAL_TEXT)
-                .originalTextHash(sha256Hex(ORIGINAL_TEXT))
+                .originalText(originalText)
+                .originalTextHash(sha256Hex(originalText))
                 .intent(intent)
                 .userInstruction(instruction)
                 .build();
@@ -234,6 +239,48 @@ class BulletRewriteServiceImplTest {
     }
 
     @Test
+    void negationFlipShouldBeRejectedWithoutWritingWorkspace() {
+        String original = "使用 Java 开发订单服务，未使用 Kafka";
+        when(workspaceContentService.getContent(USER_ID, TASK_ID)).thenReturn(content(REVISION, original));
+        when(aiClientService.complete(any(List.class))).thenReturn(
+                "{\"suggestedText\":\"使用 Java 和 Kafka 开发订单服务\",\"reason\":\"精简表达\"}");
+
+        WorkspaceBulletSuggestionVO result = service.suggestBulletRewrite(
+                USER_ID, TASK_ID, requestForText(original, BulletSuggestIntent.SIMPLIFY, null));
+
+        assertThat(result.getState()).isEqualTo(WorkspaceBulletSuggestionVO.STATE_REJECTED);
+        assertThat(result.getSuggestedText()).isNull();
+        assertNoWorkspaceWrite();
+    }
+
+    @Test
+    void partialEvidenceCapabilityUpgradeShouldBeRejectedWithoutWritingWorkspace() {
+        String original = "在项目中使用过 Redis";
+        when(workspaceContentService.getContent(USER_ID, TASK_ID)).thenReturn(content(REVISION, original));
+        when(aiClientService.complete(any(List.class))).thenReturn(
+                "{\"suggestedText\":\"精通 Redis，具备丰富实践经验\",\"reason\":\"强化技术深度\"}");
+
+        WorkspaceBulletSuggestionVO result = service.suggestBulletRewrite(
+                USER_ID, TASK_ID, requestForText(original, BulletSuggestIntent.TECHNICAL_DEPTH, null));
+
+        assertThat(result.getState()).isEqualTo(WorkspaceBulletSuggestionVO.STATE_REJECTED);
+        assertThat(result.getSuggestedText()).isNull();
+        assertNoWorkspaceWrite();
+    }
+
+    @Test
+    void parserFailureForMissingReasonMustNotReachReadyOrWriteWorkspace() {
+        when(aiClientService.complete(any(List.class))).thenReturn(
+                "{\"suggestedText\":\"承担订单服务后端接口的开发工作\"}");
+
+        assertThatThrownBy(() -> service.suggestBulletRewrite(
+                USER_ID, TASK_ID, request(BulletSuggestIntent.SIMPLIFY, null)))
+                .isInstanceOf(BusinessException.class)
+                .extracting("code").isEqualTo(502);
+        assertNoWorkspaceWrite();
+    }
+
+    @Test
     void responsibilityEscalationShouldBeRejected() {
         when(aiClientService.complete(any(List.class))).thenReturn(
                 "{\"suggestedText\":\"主导订单服务后端接口的整体开发\",\"reason\":\"强化职责\"}");
@@ -377,6 +424,13 @@ class BulletRewriteServiceImplTest {
     private void assertNoAiCall() {
         org.mockito.Mockito.verify(aiClientService, org.mockito.Mockito.never())
                 .complete(org.mockito.ArgumentMatchers.<List<AiChatMessage>>any());
+    }
+
+    private void assertNoWorkspaceWrite() {
+        org.mockito.Mockito.verify(workspaceContentService, org.mockito.Mockito.never())
+                .saveContent(anyLong(), anyLong(), any(WorkspaceContentSaveRequestDTO.class));
+        org.mockito.Mockito.verify(workspaceContentService, org.mockito.Mockito.never())
+                .restorePreOptimizationContent(anyLong(), anyLong(), anyLong());
     }
 
     private static String sha256Hex(String value) {

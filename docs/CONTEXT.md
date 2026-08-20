@@ -1,183 +1,119 @@
 # 项目上下文与当前状态
 
-更新基线：V2 Phase 5（单 Bullet AI Suggest / Diff / Apply / Reject / Regenerate 与事实闭包校验）已完成并通过 Gate。本文只记录**当前事实、已确认决策和已知差距**；产品目标见 [PRD.md](PRD.md)，实现顺序见 [PLAN.md](PLAN.md)。
+本文是仓库唯一的项目级 Context Source of Truth，只记录**当前实现事实、已确认约束、未完成能力和仍有效风险**。产品决策以 [PRD.md](PRD.md) 为准，架构边界见 [ARCHITECTURE.md](ARCHITECTURE.md)，阶段顺序和 Gate 见 [PLAN.md](PLAN.md)；当前行为最终以代码、Flyway 迁移、配置和测试为准。
 
-## 1. 当前定位
+## 1. 当前阶段
 
-仓库当前是在 V1 模块化单体上完成 Phase 1 用户链路收敛、Phase 2 正式领域模型迁移、Phase 3 正式证据分析与 Phase 4 优化工作区的实现。普通用户仍只需选择或上传真实简历、粘贴目标 JD 并开始分析；分析成功后可进入两栏优化工作区，左栏只读展示分析时的三态结论与 SOURCE Evidence，右栏编辑当前任务的 TARGET 岗位版本，编辑自动保存并可恢复本次优化前版本。正式三态已收紧到当前冻结材料能够证明的范围，Phase 3 Gate 已通过；Phase 4 Gate 已通过。
+| Phase | 状态 | 当前结果 |
+|---|---|---|
+| Phase 1 | 已完成 | 首页收敛为选择 / 上传简历、粘贴 JD、一键分析；解析和分析由后台编排 |
+| Phase 2 | 已完成 | 建立 `ResumeVersion`、`JobTarget`、`OptimizationTask`，主链路改用正式任务身份和冻结快照 |
+| Phase 3 | 已完成，Gate 已通过 | 建立正式 Evidence Matching / Gap Analysis，三态为 MATCHED / PARTIAL_EVIDENCE / NO_EVIDENCE |
+| Phase 4 | 已完成，Gate 已通过 | 建立两栏 Workspace、结构化编辑、Undo / Redo、自动保存、乐观并发和恢复优化前版本 |
+| Phase 5 | 已完成，Gate 已通过 | 建立单 Bullet AI Suggest、代码 Diff、Apply / Reject / Regenerate；真实性与严格 Parser Blocker 修复已通过独立复审 |
+| Phase 6 | 尚未开始 | Typst Preview、PDF 与导出物尚未实现 |
 
-Phase 4 建立了以 optimizationTaskId 为唯一入口的 Workspace：服务端解析并校验 Task → SOURCE / TARGET / JobTarget / Resume / User 版本链，只有 TARGET 可编辑；结构化简历文档（RESUME_DOCUMENT_V1）落在既有 `resume_versions.structured_content`，未新增第二套内容字段；自动保存以 `content_revision` 乐观并发控制，SOURCE、resume_input_snapshot 与证据分析全程只读。Phase 5 在该 seam 上建立了单 Bullet 岗位定向 AI Suggest：用户明确选中 Bullet 后请求受约束改写，服务端只读生成候选并经事实闭包校验，前端展示代码 Diff，显式采纳后进入既有 Undo / Auto Save / CAS。Typst / PDF、BYOK、用户 Profile / Rules 等后续能力尚未实现。
+当前停止在 Phase 5。Phase 6 尚未开始；不得把 Phase 6 或后续 P0 / P1 / P2 能力描述为已实现，也不得在没有明确指令时提前进入 Phase 6。
 
-## 2. 真实已有能力
+## 2. 当前系统与主流程
 
-| 领域 | 当前实现 |
-|---|---|
-| 账号 | 注册、登录、JWT、当前用户、受保护前端路由 |
-| 简历 | PDF / DOC / DOCX 上传、local / MinIO、读取、删除、文本提取与结构化解析；上传后自动提交后台准备任务 |
-| 正式简历版本 | 每次新岗位分析建立独立 `SOURCE` 输入快照版本和由其派生的 `TARGETED` 岗位版本；两个版本初始内容一致，不修改上传简历或解析结果 |
-| 正式目标岗位 | `JobTarget` 保存用户归属、原始 JD、标题与来源；当前通过一对一兼容引用继续复用 `job_descriptions` 的解析能力 |
-| 正式优化任务 | `OptimizationTask` 关联源版本、岗位版本和 JobTarget，保存 Resume / JD、Prompt、Rules、Provider、Model、Template 快照以及正式状态、异步执行记录和兼容分析结果 |
-| 岗位分析 | 首页选择简历、粘贴 JD 并一键启动；后台在证据匹配前冻结简历输入快照，保存原始 JD，完成解析后生成正式证据分析 |
-| 正式证据分析 | 每个成功任务一条 `evidence_analyses` 及其 `evidence_requirements` / `requirement_evidences` 行；要求必须来自冻结 JD，证据必须逐字命中冻结 ResumeVersion 并与要求相关；MATCHED / PARTIAL_EVIDENCE 必须有 Evidence，NO_EVIDENCE 不保存 Evidence，三态由保留证据及其支持程度推导 |
-| 重试与结果 | 失败重试按 `OptimizationTask` 复用已冻结输入和版本，并整体替换旧的正式分析行；正式结果与任务 SUCCESS 在同一事务提交，并发提交通过条件更新只允许一个执行占用；成功任务不可被重试改写；历史任务无正式分析时兼容读取旧匹配结果 |
-| 优化工作区 | 以 `optimizationTaskId` 为唯一入口的两栏工作区：左栏只读展示分析时三态结论与 SOURCE Evidence，右栏编辑 TARGET 岗位版本的结构化简历文档；支持基础信息 / Section / Entry / Bullet 编辑、Bullet 增删、Section 排序、会话内 Undo / Redo、debounce 自动保存与恢复优化前版本 |
-| AI Suggest | 单 Bullet 岗位定向改写（岗位定向 / 精简 / 强化技术深度 / 突出成果 / 自定义要求）：SYSTEM 承载平台真实性策略、USER 承载不可信数据的 role-separated 调用；建议只存在于当前会话、不落库、无服务端 Apply；代码确定性 Diff；Apply 前重验候选、单 Undo 节点、复用 Auto Save / CAS；无正式证据分析的任务 fail closed |
-| 事实闭包校验 | 确定性 RewriteFactValidator：以当前 Bullet 原文为唯一事实基线，拒绝新增 / 升级技术、实体、数字 / 中文量化、责任级别、成果、范围、时间；同义改写放行；AI 输出 malformed / truncated / refusal / provider failure 全部 fail closed |
-| 内容并发控制 | `resume_versions.content_revision`（V21，NOT NULL DEFAULT 0）承担乐观并发；保存携带 expectedRevision，仅版本一致时单条条件 UPDATE 写入并递增；冲突返回服务端当前版本并保留本地草稿；恢复优化前版本基于任务冻结的 resume_input_snapshot 确定性重生成并作为新 revision 写入 |
-| 旧后端能力 | `job_descriptions`、`ai_job_match_results`、简历诊断、优化建议、局部改写、聚合报告、预置岗位和旧历史仍存在；`ai_job_match_results` 的公开写入口已停用，仅保留历史读取，正式主链路也不再写入新的旧匹配行 |
-| 向量 | pgvector、Embedding、分块、语义相似度、可选 RAG 上下文；不作为用户步骤，也不进入正式证据匹配主链路 |
-| 执行任务 | `async_tasks` 继续承担单进程后台执行与轮询，不再冒充正式优化业务模型；新分析以 `OPTIMIZATION_TASK` 作为 biz / result 类型 |
-| 工程 | Flyway、统一异常、校验、日志脱敏、OpenAPI、后端单元 / Web MVC 测试、前端类型检查与构建 |
-| 部署 | Docker Compose、Nginx、PostgreSQL、Redis、MinIO、certbot、备份 / 恢复脚本 |
+当前系统是 Vue 3 SPA + Spring Boot 模块化单体，使用 PostgreSQL / Flyway / pgvector、Redis、Local / MinIO，以及 OpenAI-compatible Chat / Embedding 接口。PostgreSQL 是业务事实来源；Redis 只保存可重建内容；文件访问统一经过存储抽象和用户归属校验。
 
-## 3. 当前页面与主流程
-
-当前页面路由包括：Landing、首页、我的简历、按 `optimizationTaskId` 访问的岗位分析结果、按 `optimizationTaskId` 访问的优化工作区、登录和注册。一级导航只有：首页、我的简历。
-
-当前权威用户流程：
+当前前端路由只有 Landing、首页、我的简历、岗位分析结果、优化工作区、登录和注册；一级导航只有首页和我的简历。岗位库、独立目标岗位管理、旧匹配编排和技术分类式 AI 历史不在默认用户流中。
 
 ```text
 登录
-→ 选择已有简历，或上传简历并由后台自动准备
-→ 粘贴真实目标岗位 JD
-→ 创建 JobTarget + SOURCE ResumeVersion + TARGETED ResumeVersion + OptimizationTask
-→ 后台确保简历可用并冻结任务输入快照
-→ 解析兼容 JD，随后由 EvidenceMatchService 生成正式证据分析，并回写任务模型 / Prompt / Model 快照
-→ 通过 OptimizationTask 查看逐条可追溯的分析结果，或在失败后重试
-→ 任务成功后进入优化工作区：编辑 TARGET 岗位版本、自动保存、必要时恢复本次优化前版本
+→ 选择已有简历，或上传后由后台自动准备
+→ 粘贴目标岗位 JD
+→ 创建 JobTarget + SOURCE / TARGETED ResumeVersion + OptimizationTask
+→ 冻结 Resume / JD 输入并完成岗位解析
+→ 生成正式 Evidence / Gap 分析
+→ 通过 optimizationTaskId 查看结果并进入 Workspace
+→ 人工编辑 TARGET，或对单个 Bullet 请求受约束 AI 建议
+→ 查看 Diff，显式 Apply / Reject / Regenerate
+→ Apply 后复用 Undo / Auto Save / expectedRevision CAS
 ```
 
-岗位库、独立目标岗位管理、旧“匹配与优化”编排、技术分类式 AI 历史、Dashboard 指标 / Stepper 仍不在前端路由和导航中。
+失败分析按同一 `OptimizationTask` 重试并复用冻结输入；成功任务不可被重试改写。历史任务缺少正式证据分析时只兼容读取旧结果，不允许启用 Phase 5 岗位定向改写。
 
-## 4. Phase 2 / Phase 3 数据迁移
+## 3. 当前领域与数据事实
 
-`V19__create_phase2_core_domain.sql` 是加法式迁移：
+- `ResumeVersion`：每次新分析创建独立 `SOURCE` 输入快照和由其派生的 `TARGETED` 岗位版本；Workspace 只写 TARGET，不修改上传简历、解析结果、SOURCE 或任务冻结快照。
+- `JobTarget`：保存用户归属、原始 JD、标题和来源；当前仍通过兼容引用复用 `job_descriptions` 的解析能力。
+- `OptimizationTask`：正式业务身份和前端路由身份，保存版本关系、输入快照及 Prompt / Rules / Provider / Model / Template 配置快照；`async_tasks` 只承担执行状态和轮询。
+- 正式证据分析：每个任务最多一条 `evidence_analyses`，子表为 `evidence_requirements` 和 `requirement_evidences`；正式主链路不再向 `ai_job_match_results` 写新结果。
+- Workspace 文档：`RESUME_DOCUMENT_V1` 是唯一规范编辑结构，持久化在 `resume_versions.structured_content`，不存在第二套 Workspace 内容字段。
+- 内容并发：`resume_versions.content_revision` 是服务端乐观并发版本；保存和恢复都必须携带 `expectedRevision` 并通过单条条件更新递增。冲突保留本地草稿，不允许无条件覆盖。
 
-- 新建 `job_targets`、`resume_versions`、`optimization_tasks`。
-- 通过 `(resource_id, user_id)` 复合外键约束正式模型内的用户归属。
-- 每份旧简历回填一个来源为 `LEGACY_IMPORT` 的源版本。
-- 每条旧 `job_descriptions` 回填一个 JobTarget，并保留 JD 原文。
-- 每条旧 `ai_job_match_results` 回填一个岗位派生版本和一个 OptimizationTask，保存当时可获得的 Resume / JD、Prompt、Model 与结果状态。
-- 迁移前拒绝跨用户的旧匹配关系；迁移后验证 Resume、JD、Match 是否全部有正式模型对应项，任一缺失即令 Flyway 事务失败。
-- 不修改或删除 V1 业务记录。应用回滚时旧版本可忽略新增表继续运行；正式迁移数据保留，恢复 Phase 2 应用后仍可使用。
+当前正式迁移为：
 
-在无旧数据的全量迁移和带 Resume / Parse / JD / Match 样本的回填迁移上均已用独立临时 PostgreSQL 数据库执行并校验。
+- V19：加法式建立 Phase 2 正式领域并回填可验证的 V1 数据，保留旧表。
+- V20：加法式建立 Phase 3 正式证据表，不用无可追溯引用的旧匹配结果伪造正式 Evidence。
+- V20.1：将正式语义收敛为 MATCHED / PARTIAL_EVIDENCE / NO_EVIDENCE 和 SUFFICIENT / PARTIAL；旧 Phase 3 派生分析失效后可用冻结输入重试，V1 历史不变。
+- V21：只增加 `content_revision BIGINT NOT NULL DEFAULT 0`，不增加第二个内容字段。
 
-`V20__create_phase3_evidence_gap_domain.sql` 同样是加法式迁移：新建 `evidence_analyses`、`evidence_requirements`、`requirement_evidences` 三张表，并为 `optimization_tasks` 补充 `(id, user_id)` 唯一约束以支持复合所有权外键；不回填、不修改、不删除任何 V1 数据，应用回滚后新表闲置即可。正式证据分析不从旧匹配数据回填：旧输出不含可追溯的简历原文引用，回填会违反真实性边界。
+## 4. 必须保持的设计约束
 
-`V20_1__rename_expression_gap_to_partial_evidence.sql` 原位把正式状态收敛为 MATCHED / PARTIAL_EVIDENCE / NO_EVIDENCE，把单条 Evidence 支持程度收敛为 SUFFICIENT / PARTIAL，不保留 EXPRESSION_GAP 或 expression_status 双模型。旧语义生成的 Phase 3 分析属于可重算派生数据，会被删除并将对应正式任务 / 执行记录标为可重试失败；冻结 Resume / JD 输入继续保留。V1 历史表和兼容读取不受影响。
+### 用户归属与数据边界
 
-`V21__add_resume_version_content_revision.sql` 同样是加法式迁移：只给 `resume_versions` 补充 `content_revision BIGINT NOT NULL DEFAULT 0` 及非负 CHECK，不新增内容字段、不回填、不修改任何已有数据；应用回滚后新列闲置即可。revision 为 0 表示版本从未被工作区编辑（内容仍是冻结解析快照或其未动副本），大于 0 表示 TARGET 已持久化 RESUME_DOCUMENT_V1 编辑文档。曾存在的未提交草稿迁移（额外增加 workspace_content 列）因违反“不新增第二套正式内容字段”的冻结约束被替换，当时未在任何数据库执行。
+- 保持前后端分离和模块化单体；未经新的产品基线，不引入微服务、消息队列或 Kubernetes。
+- 所有资源读取、写入和文件访问都必须校验 `current_user + resource_id`；正式关系继续使用服务校验和复合所有权外键。
+- 数据库结构只由 `backend/src/main/resources/db/migration/` 下的 Flyway 迁移维护；不得修改已发布迁移改变生产状态。
+- 原始 Resume、原始 JD、任务输入和配置快照必须可追溯；岗位版本不得静默污染源版本。
+- Redis 不能成为唯一业务事实来源；存储访问必须经过 `FileStorageService` 抽象；日志和客户端错误不得泄露凭据或原始供应商秘密。
+- 异步任务必须使用真实状态 / 阶段，不伪造进度百分比；失败必须保留已保存的 Resume / JD 和冻结输入，不能要求用户重做前置步骤。
 
-## 5. 与后续 V2 的主要差距
+### Evidence 与真实性
 
-当前尚未具备：
+- MATCHED 表示冻结材料足以支持完整要求；PARTIAL_EVIDENCE 表示存在直接相关但不完整的材料证据；NO_EVIDENCE 只表示当前材料未找到证据，不代表用户没有该能力。
+- Requirement 必须来自冻结 JD；MATCHED / PARTIAL_EVIDENCE 必须保留逐字命中冻结 SOURCE ResumeVersion 且与要求相关的 Evidence；无有效 Evidence 时必须降级为 NO_EVIDENCE，且 NO_EVIDENCE 不保存 Evidence。
+- PARTIAL_EVIDENCE 不授权 AI 补全技能、经历、数字或成果。新增事实只能来自用户补充 / 确认或独立事实来源；该确认交互当前尚未实现。
+- Resume 和 JD 都是不可信输入，不能覆盖平台指令、Schema、权限或真实性约束；AI 输出必须经过受控 DTO / Schema 解析和代码校验后才能进入业务流程。
 
-- “缺少事实时询问用户确认”的交互（PRD 第 8 节）；当前 NO_EVIDENCE 只做提示，不收集用户确认事实。
-- 用户 Profile / Rules 与平台策略的分层组合（Phase 5 只实现平台默认策略 + 本次自定义要求，高级设置未暴露）。
-- Structured Resume JSON 驱动的 Typst Preview / PDF Export。
-- 每用户 BYOK、Credential 加密、AI Gateway 与自定义 Base URL SSRF 防护。
-- 用户数据导出 / 全量删除和长期多 JD 方向洞察。
+### Workspace 与 Phase 5
 
-Phase 6 是计划中的下一阶段，Phase 5 Gate 已通过。不得在后续阶段中实现无证据写入，也不得把 NO_EVIDENCE 直接宣称为用户没有能力。
+- `optimizationTaskId` 是 Workspace 唯一入口；服务端负责解析 Task → SOURCE / TARGET / JobTarget / Resume / User 完整链路，前端不能指定可写 ResumeVersion。
+- TARGET 是唯一可编辑版本；SOURCE、`resume_input_snapshot` 和 Evidence 始终只读。TARGET 编辑后不实时重算分析，左栏明确展示分析时的 SOURCE Evidence。
+- Undo / Redo 只属于当前页面会话；刷新后只恢复最后成功保存的服务端内容；localStorage / sessionStorage 不是正式简历内容恢复源。
+- AI Suggest 只处理用户明确选中的单个 Bullet。平台策略进入 SYSTEM，简历、JD、Evidence 和本次要求进入标记为不可信的 USER 数据区；Prompt 使用单遍模板替换。
+- Suggestion 只存在于当前前端会话，服务端只读生成且没有服务端 Apply。Suggest / Reject / Regenerate 不修改 TARGET 或 revision。
+- 事实闭包只以当前 Bullet 原文为基线，不跨 Bullet 或从 SOURCE / Evidence 搬运新事实。新增或升级技术、实体、数字、量化、责任级别、成果、因果、范围或时间必须拒绝；无法可靠判断时 fail closed。
+- 候选绑定 requestId、baseRevision、草稿变更序号、bulletId 和原文哈希。人工编辑、Undo / Redo、Restore、revision 变化、冲突、任务切换、Regenerate 替代或乱序响应都会使候选失效。
+- Apply 必须由用户显式触发并再次验证候选，只替换对应 Bullet，形成一个 Undo 节点，然后进入既有 dirty → Auto Save → CAS；不得绕过 Phase 4 并发协议。
 
-## 6. 已确认并保留的决策
+## 5. 尚未实现
 
-Phase 3 统一语言：
+- 缺少事实时向用户询问并记录真实补充 / 确认。
+- 用户 Profile / Rules 与平台策略的完整分层；Phase 5 只有平台默认策略和本次自定义要求。
+- Typst Preview、PDF、ExportArtifact 和导出前检查。
+- 每用户 BYOK、Credential 加密、统一 AI Gateway、自定义 Base URL SSRF 防护和 Usage 记录。
+- 用户数据导出 / 全量删除、最近优化列表和长期多 JD 求职方向洞察。
 
-- **MATCHED**：当前冻结材料存在足够证据支持完整岗位要求。前端称“已有优势”。
-- **PARTIAL_EVIDENCE**：当前冻结材料存在直接相关证据，但不足以完整支持岗位要求。前端称“建议完善”。不得解释为“用户确实有该经历但没写清楚”。
-- **NO_EVIDENCE**：当前冻结材料未找到支持证据。前端称“当前材料未体现”。不得解释为用户没有相应能力。
-- **Evidence Support Level**：单条 Evidence 对 Requirement 的材料支持程度，只允许 SUFFICIENT / PARTIAL。避免使用 expression status、ADEQUATE / WEAK 或 Expression Gap。
+以上能力必须继续按 `PLAN.md` 顺序推进；本次上下文整理不进入 Phase 6。
 
-Phase 4 统一语言与边界：
+## 6. 当前技术债与遗留风险
 
-- **Workspace 身份**：optimizationTaskId 是唯一入口；SOURCE / TARGET / JobTarget / Evidence 全部由服务端从任务解析，前端不指定可写 ResumeVersion。
-- **结构化简历文档**：RESUME_DOCUMENT_V1 是 TARGET 唯一规范编辑文档与持久化内容 Source of Truth，落在 `resume_versions.structured_content`；不新增第二套内容字段。元素身份与顺序稳定；解析结构 → 编辑结构的转换确定、完整，无法安全转换时 fail closed，不静默截断 / 丢字段 / 补内容 / 重排。
-- **只读冻结面**：SOURCE、resume_input_snapshot 与证据分析不被 Workspace 修改；Phase 3 Evidence 始终引用分析时 SOURCE，TARGET 编辑不触发重算，建议区明确展示的是“分析时材料”。
-- **乐观并发**：保存必须携带 expectedRevision，仅版本一致时原子写入并递增；冲突保留本地草稿并停止盲目重试，不提供绕过 revision 的无条件强写；用户显式覆盖时基于重新获取的最新服务端 revision 发起新的条件保存。
-- **恢复优化前版本**：显式确认后基于任务冻结快照确定性重生成，作为新 revision 写入，遵循相同并发规则。
-- **会话边界**：Undo / Redo 只属当前页面编辑会话；刷新 / 重新进入只恢复最后成功持久化的服务端内容；localStorage / sessionStorage 不作为正式简历恢复源。
+- `requirement_evidences.source_resume_version_id` 的数据库外键只直接约束同用户，没有直接约束为所属任务的 SOURCE；正式服务当前固定写入并校验任务 SOURCE，后续如补强数据库约束必须使用新迁移。
+- V19 / V20 的新增表尚未经过生产规模数据验证；V20.1 会原位改变正式枚举和列语义，旧 Phase 3 应用不能运行在迁移后 Schema 上，部署必须同步升级应用与 Flyway 并遵循备份流程。
+- Workspace CAS 已有单元和 Web MVC 覆盖，但仍缺真实 PostgreSQL 多线程争用与事务故障注入集成测试。
+- Workspace 转换器对未知 / 错误类型、超限内容和无法完整转换的旧快照会整体 fail closed；少量旧数据可能需要重新解析，不能用不完整投影覆盖 TARGET。
+- 初始 Workspace 元素 ID 按位置派生，只对同一冻结快照的重复转换稳定，并非语义或内容寻址 ID；Restore 会恢复基线位置 ID。当前 Phase 5 还绑定 revision、草稿序号和原文哈希，未来功能不得只凭元素 ID 判断候选仍有效。
+- 正式 Evidence 目前只保存 SOURCE 版本、section label 和逐字 quote，没有 Workspace 元素 ID 或字符范围。当前单 Bullet 手动选择绕开了该缺口，但可靠的“查看原文”、从建议跳转到编辑位置和更细来源追踪仍缺正式锚点模型。
+- 正式证据分析依赖 JD 结构化解析质量；解析失败或信息不足时只能返回少量要求或整体失败，不能猜测补全。推理型模型还需要足够输出 token，切换模型或 Provider 时必须重新验证额度。
+- 旧表、接口和服务仍被解析、历史读取、删除和兼容重试依赖，当前不能直接删除。删除 Resume / JobDescription 的级联影响和可能残留的源快照仍需在统一数据生命周期阶段核对。
+- RewriteFactValidator 已从有限危险词拒绝收紧为保守的可证明安全子集：完整 Latin token、数字—单位—对象关系、否定极性、能力程度、责任层级、成果 / 因果、时间 / 范围、Unicode 控制字符及未知中文事实片段无法由当前 Bullet 原文确定支持时一律拒绝。该实现有意允许误拒，用户仍可手工编辑；不得用第二次 LLM、Embedding 或相似度判断放宽真实性门禁。
+- AI Suggest 是同步请求，当前无限流；服务端 AI 默认超时 30 秒、前端请求超时 65 秒。生成窗口内的并发编辑通过候选失效和 CAS 防止落库覆盖，但后续运维仍可评估频控。
+- 首页进行中任务恢复主要依赖会话中保存的任务引用，尚无“最近优化”列表；正式任务本身可按 ID 跨设备查询。
+- 前端主 chunk 超过 Vite 500 kB 提示阈值，主要来自 Element Plus 全量引入；不影响当前正确性，但属于后续体验 / 性能优化项。
+- 本机使用 Java 25 时需要显式开启 annotation processing 才能生成 Lombok 代码；CI 的标准运行环境是 Java 21。
 
-Phase 5 统一语言与边界：
+## 7. 文档与事实优先级
 
-- **事实闭包**：Rewrite 校验的事实基线只有被改写 Bullet 的当前原文（TARGET Bullet 本身是用户已明确输入的事实来源）；不跨 Bullet、不引用 SOURCE / Evidence 文本搬运事实。允许同义改写、语法调整与语言重组；新增或升级实体、技术、数字 / 量化、责任级别、成果、因果、范围、时间一律拒绝；无法可靠判断时 fail closed。
-- **建议会话性**：Suggestion 只存在于当前会话，服务端不持久化建议 / 历史 / 变更事件，也没有服务端 Apply 写入链路；Suggest / Reject / Regenerate 不修改 TARGET 或 revision。
-- **候选绑定与失效**：候选绑定 requestId、baseRevision、草稿变更序号、bulletId 与原文哈希；人工编辑、Undo / Redo、Restore、revision 变化、保存冲突、任务 / 路由切换、Regenerate 替代、乱序旧响应都使候选确定失效，失效候选不可 Apply。
-- **Apply 语义**：显式点击、Apply 前重新验证、只替换对应 Bullet 文本、形成单个 Undo 节点，随后完全进入既有 dirty → Auto Save → CAS；Apply 后保存冲突沿用 Phase 4 冲突处置，不绕过。
-- **Evidence 边界**：NO_EVIDENCE 要求不进入改写上下文；PARTIAL_EVIDENCE 只作为表达侧重参考，不得被补成完整能力；无正式证据分析（LEGACY_COMPAT）的任务不启用岗位定向改写。
-- **AI 角色分离**：平台可信策略只进 SYSTEM 消息；简历、JD、证据、用户本次要求全部进 USER 数据区并显式标注不可信；Prompt 模板单遍替换；AI 不得生成元素 ID、Patch 或完整文档；AI 输出经严格解析与事实校验后才可展示为可采纳候选。
+1. [PRD.md](PRD.md)：V2 产品和最高层架构决策。
+2. 代码、Flyway 迁移、配置和测试：当前行为事实。
+3. [ARCHITECTURE.md](ARCHITECTURE.md)：当前实现边界和演进约束。
+4. [PLAN.md](PLAN.md)：阶段顺序、Gate 和非目标。
+5. 本文：当前状态、已确认约束、差距和风险。
+6. [OPERATIONS.md](OPERATIONS.md)：部署与运行方式。
 
-- 模块化单体和前后端分离足以支撑 V2；不引入微服务、消息队列或 Kubernetes。
-- 上传的原始文件、`resumes` 元数据和 `resume_parse_results` 不因岗位版本派生而改变。
-- `ResumeVersion` 的源版本代表本次分析输入快照；岗位版本通过 `source_version_id` 显式派生，后续编辑不得静默污染源版本。
-- `OptimizationTask` 是正式业务任务，`async_tasks` 只是可替换的执行记录。
-- 任务创建时冻结原始 JD 和当前 Provider / Model / Rules / Template 配置；成功时补齐实际 Job Parse 与证据匹配 Prompt 及模型快照。
-- 正式分析结果的 Source of Truth 是 `evidence_analyses` 及其子表；不在 `ai_job_match_results` 上叠加第二套业务逻辑，旧表只保留兼容读取。
-- 证据匹配输入只使用任务已冻结的简历快照与当次 JD 解析结果；具体匹配实现在 `EvidenceMatchingStrategy` 接口之后，可替换不泄漏到编排。
-- “简历没写”不等于“用户没有能力”；NO_EVIDENCE 只代表当前材料未提供证据。
-- PARTIAL_EVIDENCE 不能授权任何后续 AI 增加 Evidence 中不存在的能力、技术、数字或成果；真正判断“有经历但没有写出来”必须由用户补充 / 确认或独立事实来源支持，本 Phase 不实现该交互。
-- AI 只能基于已有或用户确认事实判断，不得补造技能、经历、数字或成果；证据引用未命中简历快照即被丢弃并降级。
-- 当前解析实现继续通过 V1 表运行，但其 ID 只在后端兼容上下文中使用；默认前端只认识正式任务 ID。
-- AI 只能优化表达和排序，不能新增未验证技术、经历、日期、公司、成果或数字。
-- Redis 失败应尽量降级，不影响 PostgreSQL 中的核心业务事实。
-- 文件读取必须经过用户归属检查；迁移和正式服务同样校验资源归属。
-- 数据库迁移以 Flyway 为唯一机制。
-- 异步任务使用真实阶段 / 状态，不伪造进度；错误信息必须脱敏。
-
-## 7. 当前质量与风险
-
-- V20 的复合外键能阻止跨用户关系，但 `requirement_evidences.source_resume_version_id` 在数据库层只约束同用户，未直接约束为该任务的 SOURCE；正式服务已校验任务版本链并固定写入任务 SOURCE，仍应在后续迁移决策中评估是否补充更强数据库约束。
-
-- V19 / V20 是加法式且可应用回滚，但新增表尚未经历生产规模数据量；部署前仍应按备份流程保存数据库，并观察唯一索引和事务耗时。
-- V20.1 是有意的单模型语义迁移：列名与 CHECK 被原位重命名，旧 Phase 3 应用不能继续运行在迁移后的模式上；部署必须同步升级应用与 Flyway。旧 Phase 3 结果可由冻结输入重算，V1 历史读取仍可回滚使用。
-- 推理型模型（如当前配置的 deepseek-v4-pro）的思考 token 计入 max_tokens；证据匹配需要足够的输出额度，否则会以空内容结束。仓库默认已调整为 `OPENAI_MAX_TOKENS` / `AI_MAX_TOKENS` 16000；更换模型或 Provider 时应重新验证。
-- 正式证据分析依赖 JD 结构化解析质量；JD 解析失败或信息不足时，证据分析会输出少量要求或整体失败，不会猜测补全。
-- 旧后端表、接口和服务仍有解析、历史、删除及兼容重试依赖，当前不能删除；主链路不再产生新的旧匹配行，旧读取接口对旧数据仍有效。
-- 删除旧 JobDescription 或 Resume 会通过外键删除对应正式任务 / 岗位版本 / 正式分析；由任务创建但已失去岗位关系的源快照版本可能随 Resume 保留，后续统一数据生命周期阶段需再次核对。
-- 首页的进行中任务恢复仍以会话存储的正式任务引用为主；正式任务可跨设备按 ID 查询，但“最近优化”列表尚未加入首页。
-- 本机 Java 25 仍需显式启用 annotation processing 才能生成 Lombok 代码；CI 使用 Java 21。
-- 当前 Phase 3 已约束要求与证据来源、正式结果事务、重试并发和旧写入口，并通过 PARTIAL_EVIDENCE 语义移除对用户现实能力的推断；Phase 3 Gate 已通过。
-- Workspace 并发争用目前由单条条件 UPDATE 的服务端语义加单元 / Web MVC 测试验证，尚缺真实 PostgreSQL 多线程并发保存集成测试；前端冲突处置（保留草稿、显式覆盖、采用服务端版本）可兼容该窗口，仍作为遗留测试风险保留。
-- 工作区初始化优先使用冻结快照的 `rawSections` 完整文本与顺序，并用 `rawText` 补回未进入章节的原始行；历史快照缺少章节时保守退回完整 `rawText`，再无原始文本时才使用 structuredData、合法旧版顶层字段或 displayModel。未知或错误类型字段、超限内容和无法完整转换的内容会整体拒绝，不会用不完整投影覆盖 TARGET；少量不符合当前解析 Schema 的旧快照可能需要重新解析。
-- 前端主 chunk 体积已超过 Vite 500 kB 提示阈值（element-plus 全量引入）；不影响正确性，后续视觉 / 体验阶段可评估按需引入。
-- RewriteFactValidator 是保守的词表 / 规则式确定性防线，存在结构性残余盲区：名单外的新技术词、纯中文新事实名词、隐式因果等可能漏检；设计取向是宁可错拒（误拒时用户可重新生成或手工编辑），不引入第二次 LLM 作为唯一真实性裁判。词表需要随真实使用持续扩充。
-- AI Suggest 为同步请求：服务端 AI 调用默认超时 30 秒，前端请求超时 65 秒；生成期间目标 Bullet 的人工编辑会使候选失效。Suggest 端点无限流，依赖用户会话频率，后续运维可按需加频控。
-- Suggest 在 AI 调用前校验 baseRevision 与原文哈希；AI 耗时窗口内 revision 被并发推进时，候选由前端绑定字段确定判为 stale，落库仍由 Phase 4 CAS 兜底，无实际写入风险。
-
-## 8. Phase 5 验证
-
-- 后端 `./mvnw -Dmaven.compiler.proc=full test`：全量 487 个测试，0 失败、0 错误，3 个真实外部服务 smoke test 默认跳过。
-- 新增：AiClientService role-separated messages 序列化与空输入拒绝；RewriteFactValidator 29 个用例（同义改写放行、伪造技术 / 数字 / 中文量化 / 成果 / 责任升级 / 范围 / 时间 / 元素 ID 拒绝、数字 token 精确匹配、跨 Bullet 不搬运、超限 fail closed）；BulletRewriteService 18 个用例（READY 零写入、stale revision / 哈希 / 删除 Bullet、legacy fail closed、跨用户拒绝、AI 失败与 malformed / truncated 输出 fail closed、refusal、伪造事实拒绝、Prompt Injection 与 role separation、CUSTOM 校验）；Prompt 组装（NO_EVIDENCE 排除、SYSTEM 只承载策略、占位符单遍替换回归）；输出解析 fail closed 全谱。
-- 前端 `npm test`：30 个测试通过，其中 Suggest 状态机 14 个用例覆盖 Apply 单 Undo 节点与 Auto Save 衔接、人工编辑 / Undo / Redo / Restore / revision / 冲突失效、乱序响应与 Regenerate requestId 替代、Reject 无副作用、AI 失败不动草稿、dispose / 任务切换隔离、自定义要求流；Diff 工具确定性用例 6 个；既有 Workspace 状态机 10 个用例回归通过。
-- `npm run build`（type-check + 生产构建）、`oxlint`、`eslint` 通过；`git diff --check` 通过。
-- 独立 reviewer 对后端与前端切片分别审查：零持久化、无服务端 Apply、SOURCE 只读、role 分离、Phase 4 语义保持均确认；提出的 validator 盲区（数字子串包含、中文量化、词表缺口）、模板二次展开、conflict 失效缺口、requesting 卡片不可达等问题已全部修复并补回归测试。
-- 尚缺真实 PostgreSQL 下的并发争用集成测试（与 Phase 3 / 4 相同处置）；Suggest 本身无写入路径，不受该缺口影响。
-
-Phase 4 验证（历史基线）：
-
-- 后端 `./mvnw -Dmaven.compiler.proc=full test`：独立 Gate 修复后全量运行 421 个测试，0 失败、0 错误，3 个真实外部服务 smoke test 默认跳过。
-- 新增：转换器确定性、rawSections / rawText 完整性与上限 fail-closed 测试（含扩展联系方式保留、未知 / 错误类型拒绝、超限拒绝而非截断）；Workspace 服务的完整 Task → SOURCE / TARGET / JobTarget / Resume / User 链、共享 TARGET fail-closed、同简历双任务独立 TARGET、SOURCE / 快照不变、同 revision 竞争、恢复确定性与冲突；API 集成测试覆盖 workspace 读取 / 保存 / 恢复 / 参数校验 / 匿名拒绝。
-- 前端 `npm test`：Workspace 状态机 10 个高风险场景测试通过，覆盖旧响应、新草稿重试、覆盖后二次冲突与 revision 重取失败、Undo / Redo、max-wait、Task 会话隔离、恢复成功 / 冲突 / 在途编辑；`npm run build`、只读 `oxlint`、`eslint` 均通过，未用自动修复命令改写无关文件。
-- 迁移验证：独立临时 PostgreSQL / pgvector 中，V1–V21 空库全量迁移成功；另以已有 SOURCE / TARGET 内容的 V20.1 数据执行 V21 升级，内容逐字不变且 revision 均为 0。`content_revision` 为 NOT NULL DEFAULT 0 并有非负 CHECK，`workspace_content` 不存在。
-- 独立 reviewer 对后端与前端切片分别审查：冻结约束逐项核对通过；提出的保存竞态守卫、beforeunload 兼容、debounce max-wait、转换侧超限 fail-closed 等问题已修复并复验。
-- `git diff --check` 通过；工作区无遗留日志与构建产物。
-- 尚缺真实 PostgreSQL 下的多线程并发保存与事务故障注入集成测试；当前由条件更新语义、事务边界和单元 / Web MVC 测试共同验证，仍作为遗留测试风险保留（与 Phase 3 相同处置）。
-
-Phase 3 验证（历史基线）：
-
-- 后端 `./mvnw -Dmaven.compiler.proc=full test`：Phase 3 提交范围内运行 375 个测试，0 失败、0 错误，3 个真实外部服务 smoke test 默认跳过。
-- 新增 / 加强：MATCHED 充分证据、PARTIAL_EVIDENCE 部分证据、非法支持程度保守降级、NO_EVIDENCE 中性文案与无改写授权、伪造 / 部分 / 无关引用拒绝、重复要求 / 证据、错误版本链、跨用户、重试快照、并发占用、异常输出、正式 API 新字段及 V1 历史兼容测试。
-- 前端 `npm run build`：类型检查和生产构建通过；未用自动修复型 lint 命令改写无关文件。
-- V1–V20.1 空库迁移以及旧 EXPRESSION_GAP / WEAK 正式样本升级：在独立临时 PostgreSQL / pgvector 数据库执行并校验；旧正式分析被安全失效、冻结输入保留供重试，新 PARTIAL_EVIDENCE / PARTIAL 样本可落库，V1 历史表不变。
-- 生产 Compose 配置只读渲染成功；`git diff --check` 通过。
-- 尚缺真实 PostgreSQL 下的并发争用和事务故障注入集成测试；当前由条件更新、事务边界和单元测试共同验证，仍作为遗留测试风险保留。
-
-## 9. 文档与决策优先级
-
-1. `PRD.md`：V2 产品与最高层架构决策。
-2. 真实代码、迁移、配置和测试：当前行为事实。
-3. `ARCHITECTURE.md`：当前边界与迁移约束。
-4. `PLAN.md`：实施顺序和阶段门禁。
-5. `CONTEXT.md`：当前状态和已知差距。
-6. `OPERATIONS.md`：当前部署运行方式。
+阶段 Gate 的详细完成记录保留在 `PLAN.md` 和 Git 历史中，不在本文重复维护逐轮测试数量、审查过程或迭代日志。

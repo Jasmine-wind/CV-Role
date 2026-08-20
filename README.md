@@ -1,8 +1,8 @@
 # CV-Role / AI Resume Optimizer
 
-面向真实求职场景的岗位定向简历优化系统。当前已完成 V2 Phase 1：用户选择或上传真实简历、粘贴目标岗位 JD 后即可开始岗位分析，解析与匹配准备由后台完成。
+面向真实求职场景的岗位定向简历优化系统。当前已完成 V2 Phase 1–5：用户选择或上传真实简历、粘贴目标岗位 JD 后即可完成证据分析，并在优化工作区人工编辑或对单个 Bullet 使用受真实性约束的 AI 建议。
 
-> 当前仅完成信息架构和分析主链路简化；版本、证据映射、Workspace、Diff、PDF 等后续能力尚未实现。真实现状与差距见 [docs/CONTEXT.md](docs/CONTEXT.md)。
+> 当前停止在 Phase 5；Typst Preview、PDF、BYOK 等后续能力尚未实现。真实现状与差距见 [docs/CONTEXT.md](docs/CONTEXT.md)。
 
 
 ## 当前已实现
@@ -10,9 +10,12 @@
 - 注册、登录、JWT 鉴权和用户资源隔离
 - PDF / DOC / DOCX 上传，上传后自动触发文本提取、清洗和结构化准备
 - 首页选择简历、粘贴目标岗位 JD 并一键开始岗位分析
-- 后台自动保存和解析 JD、准备旧简历并生成匹配分析
+- 后台自动保存和解析 JD、准备旧简历并生成正式 Evidence / Gap 分析
+- 独立 SOURCE / TARGETED 简历版本、JobTarget、OptimizationTask 和冻结输入 / 配置快照
 - 面向用户语言的已有优势、建议完善和当前材料未体现结果页
-- 可恢复的异步任务状态查询；旧诊断、建议、局部改写和报告能力仍保留在后端待后续迁移
+- 两栏优化工作区、结构化编辑、Undo / Redo、自动保存、并发冲突处置和恢复优化前版本
+- 单 Bullet AI Suggest、代码 Diff、Apply / Reject / Regenerate 和事实闭包校验
+- 可恢复的异步任务状态查询；旧诊断、建议、局部改写和报告能力仍保留用于兼容
 - OpenAI-compatible Chat / Embedding 接入，pgvector 语义检索
 - PostgreSQL、Redis、MinIO、本地文件存储和 Flyway 迁移
 - Vue 3 前端、Docker Compose、Nginx、HTTPS 和运维脚本
@@ -25,9 +28,11 @@
 → 粘贴目标岗位 JD
 → 开始分析
 → 查看已有优势、建议完善的材料和当前材料未体现的要求
+→ 进入优化工作区人工编辑，或请求单 Bullet AI 建议
+→ 查看 Diff 后显式采纳或拒绝，采纳内容自动保存
 ```
 
-一级导航仅保留“首页”和“我的简历”。正式 Evidence / Gap 领域模型已完成；可控修改链路仍属于后续 Phase。
+一级导航仅保留“首页”和“我的简历”。正式 Evidence / Gap、Workspace 和单 Bullet 受约束改写链路已完成；Typst Preview / PDF 仍属于后续 Phase。
 
 ## 技术栈
 
@@ -118,7 +123,7 @@ docker compose -f docker-compose.prod.yml --env-file .env.production up -d --bui
 | [docs/PRD.md](docs/PRD.md) | V2 最高层产品与架构决策基线 |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 当前实现架构、边界和 V2 演进约束 |
 | [docs/PLAN.md](docs/PLAN.md) | V2 阶段顺序、门禁和非目标 |
-| [docs/CONTEXT.md](docs/CONTEXT.md) | 当前能力、历史决策、已知差距和仓库状态 |
+| [docs/CONTEXT.md](docs/CONTEXT.md) | 当前状态、实现约束、已知差距和遗留风险 |
 | [docs/OPERATIONS.md](docs/OPERATIONS.md) | 当前生产部署与运维 |
 
 执行规则见 [AGENTS.md](AGENTS.md)。文档冲突时，V2 产品决策以 `docs/PRD.md` 为准，当前实现事实以代码和 `docs/CONTEXT.md` 为准。

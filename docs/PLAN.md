@@ -1,6 +1,6 @@
 # CV-Role V2 重构计划
 
-本计划只把 [PRD.md](PRD.md) 已冻结的决策转成实施顺序，不扩展产品范围。当前仓库已完成 **Phase 2 核心领域模型**、**Phase 3 Evidence Matching / Gap Analysis**、**Phase 4 Optimization Workspace** 与 **Phase 5 AI Suggest / Diff / 用户策略**。Phase 3 已把三态收紧为当前材料能够证明的 MATCHED / PARTIAL_EVIDENCE / NO_EVIDENCE，并通过重新执行的 Gate；Phase 4 已建立两栏工作区、结构化简历编辑、Section 排序、Undo / Redo、自动保存与恢复优化前版本，并通过 Gate；Phase 5 已建立单 Bullet 岗位定向 AI Suggest、代码 Diff、Apply / Reject / Regenerate 与事实闭包校验，并通过 Gate。Phase 6 尚未开始。
+本计划只把 [PRD.md](PRD.md) 已冻结的决策转成实施顺序，不扩展产品范围。当前仓库已完成 **Phase 2 核心领域模型**、**Phase 3 Evidence Matching / Gap Analysis**、**Phase 4 Optimization Workspace** 与 **Phase 5 单 Bullet AI Suggest / Diff / Apply / Reject / Regenerate**；Phase 5 的真实性与严格输出解析 Blocker 已修复并通过独立 Gate 复审。Phase 6 尚未开始。
 
 ## 目标
 
@@ -77,19 +77,19 @@ Gate 结论：当前正式三态只陈述冻结材料可以支持的结论；引
 
 完成状态：Workspace 以 `optimizationTaskId` 为唯一入口，服务端由任务解析 SOURCE / TARGET / JobTarget 完整版本链，前端不能指定可写 ResumeVersion；只有当前任务的 TARGET 岗位版本可编辑，SOURCE、resume_input_snapshot 与正式证据分析全程只读。结构化简历文档（RESUME_DOCUMENT_V1）是唯一编辑与持久化内容，落在既有 `resume_versions.structured_content`，未新增第二套内容字段；V21 只补充 `content_revision`（NOT NULL DEFAULT 0）用于乐观并发。保存必须携带 expectedRevision，仅版本一致时条件更新并递增；冲突返回服务端当前版本并保留本地草稿，用户显式覆盖时基于重新获取的最新 revision 再次条件保存。恢复优化前版本基于任务冻结的 resume_input_snapshot 确定性重生成并作为新 revision 写入。两栏页面左栏只读展示分析时三态结论与 SOURCE Evidence，并明确 TARGET 编辑后不实时重算；前端自动保存状态机覆盖 dirty / saving / saved / failed / conflict，离开守卫防止静默丢失；Undo / Redo 仅属当前会话。Preview / PDF、AI Rewrite、Diff、Apply / Reject 未在本 Phase 实现。
 
-### Phase 5 — AI Suggest、Diff 与用户策略（已完成，Gate 已通过）
+### Phase 5 — 单 Bullet AI Suggest、Diff 与本次策略（已完成，Gate 已通过）
 
 - 上下文 AI 修改，提供 Diff、原因、拒绝、重新生成和采纳。
-- 平台真实性约束、默认策略、用户 Profile / Rules、本次要求分层组合。
-- 高级设置不干扰普通用户默认流程。
+- 只组合平台真实性约束、系统默认策略与本次 request-scoped 要求。
+- 用户 Profile / Rules 属于后续 P1，不在 Phase 5 范围；默认流程不暴露高级设置。
 
 门禁：所有 AI 修改可审查、可撤销、可追溯且通过事实校验。
 
-完成状态：单 Bullet 岗位定向改写以 `POST /api/workspace/{optimizationTaskId}/bullet-suggestion` 为唯一入口，完全只读、不落库：请求绑定 requestId、baseRevision、bulletId 精确身份与原文 SHA-256；服务端复用 Phase 4 任务版本链解析，无正式证据分析的旧版兼容任务 fail closed。平台真实性策略进 SYSTEM 消息，简历 / 岗位 / 用户要求等不可信数据进 USER 数据区；Prompt 模板改为单遍替换，杜绝占位符二次展开。AI 输出严格解析，malformed / truncated / refusal / provider failure 全部 fail closed；建议文本经确定性事实闭包校验器审查（事实基线只有当前 Bullet 原文）：新增或升级技术、实体、数字 / 中文量化、责任级别、成果、范围、时间一律拒绝，同义改写与语言重组放行，无法确定时 fail closed。NO_EVIDENCE 要求不进入改写上下文；PARTIAL_EVIDENCE 只作为表达侧重参考，不得被补成完整能力。Diff 由前端代码按 originalText / suggestedText 确定性生成。建议只存在于当前会话：Suggest / Reject / Regenerate 不修改草稿与服务端；Apply 必须显式点击并重新验证候选有效（requestId 未被替代、revision 未变、无冲突、草稿序号未变、Bullet 原文未变），只替换对应 Bullet 文本，形成单个 Undo 节点后进入既有 dirty → Auto Save → CAS；Apply 后冲突沿用 Phase 4 冲突处置。AI 请求期间的人工编辑、Undo / Redo、Restore、revision 变化、任务 / 路由切换、Regenerate 替代与乱序响应都使候选确定失效。用户 Profile / Rules 高级分层仍未实现，默认流程不暴露任何高级设置。
+完成状态：单 Bullet 岗位定向改写以 `POST /api/workspace/{optimizationTaskId}/bullet-suggestion` 为唯一入口，完全只读、不落库：请求绑定 requestId、baseRevision、bulletId 精确身份与原文 SHA-256；服务端复用 Phase 4 任务版本链解析，无正式证据分析的旧版兼容任务 fail closed。平台真实性策略进 SYSTEM 消息，简历 / 岗位 / 用户要求等不可信数据进 USER 数据区；Prompt 模板单遍替换。AI 输出只接受字段完整、无重复 / 未知字段、无前后包装或 trailing token 的单一 JSON；`reason` 必须是非空字符串。建议文本随后经确定性事实闭包校验器审查，事实基线只有当前 Bullet 原文；完整 token、数字与对象关系、否定极性、程度、责任、实体、成果 / 因果、时间 / 范围及 Unicode 绕过无法确定安全时一律拒绝，仅放行可由原文证明的有限表达优化。NO_EVIDENCE 要求不进入改写上下文；PARTIAL_EVIDENCE 只作为表达侧重参考，不得补成完整能力。Diff 由前端代码确定性生成。建议只存在于当前会话：Suggest / Reject / Regenerate 不修改草稿与服务端；Apply 必须显式点击并重新验证候选有效，只替换对应 Bullet，形成单个 Undo 节点后进入既有 dirty → Auto Save → CAS。用户 Profile / Rules 高级分层仍未实现。
 
-Gate 结论：自动化测试覆盖 Suggest 零写入、Apply 前无数据变化、Reject 无副作用、Apply 可 Undo、伪造技能 / 数字 / 成果 / 责任升级被拒绝、PARTIAL 不被补全、NO_EVIDENCE 与旧版兼容任务不可改写、Prompt Injection 与模板二次展开无效、malformed 输出 fail closed、stale / 乱序 / 冲突 / 切换候选不可 Apply、AI 失败不影响人工草稿、跨用户拒绝；Phase 4 的 CAS / Undo / Auto Save / 恢复语义全量回归通过。事实校验是保守词表 / 规则式防线，存在结构性残余盲区（见 CONTEXT.md 风险），无法确定的改写一律拒绝并留给用户手工编辑。
+Gate 结论：首次独立 Review 发现事实闭包可被否定翻转、程度 / 责任升级、数字关系重绑、未知实体 / 技术、成果 / 因果、时间 / 范围和 Unicode 绕过，并发现 Parser 会接受缺失 reason、重复 / 未知字段及 trailing JSON，因此撤回旧 Gate 结论。修复后校验器改为只放行可由当前 Bullet 原文证明的保守安全子集，关系分隔、无显式分隔的多事实歧义、事实谓词、未知脚本与 Unicode 控制字符均 fail closed；Parser 严格执行单 JSON 与完整 Schema。回归测试与最终独立复审确认已知 Blocker 关闭，Phase 5 Gate 重新通过。Phase 5 的“可追溯”仅指当前会话内可查看原文、候选、Diff、原因并可 Undo，不包含持久化 AI History 或 Change Event。
 
-### Phase 6 — Typst Preview 与导出
+### Phase 6 — Typst Preview 与导出（尚未开始）
 
 - Structured Resume JSON 作为唯一业务数据源。
 - 建立 Classic / Modern / Minimal 模板、Preview、PDF 和导出前检查。

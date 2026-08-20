@@ -68,7 +68,7 @@ class BulletRewriteOutputParserImplTest {
     @Test
     void refusalProseInsideSuggestedTextShouldBeTreatedAsRefusal() {
         assertThatThrownBy(() -> parser.parse(
-                "{\"suggestedText\":\"抱歉，我无法在不新增事实的情况下改写\",\"reason\":\"\"}"))
+                "{\"suggestedText\":\"抱歉，我无法在不新增事实的情况下改写\",\"reason\":\"无法安全改写\"}"))
                 .isInstanceOf(BulletRewriteRefusedException.class);
     }
 
@@ -81,10 +81,67 @@ class BulletRewriteOutputParserImplTest {
     }
 
     @Test
-    void oversizedReasonShouldBeTruncatedNotRejected() {
-        BulletRewriteOutputDTO result = parser.parse(
-                "{\"suggestedText\":\"承担订单服务开发\",\"reason\":\"" + "因".repeat(500) + "\"}");
+    void missingReasonShouldFailClosed() {
+        assertThatThrownBy(() -> parser.parse("{\"suggestedText\":\"承担订单服务开发\"}"))
+                .isInstanceOf(BusinessException.class);
+    }
 
-        assertThat(result.reason()).hasSize(200);
+    @Test
+    void nonTextualReasonShouldFailClosed() {
+        assertThatThrownBy(() -> parser.parse(
+                "{\"suggestedText\":\"承担订单服务开发\",\"reason\":42}"))
+                .isInstanceOf(BusinessException.class);
+    }
+
+    @Test
+    void blankReasonShouldFailClosed() {
+        assertThatThrownBy(() -> parser.parse(
+                "{\"suggestedText\":\"承担订单服务开发\",\"reason\":\"  \"}"))
+                .isInstanceOf(BusinessException.class);
+    }
+
+    @Test
+    void oversizedReasonShouldFailClosedRatherThanRecovering() {
+        assertThatThrownBy(() -> parser.parse(
+                "{\"suggestedText\":\"承担订单服务开发\",\"reason\":\""
+                        + "因".repeat(500) + "\"}"))
+                .isInstanceOf(BusinessException.class);
+    }
+
+    @Test
+    void concatenatedJsonShouldFailClosed() {
+        assertThatThrownBy(() -> parser.parse(
+                "{\"suggestedText\":\"承担订单服务开发\",\"reason\":\"表达更完整\"}"
+                        + "{\"unexpected\":true}"))
+                .isInstanceOf(BusinessException.class);
+    }
+
+    @Test
+    void trailingProseShouldFailClosed() {
+        assertThatThrownBy(() -> parser.parse(
+                "{\"suggestedText\":\"承担订单服务开发\",\"reason\":\"表达更完整\"} trailing"))
+                .isInstanceOf(BusinessException.class);
+    }
+
+    @Test
+    void duplicateFieldShouldFailClosed() {
+        assertThatThrownBy(() -> parser.parse(
+                "{\"suggestedText\":\"承担订单服务开发\","
+                        + "\"suggestedText\":\"另一版本\",\"reason\":\"表达更完整\"}"))
+                .isInstanceOf(BusinessException.class);
+    }
+
+    @Test
+    void unknownFieldShouldFailClosed() {
+        assertThatThrownBy(() -> parser.parse(
+                "{\"suggestedText\":\"承担订单服务开发\",\"reason\":\"表达更完整\",\"extra\":true}"))
+                .isInstanceOf(BusinessException.class);
+    }
+
+    @Test
+    void topLevelArrayShouldFailClosed() {
+        assertThatThrownBy(() -> parser.parse(
+                "[{\"suggestedText\":\"承担订单服务开发\",\"reason\":\"表达更完整\"}]"))
+                .isInstanceOf(BusinessException.class);
     }
 }
