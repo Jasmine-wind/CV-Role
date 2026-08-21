@@ -5,6 +5,7 @@ import com.winter.airesumeoptimizer.common.exception.BusinessException;
 import com.winter.airesumeoptimizer.module.analysis.entity.AiJobMatchResult;
 import com.winter.airesumeoptimizer.module.analysis.mapper.AiJobMatchResultMapper;
 import com.winter.airesumeoptimizer.module.embedding.mapper.JobDescriptionEmbeddingMapper;
+import com.winter.airesumeoptimizer.module.export.service.ExportArtifactCleanupService;
 import com.winter.airesumeoptimizer.module.job.dto.JobDescriptionSubmitDTO;
 import com.winter.airesumeoptimizer.module.job.entity.JobDescription;
 import com.winter.airesumeoptimizer.module.job.mapper.JobDescriptionMapper;
@@ -24,14 +25,17 @@ public class JobDescriptionServiceImpl implements JobDescriptionService {
     private final JobDescriptionMapper jobDescriptionMapper;
     private final AiJobMatchResultMapper aiJobMatchResultMapper;
     private final JobDescriptionEmbeddingMapper jobDescriptionEmbeddingMapper;
+    private final ExportArtifactCleanupService exportArtifactCleanupService;
 
     public JobDescriptionServiceImpl(
             JobDescriptionMapper jobDescriptionMapper,
             AiJobMatchResultMapper aiJobMatchResultMapper,
-            JobDescriptionEmbeddingMapper jobDescriptionEmbeddingMapper) {
+            JobDescriptionEmbeddingMapper jobDescriptionEmbeddingMapper,
+            ExportArtifactCleanupService exportArtifactCleanupService) {
         this.jobDescriptionMapper = jobDescriptionMapper;
         this.aiJobMatchResultMapper = aiJobMatchResultMapper;
         this.jobDescriptionEmbeddingMapper = jobDescriptionEmbeddingMapper;
+        this.exportArtifactCleanupService = exportArtifactCleanupService;
     }
 
     @Override
@@ -82,6 +86,8 @@ public class JobDescriptionServiceImpl implements JobDescriptionService {
     @Transactional
     public void delete(Long userId, Long jobDescriptionId) {
         JobDescription jobDescription = getOwnedJobDescription(userId, jobDescriptionId);
+        // 必须先完成对象存储 + ExportArtifact 清理，随后才允许数据库父级联。
+        exportArtifactCleanupService.deleteArtifactsForJobDescription(userId, jobDescription.getId());
         jobDescriptionEmbeddingMapper.deleteByJobDescriptionId(jobDescription.getId());
         aiJobMatchResultMapper.delete(new LambdaQueryWrapper<AiJobMatchResult>()
                 .eq(AiJobMatchResult::getJobDescriptionId, jobDescription.getId()));

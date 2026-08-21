@@ -18,6 +18,7 @@ import com.winter.airesumeoptimizer.module.analysis.mapper.AiResumeSuggestionMap
 import com.winter.airesumeoptimizer.module.analysis.mapper.AiRewriteSuggestionMapper;
 import com.winter.airesumeoptimizer.module.analysis.mapper.ResumeAiAnalysisMapper;
 import com.winter.airesumeoptimizer.module.embedding.mapper.ResumeEmbeddingMapper;
+import com.winter.airesumeoptimizer.module.export.service.ExportArtifactCleanupService;
 import com.winter.airesumeoptimizer.module.job.entity.JobMatchResult;
 import com.winter.airesumeoptimizer.module.job.mapper.JobMatchResultMapper;
 import com.winter.airesumeoptimizer.module.resume.entity.Resume;
@@ -120,6 +121,7 @@ public class ResumeServiceImpl implements ResumeService {
     private final AiRewriteSuggestionMapper aiRewriteSuggestionMapper;
     private final ResumeEmbeddingMapper resumeEmbeddingMapper;
     private final FileStorageService fileStorageService;
+    private final ExportArtifactCleanupService exportArtifactCleanupService;
     private final ResumeTextExtractionService resumeTextExtractionService;
     private final ResumeTextQualityCheckService resumeTextQualityCheckService;
     private final ResumeTextCleanService resumeTextCleanService;
@@ -147,6 +149,7 @@ public class ResumeServiceImpl implements ResumeService {
             AiRewriteSuggestionMapper aiRewriteSuggestionMapper,
             ResumeEmbeddingMapper resumeEmbeddingMapper,
             FileStorageService fileStorageService,
+            ExportArtifactCleanupService exportArtifactCleanupService,
             ResumeTextExtractionService resumeTextExtractionService,
             ResumeTextQualityCheckService resumeTextQualityCheckService,
             ResumeTextCleanService resumeTextCleanService,
@@ -172,6 +175,7 @@ public class ResumeServiceImpl implements ResumeService {
         this.aiRewriteSuggestionMapper = aiRewriteSuggestionMapper;
         this.resumeEmbeddingMapper = resumeEmbeddingMapper;
         this.fileStorageService = fileStorageService;
+        this.exportArtifactCleanupService = exportArtifactCleanupService;
         this.resumeTextExtractionService = resumeTextExtractionService;
         this.resumeTextQualityCheckService = resumeTextQualityCheckService;
         this.resumeTextCleanService = resumeTextCleanService;
@@ -459,6 +463,8 @@ public class ResumeServiceImpl implements ResumeService {
     @Transactional
     public void delete(Long userId, Long resumeId) {
         Resume resume = getOwnedResume(userId, resumeId);
+        // 删除前先清理该简历派生任务的导出物，避免外键级联删行后遗留孤儿 PDF。
+        exportArtifactCleanupService.deleteArtifactsForResume(userId, resume.getId());
         deleteResumeChildren(resume.getId());
         resumeMapper.deleteById(resume.getId());
         fileStorageService.delete(resume.getObjectKey());

@@ -75,6 +75,21 @@ public class WorkspaceContentServiceImpl implements WorkspaceContentService {
     }
 
     @Override
+    public WorkspaceContentVO getPersistedContentForRender(Long userId, Long optimizationTaskId) {
+        EditableTaskContext context = resolveEditableTarget(userId, optimizationTaskId);
+        ResumeVersion target = context.target();
+        long revision = revisionOf(target);
+        if (revision == PRISTINE_REVISION) {
+            throw new BusinessException(409, "请先保存当前简历内容，再进行预览或导出");
+        }
+        return WorkspaceContentVO.builder()
+                .optimizationTaskId(context.task().getId())
+                .revision(revision)
+                .document(readPersistedDocument(target))
+                .build();
+    }
+
+    @Override
     @Transactional
     public WorkspaceContentSaveResultVO saveContent(
             Long userId, Long optimizationTaskId, WorkspaceContentSaveRequestDTO request) {

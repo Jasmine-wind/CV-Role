@@ -93,7 +93,18 @@ public class SecurityConfig {
         configuration.setAllowedOriginPatterns(corsProperties.getAllowedOriginPatterns());
         configuration.setAllowedMethods(List.of("GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"));
         configuration.setAllowedHeaders(List.of("*"));
-        configuration.setExposedHeaders(List.of("Authorization", RequestIdFilter.REQUEST_ID_HEADER));
+        configuration.setExposedHeaders(List.of(
+                "Authorization",
+                RequestIdFilter.REQUEST_ID_HEADER,
+                "X-Content-Revision",
+                "X-Target-Resume-Version",
+                "X-Template-Version",
+                "X-Renderer-Version",
+                "X-Resume-Page-Count",
+                "X-Resume-Missing-Contact",
+                "X-Resume-Page-Limit-Exceeded",
+                "X-Resume-Overflow-Detected",
+                "X-Preview-Receipt"));
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/api/**", configuration);

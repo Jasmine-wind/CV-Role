@@ -248,6 +248,27 @@ class WorkspaceContentServiceImplTest {
     }
 
     @Test
+    void getPersistedContentForRenderShouldRejectPristineSnapshotProjection() {
+        assertThatThrownBy(() -> service.getPersistedContentForRender(USER_ID, TASK_ID))
+                .isInstanceOfSatisfying(BusinessException.class, exception -> {
+                    assertThat(exception.getCode()).isEqualTo(409);
+                    assertThat(exception.getMessage()).contains("保存");
+                });
+    }
+
+    @Test
+    void getPersistedContentForRenderShouldReadOnlySavedTargetDocument() throws Exception {
+        ResumeDocumentDTO stored = editedDocument("已 CAS 保存的内容");
+        dbRevision.set(1L);
+        dbContent.set(objectMapper.writeValueAsString(stored));
+
+        WorkspaceContentVO result = service.getPersistedContentForRender(USER_ID, TASK_ID);
+
+        assertThat(result.getRevision()).isEqualTo(1L);
+        assertThat(result.getDocument()).usingRecursiveComparison().isEqualTo(stored);
+    }
+
+    @Test
     void getContentShouldRejectTaskThatHasNotFinishedAnalysis() {
         task.setStatus("RUNNING");
 

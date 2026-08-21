@@ -63,6 +63,37 @@ describe('useWorkspaceEditor', () => {
     })
   })
 
+  it('CAS-saves a pristine revision before allowing render', async () => {
+    saveContentMock.mockResolvedValueOnce({
+      saved: true,
+      conflict: false,
+      revision: 1,
+      document: document('初始内容'),
+    })
+    const editor = useWorkspaceEditor(10)
+    await editor.load()
+
+    await expect(editor.ensurePersistedForRender()).resolves.toBe(true)
+
+    expect(saveContentMock).toHaveBeenCalledWith(10, {
+      expectedRevision: 0,
+      document: document('初始内容'),
+    })
+    expect(editor.revision.value).toBe(1)
+    expect(editor.status.value).toBe('saved')
+  })
+
+  it('does not allow render when the pristine CAS save conflicts', async () => {
+    saveContentMock.mockResolvedValueOnce({ saved: false, conflict: true, revision: 1, document: null })
+    const editor = useWorkspaceEditor(10)
+    await editor.load()
+
+    await expect(editor.ensurePersistedForRender()).resolves.toBe(false)
+
+    expect(editor.status.value).toBe('conflict')
+    expect(editor.revision.value).toBe(0)
+  })
+
   it('does not let an old save response mark a newer draft as saved', async () => {
     const first = deferred<Awaited<ReturnType<typeof saveWorkspaceContent>>>()
     saveContentMock

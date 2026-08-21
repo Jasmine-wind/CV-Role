@@ -11,9 +11,16 @@ FROM eclipse-temurin:21-jre-jammy AS runtime
 
 WORKDIR /app
 
+# Phase 6 渲染依赖：Typst 编译器与 CJK 字体。Preview 与 Export 共享同一镜像内的
+# 编译器与字体环境，保证所见即所得；typst 版本升级必须同步验证模板与渲染器版本。
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get install -y --no-install-recommends curl ca-certificates xz-utils fonts-noto-cjk \
+    && curl -fsSL https://github.com/typst/typst/releases/download/v0.15.1/typst-x86_64-unknown-linux-musl.tar.xz -o /tmp/typst.tar.xz \
+    && echo 'a6d077d0a95eed5a2eba715b2dae06be954f624ccbf85758a03f389ded33118c  /tmp/typst.tar.xz' | sha256sum -c - \
+    && tar -xJf /tmp/typst.tar.xz -C /tmp \
+    && mv /tmp/typst-x86_64-unknown-linux-musl/typst /usr/local/bin/typst \
+    && chmod +x /usr/local/bin/typst \
+    && rm -rf /tmp/typst.tar.xz /tmp/typst-x86_64-unknown-linux-musl /var/lib/apt/lists/*
 
 COPY --from=build /workspace/backend/target/ai-resume-optimizer-backend-0.1.0-SNAPSHOT.jar /app/app.jar
 

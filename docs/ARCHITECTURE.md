@@ -35,7 +35,7 @@ scripts/  生产运维脚本
 | `common/` | 统一响应、异常、日志等跨模块能力 |
 | `config/` | Spring、安全、缓存、异步执行器配置 |
 | `security/` | JWT、认证上下文、401 / 403 处理 |
-| `infra/` | AI、Embedding、Redis、文件存储等外部适配 |
+| `infra/` | AI、Embedding、Redis、文件存储、Typst 渲染等外部适配 |
 | `module/` | 业务模块与用例编排 |
 
 当前业务模块：
@@ -46,12 +46,13 @@ scripts/  生产运维脚本
 - `analysis`：诊断、优化建议、局部改写和聚合报告；旧 AI 匹配仍在其中，公开写入口已停用，仅服务历史兼容读取，不再是主链路正式结果。
 - `optimization`：`ResumeVersion`、`JobTarget`、`OptimizationTask`，负责版本派生、输入与配置快照、任务归属和正式结果入口。
 - `workspace`：Phase 4 优化工作区与 Phase 5 单 Bullet AI Suggest；以 `optimizationTaskId` 为唯一入口解析任务版本链，提供 TARGET 岗位版本的结构化简历文档读取、基于 `content_revision` 乐观并发的条件保存与恢复优化前版本，以及只读生成、事实闭包校验和会话内显式采纳。
+- `export`：Phase 6 PDF Preview / Export；只读取至少完成一次 CAS Save 的 TARGET `RESUME_DOCUMENT_V1`，生成带实际 preflight 和签名 receipt 的 PDF Preview；Export 验证 receipt 完整绑定后创建私有 `ExportArtifact`，并维护 READY / DELETE_PENDING 可重试生命周期。
 - `evidence`：Phase 3 正式 Evidence Matching 与 Gap Analysis；岗位要求、简历证据与匹配结论的正式 Source of Truth。
 - `embedding`：文本分块、向量生成、相似度与 RAG 上下文；当前不进入正式证据匹配主链路。
 - `history`：旧历史聚合与 AI 结果回看。
 - `task`：单进程异步执行记录、归属校验和状态查询；不再承担正式优化业务模型。
 
-前端按 `api/`、`components/`、`layout/`、`router/`、`stores/`、`types/`、`utils/`、`views/` 分层。Phase 4 后的页面路由只包括 Landing、首页、我的简历、按正式优化任务访问的岗位分析结果、按正式优化任务访问的优化工作区、登录和注册；一级导航只有首页和我的简历。
+前端按 `api/`、`components/`、`layout/`、`router/`、`stores/`、`types/`、`utils/`、`views/` 分层。Phase 4 后的页面路由只包括 Landing、首页、我的简历、按正式优化任务访问的岗位分析结果、按正式优化任务访问的优化工作区、登录和注册；一级导航只有首页和我的简历。Preview / Export 以工作区抽屉形式集成，仅保存成功状态可用。
 
 ## 3. 当前主链路
 
@@ -65,9 +66,14 @@ scripts/  生产运维脚本
 → 岗位分析结果页只通过 OptimizationTask 读取正式证据分析；历史任务无正式分析时兼容读取旧匹配结果
 → 任务成功后可进入优化工作区：服务端把冻结解析快照转换为结构化简历文档，用户对 TARGET 岗位版本做 Section / Bullet 编辑、排序与恢复优化前版本，自动保存以 content_revision 条件更新落库
 → 用户可对明确选中的单个 Bullet 请求只读 AI Suggest；候选经事实闭包校验后展示代码 Diff，显式 Apply 才进入既有 Undo / Auto Save / CAS
+→ 保存成功后可在 Preview / Export 中选择内置模板，同步渲染服务端已保存内容得到 PDF；导出成功后生成带归属与生命周期记录的导出物
 ```
 
 `ResumeIntakeService`、`JobAnalysisService` 与 `OptimizationTaskService` 是默认用户流的深模块 seam：前者负责上传与准备，第二个负责后台分析编排，第三个负责正式业务身份、版本关系和快照。调用方不需要编排 Parse、Embedding、Prompt 或供应商步骤。`WorkspaceContentService` 是 Phase 4 的编辑 seam：只接受 optimizationTaskId，内部解析并校验 Task → SOURCE / TARGET / JobTarget / Resume / User 完整版本链，把冻结解析快照确定性转换为 RESUME_DOCUMENT_V1 编辑文档，并以单条条件 UPDATE 实现 expectedRevision 乐观并发；Workspace 不回写 SOURCE、resume_input_snapshot 或证据分析。Phase 3 已建立正式 Evidence / Gap 模型：正式分析结果是每个任务一条 `evidence_analyses` 及其 `evidence_requirements` / `requirement_evidences` 行，每条岗位要求只按当前冻结材料的支持强度判定为足够支持（MATCHED）、存在相关但不完整证据（PARTIAL_EVIDENCE）或未找到支持证据（NO_EVIDENCE）。具体匹配实现位于 `EvidenceMatchingStrategy` interface 之后（当前为单次 AI 结构化输出 + Requirement / quote / ResumeVersion 代码校核），后续可在不改动编排的情况下替换。该模型不判断用户现实世界中的完整能力，也不保留 EXPRESSION_GAP 兼容语义。
+
+`ResumePdfRenderer` 是 Phase 6 的渲染 seam：把结构化简历文档确定性映射为转义后的 Typst 数据文件，在隔离临时目录中用内置版本化模板（classic / modern / minimal 各 v1）同步编译为 PDF；固定创建时间戳使相同输入逐字节确定，PDFBox 随后解析真实页数并检查文字 glyph 是否超出页面 CropBox。渲染进程以 `--root` 限制文件读取，内置模板不引用外部包且用户内容无法触发 Typst 语法；当前没有 OS 级网络沙箱，该防御深度限制记录为残余风险。
+
+`WorkspaceExportService` 只调用 `WorkspaceContentService.getPersistedContentForRender`，因此 revision 0 的 snapshot 投影不能渲染。Preview receipt 由服务端短期签名并绑定 user / task / TARGET / revision / template+version / renderer / PDF checksum；Export 重新校验并重编译比对。`ExportArtifactCleanupService` 用独立小事务持久化 DELETE_PENDING，再删除对象和元数据；对象或元数据删除失败时记录仍可重试。Resume 与 JobDescription 是当前仅有的真实父删除入口，均在级联前调用该 seam。
 
 重要边界：
 
@@ -79,11 +85,13 @@ scripts/  生产运维脚本
 - 文件访问经过后端鉴权；MinIO bucket 不作为公开下载入口。
 - 业务数据库结构只由 `db/migration/` 下的 Flyway 迁移维护。
 - 异步任务是真实状态机，不伪造进度百分比。
+- Phase 6 仅以已 CAS 持久化的 TARGET `RESUME_DOCUMENT_V1` 渲染，不使用 HTML、SOURCE、任务快照或证据分析，不反解析 PDF。revision 0 仍用于 Phase 4 初始化，但必须先原样 CAS Save 才能 Preview。模板是内置只读资源且不保存业务数据；未引入后台渲染任务。
 
 ## 4. 数据与外部系统
 
-- PostgreSQL 是账号、简历元数据、解析结果、岗位、分析结果、向量和任务的事实来源。
+- PostgreSQL 是账号、简历元数据、解析结果、岗位、分析结果、向量和任务的事实来源；`export_artifacts` 只记录 PDF 派生文件的归属与位置，不是内容来源。
 - V20.1 将 Phase 3 正式状态原位收敛为 MATCHED / PARTIAL_EVIDENCE / NO_EVIDENCE，并把 Evidence 支持程度收敛为 SUFFICIENT / PARTIAL；旧语义生成的派生分析会失效并保留冻结输入供重试，V1 历史结果不受影响。
+- V22 加法式建立 `export_artifacts`；模板源码随应用打包，不存在 Template 表。
 - pgvector 当前用于简历 / JD 分块语义检索；向量不可用时部分 AI 链路可以降级。
 - 简历原文件由 `FileStorageService` 抽象访问，本地开发默认 local，生产默认 MinIO。
 - Chat 与 Embedding 都通过后端兼容客户端调用，密钥不得进入前端、日志或 Git。
@@ -91,15 +99,15 @@ scripts/  生产运维脚本
 
 ## 5. 后续 V2 目标架构边界
 
-Phase 2 已完成核心领域模型和主链路迁移。Phase 3 已把 Evidence Matching 与 Gap Analysis 收紧为当前材料可证明的三态并通过 Gate；Phase 4 已建立 Optimization Workspace 与结构化简历编辑并通过 Gate；Phase 5 已实现单 Bullet AI Suggest / Diff / Apply / Reject / Regenerate，事实闭包与严格输出解析的 Blocker 修复已通过独立 Gate 复审。V2 不推翻前后端分离和模块化单体基础，后续仍按 PRD 冻结顺序推进：
+Phase 2 已完成核心领域模型和主链路迁移。Phase 3 已把 Evidence Matching 与 Gap Analysis 收紧为当前材料可证明的三态并通过 Gate；Phase 4 已建立 Optimization Workspace 与结构化简历编辑并通过 Gate；Phase 5 已实现单 Bullet AI Suggest / Diff / Apply / Reject / Regenerate 并通过 Gate；Phase 6 已完成 Typst Preview / PDF Export / ExportArtifact，Final Gate 已通过。V2 不推翻前后端分离和模块化单体基础，后续仍按 PRD 冻结顺序推进：
 
 ```text
 已完成：Resume / ResumeVersion / JobTarget / OptimizationTask
       Evidence Mapping / Gap Analysis（正式结果与追溯模型）
       Workspace / Editor（结构化简历编辑、自动保存与恢复优化前版本）
       单 Bullet AI Suggest / Diff / Apply / Reject / Regenerate（事实闭包与严格解析，Gate 已通过）
-下一步：Typst Preview / ExportArtifact（尚未开始）
-      AI Gateway / Provider Credential
+      Typst Preview / ExportArtifact（签名 Preview receipt、preflight、可重试生命周期，Gate 已通过）
+下一步批准阶段：AI Gateway / Provider Credential（Phase 7 尚未开始）
 ```
 
 迁移时遵守：

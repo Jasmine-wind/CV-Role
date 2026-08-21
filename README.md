@@ -1,8 +1,8 @@
 # CV-Role / AI Resume Optimizer
 
-面向真实求职场景的岗位定向简历优化系统。当前已完成 V2 Phase 1–5：用户选择或上传真实简历、粘贴目标岗位 JD 后即可完成证据分析，并在优化工作区人工编辑或对单个 Bullet 使用受真实性约束的 AI 建议。
+面向真实求职场景的岗位定向简历优化系统。当前已完成 V2 Phase 1–6：用户选择或上传真实简历、粘贴目标岗位 JD 后即可完成证据分析，在工作区可控编辑，并通过真实 Typst Preview 导出岗位定向 PDF。
 
-> 当前停止在 Phase 5；Typst Preview、PDF、BYOK 等后续能力尚未实现。真实现状与差距见 [docs/CONTEXT.md](docs/CONTEXT.md)。
+> 当前停止在 Phase 6，Final Gate 已通过；Phase 7 的 BYOK / AI Gateway 尚未开始。真实现状与差距见 [docs/CONTEXT.md](docs/CONTEXT.md)。
 
 
 ## 当前已实现
@@ -15,6 +15,7 @@
 - 面向用户语言的已有优势、建议完善和当前材料未体现结果页
 - 两栏优化工作区、结构化编辑、Undo / Redo、自动保存、并发冲突处置和恢复优化前版本
 - 单 Bullet AI Suggest、代码 Diff、Apply / Reject / Regenerate 和事实闭包校验
+- Classic / Modern / Minimal 内置模板、真实 Typst PDF Preview、导出前检查与私有 ExportArtifact 生命周期
 - 可恢复的异步任务状态查询；旧诊断、建议、局部改写和报告能力仍保留用于兼容
 - OpenAI-compatible Chat / Embedding 接入，pgvector 语义检索
 - PostgreSQL、Redis、MinIO、本地文件存储和 Flyway 迁移
@@ -30,9 +31,10 @@
 → 查看已有优势、建议完善的材料和当前材料未体现的要求
 → 进入优化工作区人工编辑，或请求单 Bullet AI 建议
 → 查看 Diff 后显式采纳或拒绝，采纳内容自动保存
+→ 选择模板预览 PDF 并导出可投递版本
 ```
 
-一级导航仅保留“首页”和“我的简历”。正式 Evidence / Gap、Workspace 和单 Bullet 受约束改写链路已完成；Typst Preview / PDF 仍属于后续 Phase。
+一级导航仅保留“首页”和“我的简历”。正式 Evidence / Gap、Workspace、单 Bullet 受约束改写与 Typst Preview / PDF 导出均已完成。
 
 ## 技术栈
 
@@ -42,6 +44,7 @@
 | 前端 | Vue 3、TypeScript、Vite、Pinia、Vue Router、Element Plus |
 | 数据与存储 | PostgreSQL + pgvector、Redis、MinIO / 本地文件 |
 | AI | OpenAI-compatible Chat API、OpenAI-compatible Embedding API |
+| 渲染 | Typst CLI（PDF Preview / Export，镜像内置） |
 | 部署 | Docker Compose、Nginx、Let's Encrypt、Shell 运维脚本 |
 
 ![当前系统架构](docs/architecture/system-overview.png)
@@ -65,6 +68,7 @@ scripts/    运维脚本
 - Java 21
 - Node.js `^20.19.0` 或 `>=22.12.0`
 - Docker Compose
+- Typst CLI（PDF 预览 / 导出需要；本地开发需自行安装并保证 `typst` 在 PATH，容器镜像已内置）
 
 ### 2. 配置并启动依赖
 

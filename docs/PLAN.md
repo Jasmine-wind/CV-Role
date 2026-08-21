@@ -1,6 +1,6 @@
 # CV-Role V2 重构计划
 
-本计划只把 [PRD.md](PRD.md) 已冻结的决策转成实施顺序，不扩展产品范围。当前仓库已完成 **Phase 2 核心领域模型**、**Phase 3 Evidence Matching / Gap Analysis**、**Phase 4 Optimization Workspace** 与 **Phase 5 单 Bullet AI Suggest / Diff / Apply / Reject / Regenerate**；Phase 5 的真实性与严格输出解析 Blocker 已修复并通过独立 Gate 复审。Phase 6 尚未开始。
+本计划只把 [PRD.md](PRD.md) 已冻结的决策转成实施顺序，不扩展产品范围。当前仓库已完成 **Phase 2 核心领域模型**、**Phase 3 Evidence Matching / Gap Analysis**、**Phase 4 Optimization Workspace**、**Phase 5 单 Bullet AI Suggest / Diff / Apply / Reject / Regenerate** 与 **Phase 6 Typst Preview / PDF Export**；Phase 5、Phase 6 均已通过独立 Final Gate。Phase 7 尚未开始。
 
 ## 目标
 
@@ -89,13 +89,19 @@ Gate 结论：当前正式三态只陈述冻结材料可以支持的结论；引
 
 Gate 结论：首次独立 Review 发现事实闭包可被否定翻转、程度 / 责任升级、数字关系重绑、未知实体 / 技术、成果 / 因果、时间 / 范围和 Unicode 绕过，并发现 Parser 会接受缺失 reason、重复 / 未知字段及 trailing JSON，因此撤回旧 Gate 结论。修复后校验器改为只放行可由当前 Bullet 原文证明的保守安全子集，关系分隔、无显式分隔的多事实歧义、事实谓词、未知脚本与 Unicode 控制字符均 fail closed；Parser 严格执行单 JSON 与完整 Schema。回归测试与最终独立复审确认已知 Blocker 关闭，Phase 5 Gate 重新通过。Phase 5 的“可追溯”仅指当前会话内可查看原文、候选、Diff、原因并可 Undo，不包含持久化 AI History 或 Change Event。
 
-### Phase 6 — Typst Preview 与导出（尚未开始）
+### Phase 6 — Typst Preview 与导出（已完成，Final Gate 已通过）
 
 - Structured Resume JSON 作为唯一业务数据源。
 - 建立 Classic / Modern / Minimal 模板、Preview、PDF 和导出前检查。
 - 后续支持 Markdown / JSON 迁移导出，但不建设模板商城。
 
 门禁：Preview 与 PDF 基本一致，编译或排版失败可恢复，导出物有归属和生命周期。
+
+完成状态：固定链路为 Editor CAS Save → TARGET `resume_versions.structured_content` 中的 `RESUME_DOCUMENT_V1` → Preview → PDF Export。Phase 4 仍允许 revision 0 的冻结 snapshot 投影初始化编辑器，但 Phase 6 严格读取 seam 会拒绝 revision 0；前端在首次 Preview 前显式执行一次原样 CAS Save，因此 SOURCE、任务快照与 Evidence 不进入渲染。Preview 返回短期服务端签名 receipt，完整绑定 user / task / TARGET / contentRevision / templateId+version / rendererVersion / PDF checksum；Export 必须提交并验证该 receipt，重新编译字节不一致、无 Preview、stale revision 或任一绑定变化均拒绝。
+
+三套内置只读模板（classic / modern / minimal 各 v1）共享同一 Typst Renderer、编译器和字体环境。最终 PDF 由 PDFBox 解析实际页数；联系方式检查只认可电话、邮箱、社交账号或 URL 等通信方式；overflow 的可执行边界冻结为“文字 glyph 边界框超出页面 CropBox 1pt 以上”，页面超过 2 页、缺少联系方式和越界均作为轻量告警展示，不自动改写内容。V22 建立带 task→TARGET 复合约束的 `export_artifacts`，保存 preflight 与 READY / DELETE_PENDING 状态。删除采用 DELETE_PENDING → 私有对象删除 → 元数据删除，失败保留可重试记录；Resume 与 JobDescription 两个真实父删除入口均先完成导出物清理再允许数据库级联。未引入 Template entity、HTML renderer、RenderJob、MQ 或后台清理系统。
+
+Final Gate 结论：真实 Typst、Fresh PostgreSQL/Flyway、HTTP、跨用户、stale receipt、存储失败重试和父级联 E2E 均通过；Phase 6 冻结 Contract 的 Blocker / Major 已关闭，**Final Gate PASS**。
 
 ### Phase 7 — BYOK 与 AI Gateway
 

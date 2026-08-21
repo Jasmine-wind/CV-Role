@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -22,6 +23,7 @@ import com.winter.airesumeoptimizer.module.analysis.mapper.AiResumeSuggestionMap
 import com.winter.airesumeoptimizer.module.analysis.mapper.AiRewriteSuggestionMapper;
 import com.winter.airesumeoptimizer.module.analysis.mapper.ResumeAiAnalysisMapper;
 import com.winter.airesumeoptimizer.module.embedding.mapper.ResumeEmbeddingMapper;
+import com.winter.airesumeoptimizer.module.export.service.ExportArtifactCleanupService;
 import com.winter.airesumeoptimizer.module.job.mapper.JobMatchResultMapper;
 import com.winter.airesumeoptimizer.module.resume.config.ResumeParseProperties;
 import com.winter.airesumeoptimizer.module.resume.entity.Resume;
@@ -70,6 +72,7 @@ class ResumeServiceImplTest {
     private final AiRewriteSuggestionMapper aiRewriteSuggestionMapper = mock(AiRewriteSuggestionMapper.class);
     private final ResumeEmbeddingMapper resumeEmbeddingMapper = mock(ResumeEmbeddingMapper.class);
     private final FileStorageService fileStorageService = mock(FileStorageService.class);
+    private final ExportArtifactCleanupService exportArtifactCleanupService = mock(ExportArtifactCleanupService.class);
     private final ResumeTextExtractionService resumeTextExtractionService = mock(ResumeTextExtractionService.class);
     private final ResumeTextQualityCheckService resumeTextQualityCheckService = mock(ResumeTextQualityCheckService.class);
     private final ResumeTextCleanService resumeTextCleanService = mock(ResumeTextCleanService.class);
@@ -93,6 +96,7 @@ class ResumeServiceImplTest {
             aiRewriteSuggestionMapper,
             resumeEmbeddingMapper,
             fileStorageService,
+            exportArtifactCleanupService,
             resumeTextExtractionService,
             resumeTextQualityCheckService,
             resumeTextCleanService,
@@ -184,6 +188,7 @@ class ResumeServiceImplTest {
                 aiRewriteSuggestionMapper,
                 resumeEmbeddingMapper,
                 fileStorageService,
+                exportArtifactCleanupService,
                 resumeTextExtractionService,
                 resumeTextQualityCheckService,
                 resumeTextCleanService,
@@ -323,6 +328,24 @@ class ResumeServiceImplTest {
     }
 
     @Test
+    void deleteShouldStopBeforeResumeCascadeWhenArtifactCleanupFails() {
+        Resume resume = new Resume();
+        resume.setId(100L);
+        resume.setUserId(1L);
+        resume.setObjectKey("resumes/1/source.pdf");
+        when(resumeMapper.selectOne(any(Wrapper.class))).thenReturn(resume);
+        doThrow(new BusinessException(500, "导出文件删除失败，已保留记录，请重试"))
+                .when(exportArtifactCleanupService).deleteArtifactsForResume(1L, 100L);
+
+        assertThatThrownBy(() -> service.delete(1L, 100L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("导出文件删除失败");
+
+        verify(resumeMapper, never()).deleteById(100L);
+        verify(fileStorageService, never()).delete(anyString());
+    }
+
+    @Test
     void deleteShouldRemoveChildrenAndStoredFile() {
         Resume resume = new Resume();
         resume.setId(100L);
@@ -333,6 +356,7 @@ class ResumeServiceImplTest {
 
         service.delete(1L, 100L);
 
+        verify(exportArtifactCleanupService).deleteArtifactsForResume(1L, 100L);
         verify(resumeEmbeddingMapper).deleteByResumeId(100L);
         verify(aiRewriteSuggestionMapper).delete(any(Wrapper.class));
         verify(aiResumeSuggestionMapper).delete(any(Wrapper.class));

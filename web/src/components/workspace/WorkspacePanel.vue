@@ -6,6 +6,7 @@ import { getOptimizationAnalysisResult } from '@/api/job-analysis'
 import ErrorState from '@/components/common/ErrorState.vue'
 import SkeletonBlock from '@/components/common/SkeletonBlock.vue'
 import ResumeEditor from '@/components/workspace/ResumeEditor.vue'
+import WorkspacePreviewExport from '@/components/workspace/WorkspacePreviewExport.vue'
 import WorkspaceSuggestions from '@/components/workspace/WorkspaceSuggestions.vue'
 import type { OptimizationAnalysisResult } from '@/types/job-analysis'
 import { useBulletSuggest } from '@/utils/useBulletSuggest'
@@ -23,6 +24,8 @@ const analysisLoading = ref(false)
 const analysisError = ref<string | null>(null)
 
 const restoring = ref(false)
+const previewPreparing = ref(false)
+const previewDrawerVisible = ref(false)
 
 const jobTitle = computed(() => analysisResult.value?.jobTitle ?? '简历编辑')
 
@@ -120,6 +123,30 @@ const handleRetry = () => {
   void editor.retrySave()
 }
 
+const openPreviewDrawer = async () => {
+  if (previewPreparing.value) return
+  previewPreparing.value = true
+  try {
+    const ready = await editor.ensurePersistedForRender()
+    if (!ready) {
+      ElMessage.warning('请先完成当前简历保存或冲突处理')
+      return
+    }
+    previewDrawerVisible.value = true
+  } finally {
+    previewPreparing.value = false
+  }
+}
+
+// Preview / Export 发现服务端 revision 已变化：同步服务端最新版本，杜绝静默渲染旧内容。
+const handlePreviewStale = async () => {
+  try {
+    await editor.adoptServerVersion()
+  } catch {
+    ElMessage.error('同步服务端版本失败，请刷新页面')
+  }
+}
+
 const beforeUnloadHandler = (event: BeforeUnloadEvent) => {
   if (editor.hasUnsavedChanges.value) {
     event.preventDefault()
@@ -177,6 +204,9 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
         >
           恢复优化前版本
         </el-button>
+        <el-button type="primary" :loading="previewPreparing" @click="openPreviewDrawer">
+          预览 / 导出 PDF
+        </el-button>
       </div>
     </header>
 
@@ -217,6 +247,24 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
         @change="handleEditorChange"
       />
     </div>
+
+    <!-- 以任务 ID 为 key：任务切换时预览 / 导出状态整体重建，旧预览不会跨任务残留 -->
+    <el-drawer
+      v-if="editor.draft.value"
+      v-model="previewDrawerVisible"
+      title="预览 / 导出 PDF"
+      direction="rtl"
+      size="540px"
+      destroy-on-close
+    >
+      <WorkspacePreviewExport
+        :key="optimizationTaskId"
+        :optimization-task-id="optimizationTaskId"
+        :revision="editor.revision.value"
+        :status="editor.status.value"
+        @stale="handlePreviewStale"
+      />
+    </el-drawer>
   </section>
 </template>
 

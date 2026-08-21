@@ -22,6 +22,14 @@ public interface WorkspaceContentService {
     WorkspaceContentVO getContent(Long userId, Long optimizationTaskId);
 
     /**
+     * 读取可用于 Preview / Export 的已持久化 TARGET 编辑文档。
+     *
+     * <p>只接受至少完成一次 CAS Save 的 revision；revision 0 的冻结 snapshot 投影仍可供
+     * Phase 4 编辑器初始化，但不得越过 Editor Save 成为 Phase 6 渲染来源。
+     */
+    WorkspaceContentVO getPersistedContentForRender(Long userId, Long optimizationTaskId);
+
+    /**
      * 以 expectedRevision 乐观并发控制整体替换 TARGET 内容。
      *
      * <p>仅当 expectedRevision 等于服务端当前 revision 时原子写入并递增；

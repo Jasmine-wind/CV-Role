@@ -3,7 +3,9 @@ package com.winter.airesumeoptimizer.module.job.service.impl;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -11,6 +13,7 @@ import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.winter.airesumeoptimizer.common.exception.BusinessException;
 import com.winter.airesumeoptimizer.module.analysis.mapper.AiJobMatchResultMapper;
 import com.winter.airesumeoptimizer.module.embedding.mapper.JobDescriptionEmbeddingMapper;
+import com.winter.airesumeoptimizer.module.export.service.ExportArtifactCleanupService;
 import com.winter.airesumeoptimizer.module.job.dto.JobDescriptionSubmitDTO;
 import com.winter.airesumeoptimizer.module.job.entity.JobDescription;
 import com.winter.airesumeoptimizer.module.job.mapper.JobDescriptionMapper;
@@ -23,10 +26,12 @@ class JobDescriptionServiceImplTest {
     private final JobDescriptionMapper jobDescriptionMapper = mock(JobDescriptionMapper.class);
     private final AiJobMatchResultMapper aiJobMatchResultMapper = mock(AiJobMatchResultMapper.class);
     private final JobDescriptionEmbeddingMapper jobDescriptionEmbeddingMapper = mock(JobDescriptionEmbeddingMapper.class);
+    private final ExportArtifactCleanupService exportArtifactCleanupService = mock(ExportArtifactCleanupService.class);
     private final JobDescriptionServiceImpl service = new JobDescriptionServiceImpl(
             jobDescriptionMapper,
             aiJobMatchResultMapper,
-            jobDescriptionEmbeddingMapper);
+            jobDescriptionEmbeddingMapper,
+            exportArtifactCleanupService);
 
     @Test
     void submitShouldSaveJobDescriptionWithPendingStatus() {
@@ -107,6 +112,26 @@ class JobDescriptionServiceImplTest {
     }
 
     @Test
+    void deleteShouldStopBeforeParentCascadeWhenArtifactCleanupFails() {
+        JobDescription jobDescription = new JobDescription();
+        jobDescription.setId(10L);
+        jobDescription.setUserId(1L);
+        jobDescription.setTitle("Java 后端开发工程师");
+        jobDescription.setRawText("负责 Java 后端开发");
+        jobDescription.setParseStatus("SUCCESS");
+        when(jobDescriptionMapper.selectOne(any(Wrapper.class))).thenReturn(jobDescription);
+        doThrow(new BusinessException(500, "导出文件删除失败，已保留记录，请重试"))
+                .when(exportArtifactCleanupService).deleteArtifactsForJobDescription(1L, 10L);
+
+        assertThatThrownBy(() -> service.delete(1L, 10L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("导出文件删除失败");
+
+        verify(jobDescriptionMapper, never()).deleteById(10L);
+        verify(jobDescriptionEmbeddingMapper, never()).deleteByJobDescriptionId(any());
+    }
+
+    @Test
     void deleteShouldRemoveAiMatchesAndOwnedJobDescription() {
         JobDescription jobDescription = new JobDescription();
         jobDescription.setId(10L);
@@ -119,6 +144,7 @@ class JobDescriptionServiceImplTest {
 
         service.delete(1L, 10L);
 
+        verify(exportArtifactCleanupService).deleteArtifactsForJobDescription(1L, 10L);
         verify(jobDescriptionEmbeddingMapper).deleteByJobDescriptionId(10L);
         verify(aiJobMatchResultMapper).delete(any(Wrapper.class));
         verify(jobDescriptionMapper).deleteById(10L);

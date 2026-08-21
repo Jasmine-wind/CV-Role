@@ -65,3 +65,49 @@ export interface BulletSuggestionResult {
   rejectMessage: string | null
   modelName: string | null
 }
+
+/** 内置只读模板：Phase 6 仅 Classic / Modern / Minimal。 */
+export type ResumeTemplateId = 'classic' | 'modern' | 'minimal'
+
+export interface ExportPreflight {
+  pageCount: number
+  missingContact: boolean
+  pageLimitExceeded: boolean
+  overflowDetected: boolean
+}
+
+export interface WorkspacePreviewPdf {
+  blob: Blob
+  contentRevision: number
+  targetResumeVersionId: number
+  templateVersion: string
+  rendererVersion: string
+  previewReceipt: string
+  preflight: ExportPreflight
+}
+
+export interface WorkspaceExportRequest {
+  templateId: ResumeTemplateId
+  expectedRevision: number
+  previewReceipt: string
+}
+
+/** 成功生成的 PDF 导出物；storage key 等内部信息不会出现在响应中。 */
+export interface ExportArtifact {
+  id: number
+  optimizationTaskId: number
+  templateId: ResumeTemplateId
+  templateVersion: string
+  rendererVersion: string
+  contentRevision: number
+  mimeType: string
+  fileSize: number
+  checksum: string
+  status: 'READY' | 'DELETE_PENDING'
+  pageCount: number
+  missingContact: boolean
+  pageLimitExceeded: boolean
+  overflowDetected: boolean
+  fileName: string
+  createdAt: string
+}

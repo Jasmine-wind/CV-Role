@@ -335,6 +335,22 @@ export function useWorkspaceEditor(
     }
   }
 
+  /**
+   * Phase 6 只渲染已 CAS 保存的 TARGET RESUME_DOCUMENT_V1。
+   * revision 0 仍保留 Phase 4 的冻结快照初始化语义，但在打开 Preview 前显式保存当前投影。
+   */
+  const ensurePersistedForRender = async (): Promise<boolean> => {
+    if (disposed || saving || !draft.value || revision.value === null) return false
+    if (revision.value > 0 && status.value === 'saved') return true
+    if (conflictRevision.value !== null) return false
+
+    status.value = 'dirty'
+    if (pendingSince === null) pendingSince = Date.now()
+    await flush()
+    const statusAfterFlush = status.value as WorkspaceSaveStatus
+    return !disposed && statusAfterFlush === 'saved' && revision.value > 0
+  }
+
   const dispose = () => {
     disposed = true
     clearSaveTimers()
@@ -360,6 +376,7 @@ export function useWorkspaceEditor(
     overwriteWithLocalDraft,
     adoptServerVersion,
     restorePreOptimization,
+    ensurePersistedForRender,
     flushNow: flush,
     dispose,
   }

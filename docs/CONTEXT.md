@@ -11,9 +11,9 @@
 | Phase 3 | 已完成，Gate 已通过 | 建立正式 Evidence Matching / Gap Analysis，三态为 MATCHED / PARTIAL_EVIDENCE / NO_EVIDENCE |
 | Phase 4 | 已完成，Gate 已通过 | 建立两栏 Workspace、结构化编辑、Undo / Redo、自动保存、乐观并发和恢复优化前版本 |
 | Phase 5 | 已完成，Gate 已通过 | 建立单 Bullet AI Suggest、代码 Diff、Apply / Reject / Regenerate；真实性与严格 Parser Blocker 修复已通过独立复审 |
-| Phase 6 | 尚未开始 | Typst Preview、PDF 与导出物尚未实现 |
+| Phase 6 | 已完成，Final Gate 已通过 | Typst 三模板、真实 PDF Preview、签名 Preview receipt、导出前检查、ExportArtifact 与可重试生命周期 |
 
-当前停止在 Phase 5。Phase 6 尚未开始；不得把 Phase 6 或后续 P0 / P1 / P2 能力描述为已实现，也不得在没有明确指令时提前进入 Phase 6。
+当前停止在 Phase 6，Final Gate 已通过。Phase 7 尚未开始；本次修复没有进入 Phase 7。
 
 ## 2. 当前系统与主流程
 
@@ -32,7 +32,10 @@
 → 人工编辑 TARGET，或对单个 Bullet 请求受约束 AI 建议
 → 查看 Diff，显式 Apply / Reject / Regenerate
 → Apply 后复用 Undo / Auto Save / expectedRevision CAS
+→ 保存完成后选择模板预览 PDF，导出为带生命周期记录的导出物
 ```
+
+Preview 与 Export 是同步渲染：只读取服务端已保存的 TARGET `structured_content` 与 revision，前端草稿、SOURCE、任务冻结快照与证据分析都不能作为渲染输入；`expectedRevision` 与服务端不一致时拒绝生成，防止静默输出旧版本。
 
 失败分析按同一 `OptimizationTask` 重试并复用冻结输入；成功任务不可被重试改写。历史任务缺少正式证据分析时只兼容读取旧结果，不允许启用 Phase 5 岗位定向改写。
 
@@ -44,6 +47,7 @@
 - 正式证据分析：每个任务最多一条 `evidence_analyses`，子表为 `evidence_requirements` 和 `requirement_evidences`；正式主链路不再向 `ai_job_match_results` 写新结果。
 - Workspace 文档：`RESUME_DOCUMENT_V1` 是唯一规范编辑结构，持久化在 `resume_versions.structured_content`，不存在第二套 Workspace 内容字段。
 - 内容并发：`resume_versions.content_revision` 是服务端乐观并发版本；保存和恢复都必须携带 `expectedRevision` 并通过单条条件更新递增。冲突保留本地草稿，不允许无条件覆盖。
+- 导出物：`export_artifacts` 记录成功生成的 PDF 派生文件及实际 preflight（用户 / 任务 / TARGET / revision / 模板与渲染器版本 / storage metadata / 页数 / 联系方式 / 页数告警 / 越界告警）。READY 可下载；DELETE_PENDING 不可下载但保留重试依据。任务与 TARGET 的关系由复合外键直接约束。
 
 当前正式迁移为：
 
@@ -51,6 +55,7 @@
 - V20：加法式建立 Phase 3 正式证据表，不用无可追溯引用的旧匹配结果伪造正式 Evidence。
 - V20.1：将正式语义收敛为 MATCHED / PARTIAL_EVIDENCE / NO_EVIDENCE 和 SUFFICIENT / PARTIAL；旧 Phase 3 派生分析失效后可用冻结输入重试，V1 历史不变。
 - V21：只增加 `content_revision BIGINT NOT NULL DEFAULT 0`，不增加第二个内容字段。
+- V22：加法式建立 `export_artifacts`，补充 task ownership 与 task→TARGET 复合唯一索引，持久化 preflight 和 READY / DELETE_PENDING 生命周期；不修改 V1 数据。
 
 ## 4. 必须保持的设计约束
 
@@ -81,15 +86,23 @@
 - 候选绑定 requestId、baseRevision、草稿变更序号、bulletId 和原文哈希。人工编辑、Undo / Redo、Restore、revision 变化、冲突、任务切换、Regenerate 替代或乱序响应都会使候选失效。
 - Apply 必须由用户显式触发并再次验证候选，只替换对应 Bullet，形成一个 Undo 节点，然后进入既有 dirty → Auto Save → CAS；不得绕过 Phase 4 并发协议。
 
+### Preview / Export 与渲染
+
+- Structured Resume JSON（TARGET `structured_content`）是唯一简历业务 Source of Truth；Preview / Export 只能经 `optimizationTaskId` 读取服务端已保存 revision，禁止 HTML 内容源、第二套简历数据、PDF 反解析、模板存业务数据与前端指定可渲染版本。
+- 渲染是独立 seam：确定性映射 → 版本化内置模板 → Typst 同步编译 → PDF；用户内容全部转义为 Typst 字符串字面量，渲染进程通过 `--root` 限制文件读取，内置模板不引用外部包且包目录隔离；用户内容经转义无法触发导入。当前没有 OS 级进程网络沙箱，不得把空包目录表述为网络隔离；模板只负责展示，不承担业务判断。
+- Preview 与 Export 共享同一 Renderer、模板版本、编译器与字体环境。服务端签名 receipt 绑定 user / task / TARGET / revision / template+version / renderer / PDF checksum；无 Preview、过期 receipt、revision / 模板 / 任务 / 用户变化或重编译 checksum 不同均拒绝 Export。
+- 导出前统一检查实际 PDF 页数、通信联系方式、两页建议上限和 glyph 是否超出 CropBox；compile / PDF parse 失败阻断，其余问题明确告警且不自动改写。删除采用持久化 DELETE_PENDING → 对象删除 → 元数据删除，失败可重试；Resume / JobDescription 父删除先完成该流程再级联。
+- 未 Apply 的 AI Suggest 仅存在于前端会话，不进入 Preview / PDF / ExportArtifact；Phase 6 不新增 Suggestion History、Change Event 或 AI 持久化链路。
+
 ## 5. 尚未实现
 
 - 缺少事实时向用户询问并记录真实补充 / 确认。
 - 用户 Profile / Rules 与平台策略的完整分层；Phase 5 只有平台默认策略和本次自定义要求。
-- Typst Preview、PDF、ExportArtifact 和导出前检查。
+- Markdown / JSON 迁移导出仍属后续 P1；不属于 Phase 6。
 - 每用户 BYOK、Credential 加密、统一 AI Gateway、自定义 Base URL SSRF 防护和 Usage 记录。
 - 用户数据导出 / 全量删除、最近优化列表和长期多 JD 求职方向洞察。
 
-以上能力必须继续按 `PLAN.md` 顺序推进；本次上下文整理不进入 Phase 6。
+以上能力必须继续按 `PLAN.md` 顺序推进；本次上下文整理不进入 Phase 7。
 
 ## 6. 当前技术债与遗留风险
 
@@ -105,6 +118,8 @@
 - AI Suggest 是同步请求，当前无限流；服务端 AI 默认超时 30 秒、前端请求超时 65 秒。生成窗口内的并发编辑通过候选失效和 CAS 防止落库覆盖，但后续运维仍可评估频控。
 - 首页进行中任务恢复主要依赖会话中保存的任务引用，尚无“最近优化”列表；正式任务本身可按 ID 跨设备查询。
 - 前端主 chunk 超过 Vite 500 kB 提示阈值，主要来自 Element Plus 全量引入；不影响当前正确性，但属于后续体验 / 性能优化项。
+- Typst 编译为同步请求：首次冷启动（字体扫描）可达十余秒，后续编译通常在秒级；当前以 30 秒编译超时与前端 65 秒请求超时兜底。若未来内容规模使同步无法满足，必须重新决策而不是自行引入后台导出架构。
+- 渲染依赖部署环境的 Typst 二进制与 CJK 字体：后端镜像与 CI 已内置固定版本（typst v0.15.1 + Noto CJK），非容器化部署必须自行安装；二进制缺失时渲染接口 fail closed，其它链路不受影响。
 - 本机使用 Java 25 时需要显式开启 annotation processing 才能生成 Lombok 代码；CI 的标准运行环境是 Java 21。
 
 ## 7. 文档与事实优先级

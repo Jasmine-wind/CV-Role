@@ -31,11 +31,23 @@ const service = axios.create({
   timeout: 10000,
 })
 
+const redirectUnauthorized = () => {
+  clearAuthToken()
+
+  if (window.location.pathname !== '/login') {
+    const redirect = `${window.location.pathname}${window.location.search}`
+    window.location.href = `/login?redirect=${encodeURIComponent(redirect)}`
+  }
+}
+
 const unwrapResponse = <T>(response: AxiosResponse<ApiResult<T>>) => {
   const result = response.data
 
   if (result.code !== 200) {
-    throw new Error(result.message || '请求失败')
+    // 附带业务码（如 409 revision 失效），调用方可据此做失效处理而不是只提示。
+    const apiError = new Error(result.message || '请求失败') as Error & { code?: number }
+    apiError.code = result.code
+    throw apiError
   }
 
   return result.data
@@ -57,15 +69,13 @@ service.interceptors.response.use(undefined, (error: AxiosError<ApiResult<unknow
   const message = resolveErrorMessage(error)
 
   if (status === 401 || code === 401) {
-    clearAuthToken()
-
-    if (window.location.pathname !== '/login') {
-      const redirect = `${window.location.pathname}${window.location.search}`
-      window.location.href = `/login?redirect=${encodeURIComponent(redirect)}`
-    }
+    redirectUnauthorized()
   }
 
-  return Promise.reject(new Error(message))
+  // 附带业务码（如 409 revision 失效），调用方可据此做失效处理而不是只提示。
+  const apiError = new Error(message) as Error & { code?: number }
+  apiError.code = code ?? status
+  return Promise.reject(apiError)
 })
 
 const resolveErrorMessage = (error: AxiosError<ApiResult<unknown>>) => {
@@ -108,3 +118,54 @@ const request: ApiClient = {
 }
 
 export default request
+
+/**
+ * 携带 JWT 下载二进制内容（PDF Preview / Export）。
+ * 后端业务错误统一为 HTTP 200 + Result JSON（见 GlobalExceptionHandler），
+ * 因此成功响应必须按 Content-Type 区分真正的 PDF 与包在 200 里的错误 JSON；
+ * 非 2xx 错误由响应拦截器归一化为带业务码的 Error，这里直接透传。
+ */
+export interface DownloadedPdfResponse {
+  blob: Blob
+  headers: Record<string, string>
+}
+
+export const downloadPdfResponse = async (
+  url: string,
+  timeoutMs = 60000,
+): Promise<DownloadedPdfResponse> => {
+  const response = await service.get<Blob>(url, { responseType: 'blob', timeout: timeoutMs })
+
+  const contentType = String(response.headers['content-type'] ?? '').toLowerCase()
+  if (contentType.includes('application/json')) {
+    let parsed: ApiResult<unknown> | null = null
+    try {
+      parsed = JSON.parse(await response.data.text()) as ApiResult<unknown>
+    } catch {
+      // 声明为 JSON 却无法解析：fail closed，绝不把坏字节交给预览或下载。
+    }
+    if (parsed?.code === 401) {
+      redirectUnauthorized()
+    }
+    const apiError = new Error(parsed?.message || '下载失败，请稍后重试') as Error & { code?: number }
+    apiError.code = parsed?.code
+    throw apiError
+  }
+  if (!contentType.includes('application/pdf')) {
+    throw new Error('下载响应不是有效 PDF')
+  }
+  const signature = new TextDecoder('ascii').decode(
+    await response.data.slice(0, 5).arrayBuffer(),
+  )
+  if (signature !== '%PDF-') {
+    throw new Error('下载响应不是有效 PDF')
+  }
+  const headers: Record<string, string> = {}
+  for (const [name, value] of Object.entries(response.headers)) {
+    if (value !== undefined && value !== null) headers[name.toLowerCase()] = String(value)
+  }
+  return { blob: response.data, headers }
+}
+
+export const downloadBlob = async (url: string, timeoutMs = 60000): Promise<Blob> =>
+  (await downloadPdfResponse(url, timeoutMs)).blob

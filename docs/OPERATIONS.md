@@ -35,11 +35,13 @@ AI / Embedding API
 | 服务 | 说明 |
 |---|---|
 | nginx | 前端静态资源托管、HTTPS、反向代理 `/api` |
-| backend | Spring Boot 后端服务 |
+| backend | Spring Boot 后端服务（镜像内置 Typst 编译器与 CJK 字体，用于 PDF Preview / Export） |
 | postgres | PostgreSQL + pgvector 数据库 |
 | redis | 缓存服务 |
 | minio | 简历文件对象存储 |
 | certbot | Let's Encrypt 证书申请和续期 |
+
+渲染依赖：PDF 预览与导出在后端容器内同步调用 Typst CLI。编译器版本与发布包 SHA-256 固定在 `backend/Dockerfile`（当前 v0.15.1，与 CI 一致）；升级 Typst 时必须同步回归三套内置模板、PDF checksum 确定性和渲染器版本。`APP_RENDER_TIMEOUT` 控制单次编译超时，`APP_RENDER_PREVIEW_RECEIPT_TTL` 控制签名 Preview receipt 有效期（默认 10 分钟）。导出物写入既有私有存储（本地为 `uploads/exports/`，生产为 MinIO bucket）；删除失败保留 DELETE_PENDING 元数据供用户重试，不新增容器或后台清理基础设施。
 
 ---
 
