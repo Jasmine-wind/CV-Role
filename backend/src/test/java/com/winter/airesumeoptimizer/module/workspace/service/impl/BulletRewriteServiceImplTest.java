@@ -12,6 +12,8 @@ import com.winter.airesumeoptimizer.common.exception.BusinessException;
 import com.winter.airesumeoptimizer.infra.ai.AiChatMessage;
 import com.winter.airesumeoptimizer.infra.ai.AiClientException;
 import com.winter.airesumeoptimizer.infra.ai.AiClientService;
+import com.winter.airesumeoptimizer.infra.ai.AiFailureCode;
+import com.winter.airesumeoptimizer.infra.ai.AiGatewayException;
 import com.winter.airesumeoptimizer.infra.ai.PromptTemplateService;
 import com.winter.airesumeoptimizer.module.evidence.service.EvidenceMatchService;
 import com.winter.airesumeoptimizer.module.evidence.vo.EvidenceAnalysisResultVO;
@@ -185,8 +187,9 @@ class BulletRewriteServiceImplTest {
 
         assertThatThrownBy(() -> service.suggestBulletRewrite(
                 USER_ID, TASK_ID, request(BulletSuggestIntent.SIMPLIFY, null)))
-                .isInstanceOf(BusinessException.class)
-                .extracting("code").isEqualTo(502);
+                .isInstanceOf(AiGatewayException.class)
+                .extracting(exception -> ((AiGatewayException) exception).getFailureCode())
+                .isEqualTo(AiFailureCode.SCHEMA_INVALID);
     }
 
     @Test
@@ -196,8 +199,9 @@ class BulletRewriteServiceImplTest {
 
         assertThatThrownBy(() -> service.suggestBulletRewrite(
                 USER_ID, TASK_ID, request(BulletSuggestIntent.SIMPLIFY, null)))
-                .isInstanceOf(BusinessException.class)
-                .extracting("code").isEqualTo(502);
+                .isInstanceOf(AiGatewayException.class)
+                .extracting(exception -> ((AiGatewayException) exception).getFailureCode())
+                .isEqualTo(AiFailureCode.SCHEMA_INVALID);
     }
 
     @Test
@@ -275,8 +279,9 @@ class BulletRewriteServiceImplTest {
 
         assertThatThrownBy(() -> service.suggestBulletRewrite(
                 USER_ID, TASK_ID, request(BulletSuggestIntent.SIMPLIFY, null)))
-                .isInstanceOf(BusinessException.class)
-                .extracting("code").isEqualTo(502);
+                .isInstanceOf(AiGatewayException.class)
+                .extracting(exception -> ((AiGatewayException) exception).getFailureCode())
+                .isEqualTo(AiFailureCode.SCHEMA_INVALID);
         assertNoWorkspaceWrite();
     }
 

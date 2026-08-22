@@ -114,6 +114,11 @@ AI_BASE_URL=your-ai-base-url
 AI_API_KEY=your-ai-api-key
 AI_MODEL=your-ai-model
 
+# Optional account-level BYOK. Keep disabled when no valid key ring is injected.
+AI_CREDENTIALS_ENABLED=false
+AI_CREDENTIALS_ACTIVE_KEY_ID=v1
+AI_CREDENTIALS_KEY_RING=
+
 EMBEDDING_BASE_URL=https://api.siliconflow.cn/v1
 EMBEDDING_API_KEY=your-siliconflow-api-key
 EMBEDDING_MODEL=Qwen/Qwen3-Embedding-0.6B
@@ -132,6 +137,9 @@ APP_CORS_ALLOWED_ORIGIN_PATTERNS=https://resume.dawn04.xyz
 - 后端访问 MinIO 使用 `http://minio:9000`。
 - 前端通过 Nginx 同域名 `/api` 访问后端。
 - HTTPS 成功后，CORS 建议只保留 `https://resume.dawn04.xyz`。
+- `AI_CREDENTIALS_ENABLED=false` 时数据库中即使存在 ACTIVE BYOK，新任务也使用 System Default；历史 BYOK Task 在需要再次调用 AI 时仍 fail closed。
+- 启用 BYOK 前，`AI_CREDENTIALS_KEY_RING` 必须使用 `keyId=base64url-32-byte-key;nextKeyId=...` 格式，且 `AI_CREDENTIALS_ACTIVE_KEY_ID` 必须存在于 key ring；配置错误会阻止后端启动。
+- 轮换主密钥时先同时部署旧 / 新 key 并切换 active key；应用会在 Credential 使用时重加密且不改变 `credential_revision`。确认数据库不再引用旧 `encryption_key_version` 后才能移除旧 key。
 
 ---
 
@@ -383,6 +391,9 @@ docker compose -f docker-compose.prod.yml --env-file .env up -d --build nginx
 
 ```text
 AI_API_KEY
+AI_CREDENTIALS_ENABLED
+AI_CREDENTIALS_ACTIVE_KEY_ID
+AI_CREDENTIALS_KEY_RING
 EMBEDDING_API_KEY
 APP_CORS_ALLOWED_ORIGIN_PATTERNS
 JWT_EXPIRATION_MINUTES
@@ -673,6 +684,7 @@ Redis 密码错误
 MinIO 配置错误
 JWT_SECRET 缺失
 AI_API_KEY 缺失
+AI_CREDENTIALS_ENABLED=true 但 active key / key ring 缺失或格式错误
 Flyway 迁移失败
 ```
 

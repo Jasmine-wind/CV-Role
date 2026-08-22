@@ -4,6 +4,8 @@ import com.winter.airesumeoptimizer.common.logging.LogSanitizer;
 import com.winter.airesumeoptimizer.common.result.ResultCode;
 import com.winter.airesumeoptimizer.common.result.Result;
 import com.winter.airesumeoptimizer.infra.ai.AiClientException;
+import com.winter.airesumeoptimizer.infra.ai.AiGatewayException;
+import com.winter.airesumeoptimizer.infra.ai.AiFailureCode;
 import com.winter.airesumeoptimizer.infra.storage.FileStorageException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolationException;
@@ -109,6 +111,18 @@ public class GlobalExceptionHandler {
                 request.getRequestURI(),
                 LogSanitizer.sanitize(exception.getMessage()));
         return Result.failure(ResultCode.INTERNAL_ERROR, "文件存储失败，请稍后重试", request.getRequestURI());
+    }
+
+    @ExceptionHandler(AiGatewayException.class)
+    public Result<Void> handleAiGatewayException(AiGatewayException exception, HttpServletRequest request) {
+        AiFailureCode failureCode = exception.getFailureCode();
+        int status = switch (failureCode) {
+            case INVALID_CREDENTIAL, CONFIGURATION_INVALID, UNSAFE_BASE_URL -> 400;
+            case CREDENTIAL_CHANGED -> 409;
+            default -> 502;
+        };
+        log.warn("AI gateway exception: code={}, path={}", failureCode, request.getRequestURI());
+        return Result.failure(status, failureCode.name(), request.getRequestURI());
     }
 
     @ExceptionHandler(AiClientException.class)

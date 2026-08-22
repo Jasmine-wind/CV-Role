@@ -69,6 +69,9 @@ onMounted(() => {
     </div>
 
     <footer class="app-sidebar-user">
+      <RouterLink to="/settings/ai-provider" class="app-sidebar-settings">
+        AI Provider 设置
+      </RouterLink>
       <div>
         <strong>{{ displayName }}</strong>
         <small>{{ userEmail }}</small>

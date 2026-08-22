@@ -1,6 +1,6 @@
 # CV-Role V2 重构计划
 
-本计划只把 [PRD.md](PRD.md) 已冻结的决策转成实施顺序，不扩展产品范围。当前仓库已完成 **Phase 2 核心领域模型**、**Phase 3 Evidence Matching / Gap Analysis**、**Phase 4 Optimization Workspace**、**Phase 5 单 Bullet AI Suggest / Diff / Apply / Reject / Regenerate** 与 **Phase 6 Typst Preview / PDF Export**；Phase 5、Phase 6 均已通过独立 Final Gate。Phase 7 尚未开始。
+本计划只把 [PRD.md](PRD.md) 已冻结的决策转成实施顺序，不扩展产品范围。当前仓库已完成 **Phase 2 核心领域模型**、**Phase 3 Evidence Matching / Gap Analysis**、**Phase 4 Optimization Workspace**、**Phase 5 单 Bullet AI Suggest / Diff / Apply / Reject / Regenerate**、**Phase 6 Typst Preview / PDF Export** 与 **Phase 7 BYOK / AI Gateway**；Phase 5–7 均已通过独立 Final Gate。Phase 8 尚未开始。
 
 ## 目标
 
@@ -109,6 +109,12 @@ Final Gate 结论：真实 Typst、Fresh PostgreSQL/Flyway、HTTP、跨用户、
 - 完成密钥加密、掩码、测试 / 替换 / 删除、SSRF 防护和 Usage 记录。
 
 门禁：用户配置不能覆盖平台真实性、安全指令或核心 Schema。
+
+完成状态：全仓 Chat 调用收敛为唯一 seam `业务 → AiGateway（ContextAwareAiGatewayService）→ OpenAI-compatible Adapter → PinnedHttpTransport`；业务调用只提交受控 policy ID、服务端可信策略和不可信 USER 数据，Gateway 统一追加平台 guardrail 并构造 SYSTEM / USER。每用户至多一个 `OPENAI_COMPATIBLE` Credential，支持 Save/Replace/Test/Enable/Disable/Delete，Create/Replace 默认 DISABLED，配置变更 `credential_revision++`。API Key 只以 AES-256-GCM versioned envelope 持久化，AAD 绑定 user/credential；key ring 启用时启动即校验，旧 key 密文可在不改变 Credential revision 的前提下重加密。
+
+SSRF transport 仅允许 HTTPS / DNS hostname / 443；每次请求有界解析并校验全部 A/AAAA，连接只使用已验证地址，同时 TLS SNI / 证书仍绑定原 hostname。Redirect 永不跟随、隐式 Proxy 不生效，DNS / connect / TLS 各有硬限制，绝对总 deadline 可取消 trickle response，成功与错误响应均按解码后 1 MiB 限制。新 OptimizationTask 在异步分析前冻结无 Secret 的 Selection Snapshot；同任务 Resume / JD / Evidence / Rewrite 复用该快照，Credential 变化或删除后的旧 BYOK Retry fail closed，历史 Workspace / Preview / Export 仍可读。Usage 按 Provider attempt 记录最小字段，失败不影响已经完成的 AI 结果。V23 采用加法式迁移并以复合外键约束 Credential / Task / Usage 用户归属；Settings 不进入首次使用主链。
+
+Final Gate 结论：唯一 Gateway、Credential 加密与生命周期、真实 socket DNS pinning / TLS / redirect / proxy / decoded response limit、task snapshot、System Default / BYOK 选择、attempt Usage、Fresh V1→V23 与 V22→V23、Phase 3 / 5 / 6 回归均已独立验证；发现的 Blocker / Major 已关闭，**Final Gate PASS**。
 
 ### Phase 8 — 视觉与状态体验
 

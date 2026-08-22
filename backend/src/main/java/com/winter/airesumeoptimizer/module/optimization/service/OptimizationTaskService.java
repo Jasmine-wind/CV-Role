@@ -1,5 +1,6 @@
 package com.winter.airesumeoptimizer.module.optimization.service;
 
+import com.winter.airesumeoptimizer.infra.ai.AiSelectionSnapshot;
 import com.winter.airesumeoptimizer.module.analysis.entity.AiJobMatchResult;
 import com.winter.airesumeoptimizer.module.evidence.entity.EvidenceAnalysis;
 import com.winter.airesumeoptimizer.module.job.vo.JobDescriptionVO;
@@ -7,6 +8,7 @@ import com.winter.airesumeoptimizer.module.optimization.vo.OptimizationTaskVO;
 
 public interface OptimizationTaskService {
 
+    /** Legacy source-compatible overload. New callers pass an immutable AI selection. */
     OptimizationTaskVO create(
             Long userId,
             Long resumeId,
@@ -15,12 +17,26 @@ public interface OptimizationTaskService {
             String providerSnapshot,
             String modelSnapshot);
 
+    OptimizationTaskVO create(
+            Long userId,
+            Long resumeId,
+            String jobTitle,
+            String rawJobDescription,
+            AiSelectionSnapshot selection);
+
+    /** Legacy source-compatible overload. New callers pass an immutable AI selection. */
     OptimizationTaskVO createFromExisting(
             Long userId,
             Long resumeId,
             Long jobDescriptionId,
             String providerSnapshot,
             String modelSnapshot);
+
+    OptimizationTaskVO createFromExisting(
+            Long userId,
+            Long resumeId,
+            Long jobDescriptionId,
+            AiSelectionSnapshot selection);
 
     OptimizationTaskVO get(Long userId, Long optimizationTaskId);
 
@@ -54,6 +70,24 @@ public interface OptimizationTaskService {
             Long jobDescriptionId,
             Long jobTargetId,
             Long sourceResumeVersionId,
-            Long targetResumeVersionId) {
+            Long targetResumeVersionId,
+            AiSelectionSnapshot aiSelection) {
+
+        public ExecutionContext(
+                Long optimizationTaskId,
+                Long resumeId,
+                Long jobDescriptionId,
+                Long jobTargetId,
+                Long sourceResumeVersionId,
+                Long targetResumeVersionId) {
+            this(
+                    optimizationTaskId,
+                    resumeId,
+                    jobDescriptionId,
+                    jobTargetId,
+                    sourceResumeVersionId,
+                    targetResumeVersionId,
+                    null);
+        }
     }
 }

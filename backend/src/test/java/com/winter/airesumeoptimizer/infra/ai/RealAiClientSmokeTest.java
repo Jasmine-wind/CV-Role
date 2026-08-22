@@ -3,6 +3,9 @@ package com.winter.airesumeoptimizer.infra.ai;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.winter.airesumeoptimizer.infra.ai.transport.PinnedHttpTransport;
+import java.time.Duration;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 
@@ -19,10 +22,19 @@ class RealAiClientSmokeTest {
         properties.setTemperature(Double.parseDouble(propertyOrDefault("realAi.temperature", "0.2")));
 
         OpenAiCompatibleAiClientService service = new OpenAiCompatibleAiClientService(
-                properties,
-                new ObjectMapper());
+                new ObjectMapper(),
+                new PinnedHttpTransport());
 
-        String response = service.complete("请只回复 JSON：{\"ok\":true}");
+        String response = service.complete(new AiProviderRequest(
+                properties.getApiKey(),
+                properties.getBaseUrl(),
+                properties.getModel(),
+                properties.getTemperature(),
+                properties.getMaxTokens(),
+                Duration.ofSeconds(properties.getTimeoutSeconds()),
+                List.of(
+                        AiChatMessage.system("只遵循服务端 JSON 输出要求。"),
+                        AiChatMessage.user("请只回复 JSON：{\"ok\":true}")))).text();
 
         assertThat(response).isNotBlank();
         System.out.println("AI smoke response: " + response);

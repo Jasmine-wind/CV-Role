@@ -10,6 +10,8 @@ import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.winter.airesumeoptimizer.common.exception.BusinessException;
+import com.winter.airesumeoptimizer.infra.ai.AiSelectionSnapshot;
+import com.winter.airesumeoptimizer.infra.ai.AiSource;
 import com.winter.airesumeoptimizer.module.analysis.mapper.AiJobMatchResultMapper;
 import com.winter.airesumeoptimizer.module.evidence.entity.EvidenceAnalysis;
 import com.winter.airesumeoptimizer.module.job.entity.JobDescription;
@@ -22,6 +24,7 @@ import com.winter.airesumeoptimizer.module.optimization.entity.ResumeVersion;
 import com.winter.airesumeoptimizer.module.optimization.mapper.JobTargetMapper;
 import com.winter.airesumeoptimizer.module.optimization.mapper.OptimizationTaskMapper;
 import com.winter.airesumeoptimizer.module.optimization.mapper.ResumeVersionMapper;
+import com.winter.airesumeoptimizer.module.optimization.service.OptimizationTaskService;
 import com.winter.airesumeoptimizer.module.optimization.vo.OptimizationTaskVO;
 import com.winter.airesumeoptimizer.module.resume.entity.Resume;
 import com.winter.airesumeoptimizer.module.resume.mapper.ResumeMapper;
@@ -254,6 +257,129 @@ class OptimizationTaskServiceImplTest {
                 .hasMessage("优化任务缺少简历输入快照");
 
         verify(optimizationTaskMapper, never()).update(any(), any());
+    }
+
+    @Test
+    void createShouldFreezeByokSelectionSnapshotWithoutSecrets() {
+        AiSelectionSnapshot byok = byokSelection(5L);
+
+        service.create(
+                1L,
+                10L,
+                "Java 后端",
+                "Java 后端\n负责 Spring Boot 服务开发",
+                byok);
+
+        ArgumentCaptor<OptimizationTask> taskCaptor = ArgumentCaptor.forClass(OptimizationTask.class);
+        verify(optimizationTaskMapper).insert(taskCaptor.capture());
+        OptimizationTask persisted = taskCaptor.getValue();
+        assertThat(persisted.getAiSourceSnapshot()).isEqualTo("USER_BYOK");
+        assertThat(persisted.getAiProviderSnapshot()).isEqualTo("OPENAI_COMPATIBLE");
+        assertThat(persisted.getProviderSnapshot()).isEqualTo("OPENAI_COMPATIBLE");
+        assertThat(persisted.getAiCredentialId()).isEqualTo(77L);
+        assertThat(persisted.getAiCredentialIdSnapshot()).isEqualTo(77L);
+        assertThat(persisted.getAiCredentialRevision()).isEqualTo(5L);
+        assertThat(persisted.getAiBaseUrlSnapshot()).isEqualTo("https://byok.example.com:443/v1");
+        assertThat(persisted.getModelSnapshot()).isEqualTo("byok-model");
+        assertThat(persisted.getAiConfigSnapshot()).isEqualTo("{\"temperature\":0.2,\"maxOutputTokens\":16000}");
+    }
+
+    @Test
+    void createShouldRejectIncompleteByokSelection() {
+        AiSelectionSnapshot incomplete = new AiSelectionSnapshot(
+                AiSource.USER_BYOK,
+                AiSelectionSnapshot.OPENAI_COMPATIBLE,
+                77L,
+                null,
+                "https://byok.example.com:443/v1",
+                "byok-model",
+                "{\"temperature\":0.2,\"maxOutputTokens\":16000}",
+                null);
+
+        assertThatThrownBy(() -> service.create(
+                1L,
+                10L,
+                "Java 后端",
+                "Java 后端\n负责 Spring Boot 服务开发",
+                incomplete))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("优化任务的 BYOK 选择快照不完整");
+
+        verify(optimizationTaskMapper, never()).insert(any(OptimizationTask.class));
+    }
+
+    @Test
+    void executionContextShouldReuseFrozenByokSnapshotEvenAfterCredentialRemoval() {
+        OptimizationTask stored = task("FAILED");
+        stored.setAiSourceSnapshot("USER_BYOK");
+        stored.setAiProviderSnapshot("OPENAI_COMPATIBLE");
+        // The live FK is gone after deletion; the immutable snapshot must survive.
+        stored.setAiCredentialId(null);
+        stored.setAiCredentialIdSnapshot(77L);
+        stored.setAiCredentialRevision(5L);
+        stored.setAiBaseUrlSnapshot("https://byok.example.com:443/v1");
+        stored.setModelSnapshot("byok-model");
+        stored.setAiConfigSnapshot("{\"temperature\":0.2,\"maxOutputTokens\":16000}");
+        when(optimizationTaskMapper.selectOne(any())).thenReturn(stored);
+        when(resumeVersionMapper.selectOne(any())).thenReturn(sourceVersion());
+        when(jobTargetMapper.selectOne(any())).thenReturn(jobTarget());
+
+        OptimizationTaskService.ExecutionContext context = service.getExecutionContext(1L, 50L);
+
+        assertThat(context.aiSelection()).isNotNull();
+        assertThat(context.aiSelection().source()).isEqualTo(AiSource.USER_BYOK);
+        assertThat(context.aiSelection().credentialId()).isEqualTo(77L);
+        assertThat(context.aiSelection().credentialRevision()).isEqualTo(5L);
+        assertThat(context.aiSelection().baseUrl()).isEqualTo("https://byok.example.com:443/v1");
+        assertThat(context.aiSelection().model()).isEqualTo("byok-model");
+    }
+
+    @Test
+    void executionContextShouldKeepLegacyTasksOnSystemDefault() {
+        OptimizationTask legacyTask = task("SUCCESS");
+        legacyTask.setProviderSnapshot("SYSTEM_DEFAULT_OPENAI_COMPATIBLE");
+        legacyTask.setModelSnapshot("test-model");
+        when(optimizationTaskMapper.selectOne(any())).thenReturn(legacyTask);
+        when(resumeVersionMapper.selectOne(any())).thenReturn(sourceVersion());
+        when(jobTargetMapper.selectOne(any())).thenReturn(jobTarget());
+
+        OptimizationTaskService.ExecutionContext context = service.getExecutionContext(1L, 50L);
+
+        assertThat(context.aiSelection()).isNotNull();
+        assertThat(context.aiSelection().source()).isEqualTo(AiSource.SYSTEM_DEFAULT);
+        assertThat(context.aiSelection().credentialId()).isNull();
+        assertThat(context.aiSelection().credentialRevision()).isNull();
+    }
+
+    @Test
+    void executionContextShouldRejectCorruptedByokSnapshot() {
+        OptimizationTask corrupted = task("FAILED");
+        corrupted.setAiSourceSnapshot("USER_BYOK");
+        corrupted.setAiProviderSnapshot("OPENAI_COMPATIBLE");
+        corrupted.setAiCredentialIdSnapshot(77L);
+        corrupted.setAiCredentialRevision(null);
+        corrupted.setAiBaseUrlSnapshot("https://byok.example.com:443/v1");
+        corrupted.setModelSnapshot("byok-model");
+        corrupted.setAiConfigSnapshot("{\"temperature\":0.2,\"maxOutputTokens\":16000}");
+        when(optimizationTaskMapper.selectOne(any())).thenReturn(corrupted);
+        when(resumeVersionMapper.selectOne(any())).thenReturn(sourceVersion());
+        when(jobTargetMapper.selectOne(any())).thenReturn(jobTarget());
+
+        assertThatThrownBy(() -> service.getExecutionContext(1L, 50L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("优化任务的 BYOK 选择快照损坏");
+    }
+
+    private AiSelectionSnapshot byokSelection(Long revision) {
+        return new AiSelectionSnapshot(
+                AiSource.USER_BYOK,
+                AiSelectionSnapshot.OPENAI_COMPATIBLE,
+                77L,
+                revision,
+                "https://byok.example.com:443/v1",
+                "byok-model",
+                "{\"temperature\":0.2,\"maxOutputTokens\":16000}",
+                null);
     }
 
     private EvidenceAnalysis evidenceAnalysis(Long optimizationTaskId, Long userId) {

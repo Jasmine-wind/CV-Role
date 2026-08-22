@@ -61,6 +61,15 @@ const router = createRouter({
       },
     },
     {
+      path: '/settings/ai-provider',
+      name: 'ai-provider-settings',
+      component: () => import('@/views/settings/AiProviderSettingsView.vue'),
+      meta: {
+        requiresAuth: true,
+        title: 'AI Provider 设置',
+      },
+    },
+    {
       path: '/login',
       name: 'login',
       component: () => import('@/views/auth/LoginView.vue'),

@@ -27,7 +27,7 @@ Product conflicts are resolved by `docs/PRD.md`. Current behavior is determined 
 
 ## Current phase
 
-Phases 1–5 are complete and Phase 5 has passed its independent Gate re-review. Phase 6 is the next approved phase but has not started; do not enter it without explicit instruction or present Phase 6 or later P0/P1/P2 capabilities as implemented.
+Phases 1–7 are complete and Phase 7 has passed its independent Final Gate. Phase 8 is the next approved phase but has not started; do not enter it without explicit instruction or present Phase 8 or later capabilities as implemented.
 
 Do not introduce microservices, message queues, Kubernetes, crawlers, auto-apply, a job marketplace, a chatbot-first UI, a complex ATS score system, a template marketplace, or a new technology stack unless the product baseline is explicitly revised.
 

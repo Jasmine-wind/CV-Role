@@ -54,19 +54,26 @@ public class AiRewriteSuggestionPromptServiceImpl implements AiRewriteSuggestion
             throw new BusinessException(400, "目标简历部分不能为空");
         }
 
+        String rendered = promptTemplateService.render(TEMPLATE_PATH, Map.of(
+                "originalText", normalize(originalText, MAX_ORIGINAL_TEXT_LENGTH),
+                "rewriteType", normalize(rewriteType, MAX_REWRITE_TYPE_LENGTH),
+                "targetSection", normalize(targetSection, MAX_TARGET_SECTION_LENGTH),
+                "jobStructuredContent", normalizeOptional(jobStructuredContent, MAX_JOB_STRUCTURED_LENGTH),
+                "aiMatchResult", normalizeOptional(aiMatchResult, MAX_MATCH_RESULT_LENGTH),
+                "aiSuggestion", normalizeOptional(aiSuggestion, MAX_AI_SUGGESTION_LENGTH),
+                "rewriteGoal", normalizeOptional(rewriteGoal, MAX_REWRITE_GOAL_LENGTH),
+                "jobKeywords", normalizeOptional(formatKeywords(jobKeywords), MAX_JOB_KEYWORDS_LENGTH),
+                "tone", normalizeOptional(tone, MAX_TONE_LENGTH),
+                "lengthLimit", formatLengthLimit(lengthLimit)));
+        String boundary = "原文片段：";
+        int boundaryIndex = rendered.indexOf(boundary);
+        String systemPrompt = boundaryIndex < 0 ? rendered : rendered.substring(0, boundaryIndex).strip();
+        String userPrompt = boundaryIndex < 0 ? "" : rendered.substring(boundaryIndex).strip();
         return AiRewriteSuggestionPromptDTO.builder()
                 .promptVersion(PROMPT_VERSION)
-                .prompt(promptTemplateService.render(TEMPLATE_PATH, Map.of(
-                        "originalText", normalize(originalText, MAX_ORIGINAL_TEXT_LENGTH),
-                        "rewriteType", normalize(rewriteType, MAX_REWRITE_TYPE_LENGTH),
-                        "targetSection", normalize(targetSection, MAX_TARGET_SECTION_LENGTH),
-                        "jobStructuredContent", normalizeOptional(jobStructuredContent, MAX_JOB_STRUCTURED_LENGTH),
-                        "aiMatchResult", normalizeOptional(aiMatchResult, MAX_MATCH_RESULT_LENGTH),
-                        "aiSuggestion", normalizeOptional(aiSuggestion, MAX_AI_SUGGESTION_LENGTH),
-                        "rewriteGoal", normalizeOptional(rewriteGoal, MAX_REWRITE_GOAL_LENGTH),
-                        "jobKeywords", normalizeOptional(formatKeywords(jobKeywords), MAX_JOB_KEYWORDS_LENGTH),
-                        "tone", normalizeOptional(tone, MAX_TONE_LENGTH),
-                        "lengthLimit", formatLengthLimit(lengthLimit))))
+                .prompt(rendered)
+                .systemPrompt(systemPrompt)
+                .userPrompt(userPrompt)
                 .build();
     }
 

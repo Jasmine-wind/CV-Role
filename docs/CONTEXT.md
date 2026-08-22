@@ -12,14 +12,17 @@
 | Phase 4 | 已完成，Gate 已通过 | 建立两栏 Workspace、结构化编辑、Undo / Redo、自动保存、乐观并发和恢复优化前版本 |
 | Phase 5 | 已完成，Gate 已通过 | 建立单 Bullet AI Suggest、代码 Diff、Apply / Reject / Regenerate；真实性与严格 Parser Blocker 修复已通过独立复审 |
 | Phase 6 | 已完成，Final Gate 已通过 | Typst 三模板、真实 PDF Preview、签名 Preview receipt、导出前检查、ExportArtifact 与可重试生命周期 |
+| Phase 7 | 已完成，Final Gate 已通过 | 唯一 AI Gateway Chat 主链、每用户至多一个加密 BYOK Credential、pinned HTTPS transport、任务级 Selection Snapshot、稳定 failure code、attempt Usage ledger 与最小 Settings UI |
 
-当前停止在 Phase 6，Final Gate 已通过。Phase 7 尚未开始；本次修复没有进入 Phase 7。
+当前停止在 Phase 7，独立 Final Gate 已通过。Phase 8 尚未开始，未经明确授权不得进入。Phase 1–6 的冻结语义（Evidence 三态、Rewrite 事实闭包、Preview / Export 只读 seam）未被 Phase 7 改变。
 
 ## 2. 当前系统与主流程
 
 当前系统是 Vue 3 SPA + Spring Boot 模块化单体，使用 PostgreSQL / Flyway / pgvector、Redis、Local / MinIO，以及 OpenAI-compatible Chat / Embedding 接口。PostgreSQL 是业务事实来源；Redis 只保存可重建内容；文件访问统一经过存储抽象和用户归属校验。
 
-当前前端路由只有 Landing、首页、我的简历、岗位分析结果、优化工作区、登录和注册；一级导航只有首页和我的简历。岗位库、独立目标岗位管理、旧匹配编排和技术分类式 AI 历史不在默认用户流中。
+Chat AI 调用在 Phase 7 收敛为唯一 seam：业务模块只依赖 `AiGateway` 并显式携带 user/task 上下文与 Selection Snapshot，不接触 API Key、Authorization、Provider URL 或 HTTP 细节；Gateway 负责 selection、SYSTEM / USER 分离、模型 / 配置、安全传输、重试 / 时限、稳定错误映射和 Usage 记录。Embedding 保持 platform-only，只使用系统配置并经同一 pinned transport，不使用 BYOK。用户 BYOK 只通过 Settings 页配置；无 Credential / DISABLED 时新任务使用 System Default，ACTIVE 时使用 BYOK，BYOK 失败绝不静默回退 System Default。
+
+当前前端路由只有 Landing、首页、我的简历、岗位分析结果、优化工作区、AI Provider 设置、登录和注册；一级导航只有首页和我的简历，BYOK 设置位于账号区，不进入默认用户主流程。岗位库、独立目标岗位管理、旧匹配编排和技术分类式 AI 历史不在默认用户流中。
 
 ```text
 登录
@@ -56,6 +59,7 @@ Preview 与 Export 是同步渲染：只读取服务端已保存的 TARGET `stru
 - V20.1：将正式语义收敛为 MATCHED / PARTIAL_EVIDENCE / NO_EVIDENCE 和 SUFFICIENT / PARTIAL；旧 Phase 3 派生分析失效后可用冻结输入重试，V1 历史不变。
 - V21：只增加 `content_revision BIGINT NOT NULL DEFAULT 0`，不增加第二个内容字段。
 - V22：加法式建立 `export_artifacts`，补充 task ownership 与 task→TARGET 复合唯一索引，持久化 preflight 和 READY / DELETE_PENDING 生命周期；不修改 V1 数据。
+- V23：加法式建立 `ai_provider_credentials`、OptimizationTask AI Selection Snapshot 与 `ai_usage_records`；Credential / Task / Usage 使用复合用户归属外键，旧 Task 回填为 SYSTEM_DEFAULT，部署 Secret 不迁入数据库。
 
 ## 4. 必须保持的设计约束
 
@@ -99,10 +103,9 @@ Preview 与 Export 是同步渲染：只读取服务端已保存的 TARGET `stru
 - 缺少事实时向用户询问并记录真实补充 / 确认。
 - 用户 Profile / Rules 与平台策略的完整分层；Phase 5 只有平台默认策略和本次自定义要求。
 - Markdown / JSON 迁移导出仍属后续 P1；不属于 Phase 6。
-- 每用户 BYOK、Credential 加密、统一 AI Gateway、自定义 Base URL SSRF 防护和 Usage 记录。
 - 用户数据导出 / 全量删除、最近优化列表和长期多 JD 求职方向洞察。
 
-以上能力必须继续按 `PLAN.md` 顺序推进；本次上下文整理不进入 Phase 7。
+以上能力必须继续按 `PLAN.md` 顺序推进；Phase 7 已通过独立 Final Gate，未经批准不进入 Phase 8。
 
 ## 6. 当前技术债与遗留风险
 
@@ -120,6 +123,7 @@ Preview 与 Export 是同步渲染：只读取服务端已保存的 TARGET `stru
 - 前端主 chunk 超过 Vite 500 kB 提示阈值，主要来自 Element Plus 全量引入；不影响当前正确性，但属于后续体验 / 性能优化项。
 - Typst 编译为同步请求：首次冷启动（字体扫描）可达十余秒，后续编译通常在秒级；当前以 30 秒编译超时与前端 65 秒请求超时兜底。若未来内容规模使同步无法满足，必须重新决策而不是自行引入后台导出架构。
 - 渲染依赖部署环境的 Typst 二进制与 CJK 字体：后端镜像与 CI 已内置固定版本（typst v0.15.1 + Noto CJK），非容器化部署必须自行安装；二进制缺失时渲染接口 fail closed，其它链路不受影响。
+- 本环境未使用真实公网 Provider Credential 执行 smoke；Provider 业务语义由合成 Credential、可控 fake Provider 与真实 TLS socket transport 覆盖。真实公网兼容性仍是非 Gate 环境风险。
 - 本机使用 Java 25 时需要显式开启 annotation processing 才能生成 Lombok 代码；CI 的标准运行环境是 Java 21。
 
 ## 7. 文档与事实优先级

@@ -4,9 +4,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -15,6 +18,7 @@ import static org.mockito.Mockito.when;
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.winter.airesumeoptimizer.common.exception.BusinessException;
+import com.winter.airesumeoptimizer.infra.ai.AiSelectionSnapshot;
 import com.winter.airesumeoptimizer.infra.storage.FileStorageService;
 import com.winter.airesumeoptimizer.infra.storage.StoreFileCommand;
 import com.winter.airesumeoptimizer.infra.storage.StoredFile;
@@ -113,6 +117,31 @@ class ResumeServiceImplTest {
             new ObjectMapper(),
             10 * 1024 * 1024,
             false);
+
+    {
+        lenient().when(resumeAiSectionClassifier.classify(
+                        anyLong(),
+                        anyLong(),
+                        anyList(),
+                        nullable(Boolean.class),
+                        nullable(AiSelectionSnapshot.class)))
+                .thenAnswer(invocation -> resumeAiSectionClassifier.classify(
+                        invocation.getArgument(1),
+                        invocation.getArgument(2),
+                        invocation.getArgument(3)));
+        lenient().when(resumeAiStructuredParser.parse(
+                        anyLong(),
+                        anyList(),
+                        any(),
+                        anyList(),
+                        nullable(Boolean.class),
+                        nullable(AiSelectionSnapshot.class)))
+                .thenAnswer(invocation -> resumeAiStructuredParser.parse(
+                        invocation.getArgument(1),
+                        invocation.getArgument(2),
+                        invocation.getArgument(3),
+                        invocation.getArgument(4)));
+    }
 
     @Test
     void uploadShouldSaveResumeMetadata() {

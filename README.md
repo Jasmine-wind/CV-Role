@@ -1,8 +1,8 @@
 # CV-Role / AI Resume Optimizer
 
-面向真实求职场景的岗位定向简历优化系统。当前已完成 V2 Phase 1–6：用户选择或上传真实简历、粘贴目标岗位 JD 后即可完成证据分析，在工作区可控编辑，并通过真实 Typst Preview 导出岗位定向 PDF。
+面向真实求职场景的岗位定向简历优化系统。当前已完成 V2 Phase 1–7：用户选择或上传真实简历、粘贴目标岗位 JD 后即可完成证据分析，在工作区可控编辑，并通过真实 Typst Preview 导出岗位定向 PDF；高级用户可在设置中选择账户级 BYOK。
 
-> 当前停止在 Phase 6，Final Gate 已通过；Phase 7 的 BYOK / AI Gateway 尚未开始。真实现状与差距见 [docs/CONTEXT.md](docs/CONTEXT.md)。
+> Phase 7 的 BYOK / AI Gateway 已通过独立 Final Gate；当前停止在 Phase 7，不进入 Phase 8。真实现状与差距见 [docs/CONTEXT.md](docs/CONTEXT.md)。
 
 
 ## 当前已实现
@@ -17,7 +17,8 @@
 - 单 Bullet AI Suggest、代码 Diff、Apply / Reject / Regenerate 和事实闭包校验
 - Classic / Modern / Minimal 内置模板、真实 Typst PDF Preview、导出前检查与私有 ExportArtifact 生命周期
 - 可恢复的异步任务状态查询；旧诊断、建议、局部改写和报告能力仍保留用于兼容
-- OpenAI-compatible Chat / Embedding 接入，pgvector 语义检索
+- 可选账户级 OpenAI-compatible BYOK、加密 Credential、任务级 AI Selection Snapshot 与最小 Usage ledger
+- OpenAI-compatible Chat / Platform-only Embedding 接入，pgvector 语义检索
 - PostgreSQL、Redis、MinIO、本地文件存储和 Flyway 迁移
 - Vue 3 前端、Docker Compose、Nginx、HTTPS 和运维脚本
 

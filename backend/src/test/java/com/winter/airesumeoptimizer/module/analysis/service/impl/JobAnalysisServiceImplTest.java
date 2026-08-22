@@ -10,6 +10,10 @@ import static org.mockito.Mockito.when;
 
 import com.winter.airesumeoptimizer.common.exception.BusinessException;
 import com.winter.airesumeoptimizer.infra.ai.AiClientService;
+import com.winter.airesumeoptimizer.infra.ai.AiFailureCode;
+import com.winter.airesumeoptimizer.infra.ai.AiGatewayException;
+import com.winter.airesumeoptimizer.infra.ai.AiSelectionSnapshot;
+import com.winter.airesumeoptimizer.infra.ai.AiSource;
 import com.winter.airesumeoptimizer.module.analysis.dto.JobAnalysisStartRequestDTO;
 import com.winter.airesumeoptimizer.module.analysis.vo.JobAnalysisStartVO;
 import com.winter.airesumeoptimizer.module.evidence.entity.EvidenceAnalysis;
@@ -217,6 +221,37 @@ class JobAnalysisServiceImplTest {
                 "无法读取简历");
         verify(jobDescriptionParseService, never()).parse(1L, 20L);
         verify(evidenceMatchService, never()).analyze(any(), any(), any());
+    }
+
+    @Test
+    void byokGatewayFailureShouldPersistStableCodeOnFormalAndAsyncTasks() {
+        AiSelectionSnapshot selection = new AiSelectionSnapshot(
+                AiSource.USER_BYOK,
+                AiSelectionSnapshot.OPENAI_COMPATIBLE,
+                77L,
+                5L,
+                "https://provider.example.com:443/v1",
+                "byok-model",
+                "{}",
+                null);
+        when(optimizationTaskService.getExecutionContext(1L, 50L))
+                .thenReturn(new ExecutionContext(50L, 10L, 20L, 30L, 40L, 41L, selection));
+        when(resumeService.getParseResult(1L, 10L)).thenReturn(successfulResumeParse());
+        when(jobDescriptionParseService.parse(1L, 20L, selection))
+                .thenThrow(new AiGatewayException(AiFailureCode.CREDENTIAL_CHANGED, "AI Credential 已变更或不可用"));
+
+        service.retry(1L, 50L);
+
+        verify(optimizationTaskService).markFailed(
+                1L,
+                50L,
+                AiFailureCode.CREDENTIAL_CHANGED.name(),
+                "AI Credential 已变更或不可用");
+        verify(asyncTaskService).markFailed(
+                100L,
+                AiFailureCode.CREDENTIAL_CHANGED.name(),
+                "AI Credential 已变更或不可用");
+        verify(evidenceMatchService, never()).analyze(any(), any(), any(), any());
     }
 
     @Test

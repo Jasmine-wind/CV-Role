@@ -8,10 +8,10 @@ import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-import java.nio.charset.StandardCharsets;
+import com.winter.airesumeoptimizer.infra.ai.transport.OutboundRequest;
+import com.winter.airesumeoptimizer.infra.ai.transport.OutboundResponse;
+import com.winter.airesumeoptimizer.infra.ai.transport.PinnedHttpTransport;
+import java.time.Duration;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -20,152 +20,127 @@ class OpenAiCompatibleAiClientServiceTest {
 
     @Test
     void extractContentShouldReturnAssistantContent() {
-        OpenAiCompatibleAiClientService service = new OpenAiCompatibleAiClientService(
-                new AiClientProperties(),
-                new ObjectMapper());
+        OpenAiCompatibleAiClientService service = new OpenAiCompatibleAiClientService(new ObjectMapper());
 
-        String responseBody = """
+        assertThat(service.extractContent("""
                 {"choices":[{"message":{"content":"基础 AI 调用成功"}}]}
-                """;
-
-        assertThat(service.extractContent(responseBody)).isEqualTo("基础 AI 调用成功");
+                """)).isEqualTo("基础 AI 调用成功");
     }
 
     @Test
     void extractContentShouldReadArrayContentText() {
-        OpenAiCompatibleAiClientService service = new OpenAiCompatibleAiClientService(
-                new AiClientProperties(),
-                new ObjectMapper());
+        OpenAiCompatibleAiClientService service = new OpenAiCompatibleAiClientService(new ObjectMapper());
 
-        String responseBody = """
+        assertThat(service.extractContent("""
                 {"choices":[{"message":{"content":[{"type":"text","text":"数组文本内容"}]}}]}
-                """;
-
-        assertThat(service.extractContent(responseBody)).isEqualTo("数组文本内容");
+                """)).isEqualTo("数组文本内容");
     }
 
     @Test
     void extractContentShouldReportLengthFinishReason() {
-        OpenAiCompatibleAiClientService service = new OpenAiCompatibleAiClientService(
-                new AiClientProperties(),
-                new ObjectMapper());
+        OpenAiCompatibleAiClientService service = new OpenAiCompatibleAiClientService(new ObjectMapper());
 
-        String responseBody = """
+        assertThatThrownBy(() -> service.extractContent("""
                 {"choices":[{"finish_reason":"length","message":{"content":""}}]}
-                """;
-
-        assertThatThrownBy(() -> service.extractContent(responseBody))
+                """))
                 .isInstanceOf(AiClientException.class)
                 .hasMessage("AI 响应中缺少文本内容，可能是 max_tokens 不足，请调大 AI_MAX_TOKENS 后重试");
     }
 
     @Test
     void completeShouldRejectMissingApiKey() {
-        AiClientProperties properties = new AiClientProperties();
-        properties.setBaseUrl("http://localhost:8080/v1");
-        properties.setModel("test-model");
+        OpenAiCompatibleAiClientService service = new OpenAiCompatibleAiClientService(new ObjectMapper());
 
-        OpenAiCompatibleAiClientService service = new OpenAiCompatibleAiClientService(
-                properties,
-                new ObjectMapper());
-
-        assertThatThrownBy(() -> service.complete("测试输入"))
-                .isInstanceOf(AiClientException.class)
-                .hasMessage("AI API Key 未配置");
+        assertThatThrownBy(() -> service.complete(providerRequest("", List.of(AiChatMessage.user("测试输入")))))
+                .isInstanceOf(AiGatewayException.class)
+                .extracting(exception -> ((AiGatewayException) exception).getFailureCode())
+                .isEqualTo(AiFailureCode.INVALID_CREDENTIAL);
     }
 
     @Test
-    @SuppressWarnings("unchecked")
     void completeShouldSendRoleSeparatedMessages() throws Exception {
-        AiClientProperties properties = configuredProperties();
         ObjectMapper objectMapper = new ObjectMapper();
-        HttpClient httpClient = mock(HttpClient.class);
-        HttpResponse<String> httpResponse = mock(HttpResponse.class);
-        when(httpResponse.statusCode()).thenReturn(200);
-        when(httpResponse.body()).thenReturn(
-                "{\"choices\":[{\"message\":{\"content\":\"改写结果\"}}]}");
-        when(httpClient.send(any(HttpRequest.class), any(HttpResponse.BodyHandler.class)))
-                .thenReturn(httpResponse);
+        PinnedHttpTransport transport = mock(PinnedHttpTransport.class);
+        when(transport.execute(any(OutboundRequest.class)))
+                .thenReturn(new OutboundResponse(
+                        200,
+                        java.util.Map.of(),
+                        "{\"choices\":[{\"message\":{\"content\":\"改写结果\"}}]}"));
+        OpenAiCompatibleAiClientService service = new OpenAiCompatibleAiClientService(objectMapper, transport);
 
-        OpenAiCompatibleAiClientService service = new OpenAiCompatibleAiClientService(
-                properties, objectMapper, httpClient);
-
-        String content = service.complete(List.of(
+        String content = service.complete(providerRequest("test-key", List.of(
                 AiChatMessage.system("平台真实性策略"),
-                AiChatMessage.user("不可信简历内容")));
+                AiChatMessage.user("不可信简历内容")))).text();
 
         assertThat(content).isEqualTo("改写结果");
-        ArgumentCaptor<HttpRequest> requestCaptor = ArgumentCaptor.forClass(HttpRequest.class);
-        org.mockito.Mockito.verify(httpClient).send(requestCaptor.capture(), any(HttpResponse.BodyHandler.class));
-        JsonNode messages = objectMapper.readTree(bodyOf(requestCaptor.getValue())).path("messages");
+        ArgumentCaptor<OutboundRequest> requestCaptor = ArgumentCaptor.forClass(OutboundRequest.class);
+        org.mockito.Mockito.verify(transport).execute(requestCaptor.capture());
+        JsonNode messages = objectMapper.readTree(requestCaptor.getValue().body()).path("messages");
         assertThat(messages).hasSize(2);
         assertThat(messages.get(0).path("role").asText()).isEqualTo("system");
         assertThat(messages.get(0).path("content").asText()).isEqualTo("平台真实性策略");
         assertThat(messages.get(1).path("role").asText()).isEqualTo("user");
         assertThat(messages.get(1).path("content").asText()).isEqualTo("不可信简历内容");
+        assertThat(requestCaptor.getValue().baseUrl()).isEqualTo("https://provider.example.com/v1");
+        assertThat(requestCaptor.getValue().endpointPath()).isEqualTo("/chat/completions");
     }
 
     @Test
     void completeShouldRejectEmptyMessageList() {
-        OpenAiCompatibleAiClientService service = new OpenAiCompatibleAiClientService(
-                configuredProperties(), new ObjectMapper());
+        OpenAiCompatibleAiClientService service = new OpenAiCompatibleAiClientService(new ObjectMapper());
 
-        assertThatThrownBy(() -> service.complete(List.of()))
-                .isInstanceOf(AiClientException.class)
-                .hasMessage("AI 输入不能为空");
+        assertThatThrownBy(() -> service.complete(providerRequest("test-key", List.of())))
+                .isInstanceOf(AiGatewayException.class)
+                .extracting(exception -> ((AiGatewayException) exception).getFailureCode())
+                .isEqualTo(AiFailureCode.SCHEMA_INVALID);
     }
 
     @Test
     void completeShouldRejectBlankMessageContent() {
-        OpenAiCompatibleAiClientService service = new OpenAiCompatibleAiClientService(
-                configuredProperties(), new ObjectMapper());
+        OpenAiCompatibleAiClientService service = new OpenAiCompatibleAiClientService(new ObjectMapper());
 
-        assertThatThrownBy(() -> service.complete(List.of(AiChatMessage.system("  "))))
-                .isInstanceOf(AiClientException.class)
-                .hasMessage("AI 输入不能为空");
+        assertThatThrownBy(() -> service.complete(providerRequest(
+                "test-key",
+                List.of(AiChatMessage.system("  ")))))
+                .isInstanceOf(AiGatewayException.class)
+                .extracting(exception -> ((AiGatewayException) exception).getFailureCode())
+                .isEqualTo(AiFailureCode.SCHEMA_INVALID);
     }
 
-    private AiClientProperties configuredProperties() {
-        AiClientProperties properties = new AiClientProperties();
-        properties.setBaseUrl("http://localhost:8080/v1");
-        properties.setModel("test-model");
-        properties.setApiKey("test-key");
-        return properties;
+    @Test
+    void completeShouldMap401And403ToDistinctStableCodesWithoutRawBodies() {
+        PinnedHttpTransport transport = mock(PinnedHttpTransport.class);
+        OpenAiCompatibleAiClientService service = new OpenAiCompatibleAiClientService(new ObjectMapper(), transport);
+        when(transport.execute(any(OutboundRequest.class)))
+                .thenReturn(new OutboundResponse(401, java.util.Map.of(), "raw secret error"))
+                .thenReturn(new OutboundResponse(403, java.util.Map.of(), "raw permission error"));
+
+        assertThatThrownBy(() -> service.complete(providerRequest(
+                "test-key", List.of(AiChatMessage.user("data")))))
+                .isInstanceOf(AiGatewayException.class)
+                .satisfies(exception -> {
+                    AiGatewayException gatewayException = (AiGatewayException) exception;
+                    assertThat(gatewayException.getFailureCode()).isEqualTo(AiFailureCode.INVALID_CREDENTIAL);
+                    assertThat(gatewayException.getMessage()).doesNotContain("raw secret error");
+                });
+        assertThatThrownBy(() -> service.complete(providerRequest(
+                "test-key", List.of(AiChatMessage.user("data")))))
+                .isInstanceOf(AiGatewayException.class)
+                .satisfies(exception -> {
+                    AiGatewayException gatewayException = (AiGatewayException) exception;
+                    assertThat(gatewayException.getFailureCode()).isEqualTo(AiFailureCode.PROVIDER_UNAUTHORIZED);
+                    assertThat(gatewayException.getMessage()).doesNotContain("raw permission error");
+                });
     }
 
-    private static String bodyOf(HttpRequest request) throws Exception {
-        HttpRequest.BodyPublisher publisher = request.bodyPublisher().orElseThrow();
-        java.util.concurrent.CompletableFuture<String> future = new java.util.concurrent.CompletableFuture<>();
-        List<java.nio.ByteBuffer> chunks = new java.util.ArrayList<>();
-        publisher.subscribe(new java.util.concurrent.Flow.Subscriber<>() {
-            @Override
-            public void onSubscribe(java.util.concurrent.Flow.Subscription subscription) {
-                subscription.request(Long.MAX_VALUE);
-            }
-
-            @Override
-            public void onNext(java.nio.ByteBuffer item) {
-                chunks.add(item);
-            }
-
-            @Override
-            public void onError(Throwable throwable) {
-                future.completeExceptionally(throwable);
-            }
-
-            @Override
-            public void onComplete() {
-                int size = chunks.stream().mapToInt(java.nio.ByteBuffer::remaining).sum();
-                byte[] bytes = new byte[size];
-                int position = 0;
-                for (java.nio.ByteBuffer chunk : chunks) {
-                    int remaining = chunk.remaining();
-                    chunk.get(bytes, position, remaining);
-                    position += remaining;
-                }
-                future.complete(new String(bytes, StandardCharsets.UTF_8));
-            }
-        });
-        return future.get(5, java.util.concurrent.TimeUnit.SECONDS);
+    private AiProviderRequest providerRequest(String apiKey, List<AiChatMessage> messages) {
+        return new AiProviderRequest(
+                apiKey,
+                "https://provider.example.com/v1",
+                "test-model",
+                0.2d,
+                100,
+                Duration.ofSeconds(5),
+                messages);
     }
 }

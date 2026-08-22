@@ -1,6 +1,7 @@
 package com.winter.airesumeoptimizer.module.resume.service.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -10,6 +11,10 @@ import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.winter.airesumeoptimizer.infra.ai.AiClientService;
+import com.winter.airesumeoptimizer.infra.ai.AiFailureCode;
+import com.winter.airesumeoptimizer.infra.ai.AiGatewayException;
+import com.winter.airesumeoptimizer.infra.ai.AiSelectionSnapshot;
+import com.winter.airesumeoptimizer.infra.ai.AiSource;
 import com.winter.airesumeoptimizer.module.resume.config.ResumeParseProperties;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeBlockDTO;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeStructuredContentDTO;
@@ -115,6 +120,32 @@ class ResumeAiStructuredParserImplTest {
         assertThat(result.getStructuredContent().getBasicInfo()).containsEntry("age", "23");
         assertThat(result.getStructuredContent().getSkills()).containsExactly("Java", "Spring Boot");
         assertThat(result.getStructuredContent().getProjects()).containsExactly("{\"name\":\"AI 简历优化系统\",\"description\":\"负责解析模块\"}");
+    }
+
+    @Test
+    void byokMalformedOutputShouldFailClosedInsteadOfRuleFallback() {
+        properties.setAiStructuredParseEnabled(true);
+        when(aiClientService.complete(anyString())).thenReturn("not-json");
+        AiSelectionSnapshot selection = new AiSelectionSnapshot(
+                AiSource.USER_BYOK,
+                AiSelectionSnapshot.OPENAI_COMPATIBLE,
+                77L,
+                5L,
+                "https://provider.example.com:443/v1",
+                "byok-model",
+                "{}",
+                null);
+
+        assertThatThrownBy(() -> service.parse(
+                1L,
+                blocks(),
+                ResumeStructuredContentDTO.builder().name("张三").build(),
+                List.of(),
+                true,
+                selection))
+                .isInstanceOf(AiGatewayException.class)
+                .extracting(exception -> ((AiGatewayException) exception).getFailureCode())
+                .isEqualTo(AiFailureCode.SCHEMA_INVALID);
     }
 
     @Test

@@ -40,11 +40,18 @@ public class EvidenceMatchPromptServiceImpl implements EvidenceMatchPromptServic
             throw new BusinessException(400, "简历结构化解析结果不能为空");
         }
 
+        String rendered = promptTemplateService.render(TEMPLATE_PATH, Map.of(
+                "jobStructuredContent", normalize(jobStructuredContent, MAX_JOB_STRUCTURED_LENGTH),
+                "resumeStructuredContent", resumeEvidenceContent(resumeStructuredContent)));
+        String boundary = "目标岗位结构化解析结果：";
+        int boundaryIndex = rendered.indexOf(boundary);
+        String systemPrompt = boundaryIndex < 0 ? rendered : rendered.substring(0, boundaryIndex).strip();
+        String userPrompt = boundaryIndex < 0 ? "" : rendered.substring(boundaryIndex).strip();
         return EvidenceMatchPromptDTO.builder()
                 .promptVersion(PROMPT_VERSION)
-                .prompt(promptTemplateService.render(TEMPLATE_PATH, Map.of(
-                        "jobStructuredContent", normalize(jobStructuredContent, MAX_JOB_STRUCTURED_LENGTH),
-                        "resumeStructuredContent", resumeEvidenceContent(resumeStructuredContent))))
+                .prompt(rendered)
+                .systemPrompt(systemPrompt)
+                .userPrompt(userPrompt)
                 .build();
     }
 

@@ -6,7 +6,13 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.winter.airesumeoptimizer.common.exception.BusinessException;
 import com.winter.airesumeoptimizer.common.logging.LogSanitizer;
-import com.winter.airesumeoptimizer.infra.ai.AiClientService;
+import com.winter.airesumeoptimizer.infra.ai.AiGatewayRequest;
+import com.winter.airesumeoptimizer.infra.ai.AiCompletionResult;
+import com.winter.airesumeoptimizer.infra.ai.AiGateway;
+import com.winter.airesumeoptimizer.infra.ai.AiGatewayException;
+import com.winter.airesumeoptimizer.infra.ai.AiGatewaySupport;
+import com.winter.airesumeoptimizer.infra.ai.AiInvocationContext;
+import com.winter.airesumeoptimizer.infra.ai.AiSelectionSnapshot;
 import com.winter.airesumeoptimizer.module.analysis.dto.AiResumeSuggestionPromptDTO;
 import com.winter.airesumeoptimizer.module.analysis.dto.AiResumeSuggestionResultDTO;
 import com.winter.airesumeoptimizer.module.analysis.entity.AiJobMatchResult;
@@ -50,7 +56,7 @@ public class AiResumeSuggestionServiceImpl implements AiResumeSuggestionService 
     private final AiResumeSuggestionMapper aiResumeSuggestionMapper;
     private final AiResumeSuggestionPromptService aiResumeSuggestionPromptService;
     private final AiResumeSuggestionOutputParser aiResumeSuggestionOutputParser;
-    private final AiClientService aiClientService;
+    private final AiGateway aiGateway;
     private final ObjectMapper objectMapper;
     private final ResumeRagService resumeRagService;
 
@@ -62,7 +68,7 @@ public class AiResumeSuggestionServiceImpl implements AiResumeSuggestionService 
             AiResumeSuggestionMapper aiResumeSuggestionMapper,
             AiResumeSuggestionPromptService aiResumeSuggestionPromptService,
             AiResumeSuggestionOutputParser aiResumeSuggestionOutputParser,
-            AiClientService aiClientService,
+            AiGateway aiGateway,
             ObjectMapper objectMapper,
             ResumeRagService resumeRagService) {
         this.resumeMapper = resumeMapper;
@@ -72,7 +78,7 @@ public class AiResumeSuggestionServiceImpl implements AiResumeSuggestionService 
         this.aiResumeSuggestionMapper = aiResumeSuggestionMapper;
         this.aiResumeSuggestionPromptService = aiResumeSuggestionPromptService;
         this.aiResumeSuggestionOutputParser = aiResumeSuggestionOutputParser;
-        this.aiClientService = aiClientService;
+        this.aiGateway = aiGateway;
         this.objectMapper = objectMapper;
         this.resumeRagService = resumeRagService;
     }
@@ -80,6 +86,10 @@ public class AiResumeSuggestionServiceImpl implements AiResumeSuggestionService 
     @Override
     @Transactional
     public AiResumeSuggestion generate(Long userId, Long resumeId, Long jobDescriptionId, Long aiJobMatchResultId) {
+        AiSelectionSnapshot selection = AiGatewaySupport.selectionForNewTask(
+                aiGateway,
+                userId,
+                "LEGACY_RESUME_SUGGESTION");
         Resume resume = getOwnedResume(userId, resumeId);
         ResumeParseResult parseResult = getSuccessfulResumeParseResult(resume.getId());
         JobDescription jobDescription = getOwnedSuccessfulJobDescription(userId, jobDescriptionId);
@@ -99,19 +109,28 @@ public class AiResumeSuggestionServiceImpl implements AiResumeSuggestionService 
                 resume.getId(),
                 jobDescription.getId(),
                 matchResult.getId(),
-                aiClientService.modelName(),
+                selection.model(),
                 ragContext.isUsed(),
                 ragContext.getMatchCount());
 
         try {
-            String aiOutput = aiClientService.complete(prompt.getPrompt());
-            AiResumeSuggestionResultDTO result = aiResumeSuggestionOutputParser.parse(aiOutput);
+            AiCompletionResult completion = AiGatewaySupport.complete(
+                    aiGateway,
+                    new AiInvocationContext(userId, null, "LEGACY_RESUME_SUGGESTION", selection),
+                    new AiGatewayRequest(
+                            "LEGACY_RESUME_SUGGESTION",
+                            prompt.getSystemPrompt() == null || prompt.getSystemPrompt().isBlank()
+                                    ? "只遵循服务端优化建议输出契约，不得编造事实。"
+                                    : prompt.getSystemPrompt(),
+                            prompt.getUserPrompt() == null ? prompt.getPrompt() : prompt.getUserPrompt()));
+            AiResumeSuggestionResultDTO result = aiResumeSuggestionOutputParser.parse(completion.text());
             AiResumeSuggestion savedSuggestion = saveSuccess(
                     resume.getId(),
                     jobDescription.getId(),
                     matchResult.getId(),
                     prompt.getPromptVersion(),
-                    result);
+                    result,
+                    completion.model());
             log.info("AI resume suggestion succeeded: userId={}, resumeId={}, jobDescriptionId={}, aiJobMatchResultId={}, model={}",
                     userId,
                     resume.getId(),
@@ -120,19 +139,23 @@ public class AiResumeSuggestionServiceImpl implements AiResumeSuggestionService 
                     savedSuggestion.getModelName());
             return savedSuggestion;
         } catch (RuntimeException exception) {
+            if (selection.isUserByok() && exception instanceof AiGatewayException) {
+                throw exception;
+            }
             String errorMessage = normalizeErrorMessage(exception);
             AiResumeSuggestion failedSuggestion = saveFailed(
                     resume.getId(),
                     jobDescription.getId(),
                     matchResult.getId(),
                     prompt.getPromptVersion(),
-                    errorMessage);
+                    errorMessage,
+                    selection.model());
             log.warn("AI resume suggestion failed: userId={}, resumeId={}, jobDescriptionId={}, aiJobMatchResultId={}, model={}, reason={}",
                     userId,
                     resume.getId(),
                     jobDescription.getId(),
                     matchResult.getId(),
-                    aiClientService.modelName(),
+                    selection.model(),
                     LogSanitizer.sanitize(errorMessage));
             return failedSuggestion;
         }
@@ -286,18 +309,19 @@ public class AiResumeSuggestionServiceImpl implements AiResumeSuggestionService 
             Long jobDescriptionId,
             Long aiJobMatchResultId,
             String promptVersion,
-            AiResumeSuggestionResultDTO result) {
+            AiResumeSuggestionResultDTO result,
+            String modelName) {
         try {
             AiResumeSuggestion suggestion = getOrCreateSuggestion(resumeId, jobDescriptionId, aiJobMatchResultId);
             suggestion.setSuggestionStatus(SUGGESTION_STATUS_SUCCESS);
             suggestion.setSuggestions(objectMapper.writeValueAsString(result.getSuggestions()));
-            suggestion.setModelName(aiClientService.modelName());
+            suggestion.setModelName(modelName);
             suggestion.setPromptVersion(promptVersion);
             suggestion.setErrorMessage(null);
             save(suggestion);
             return suggestion;
         } catch (JsonProcessingException exception) {
-            return saveFailed(resumeId, jobDescriptionId, aiJobMatchResultId, promptVersion, "AI 优化建议结果序列化失败");
+            return saveFailed(resumeId, jobDescriptionId, aiJobMatchResultId, promptVersion, "AI 优化建议结果序列化失败", modelName);
         }
     }
 
@@ -306,11 +330,12 @@ public class AiResumeSuggestionServiceImpl implements AiResumeSuggestionService 
             Long jobDescriptionId,
             Long aiJobMatchResultId,
             String promptVersion,
-            String errorMessage) {
+            String errorMessage,
+            String modelName) {
         AiResumeSuggestion suggestion = getOrCreateSuggestion(resumeId, jobDescriptionId, aiJobMatchResultId);
         suggestion.setSuggestionStatus(SUGGESTION_STATUS_FAILED);
         suggestion.setSuggestions(null);
-        suggestion.setModelName(aiClientService.modelName());
+        suggestion.setModelName(modelName);
         suggestion.setPromptVersion(promptVersion);
         suggestion.setErrorMessage(truncateErrorMessage(errorMessage));
         save(suggestion);

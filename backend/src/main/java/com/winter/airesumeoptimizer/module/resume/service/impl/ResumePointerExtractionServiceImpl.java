@@ -2,7 +2,13 @@ package com.winter.airesumeoptimizer.module.resume.service.impl;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.winter.airesumeoptimizer.infra.ai.AiClientService;
+import com.winter.airesumeoptimizer.infra.ai.AiGatewayRequest;
+import com.winter.airesumeoptimizer.infra.ai.AiFailureCode;
+import com.winter.airesumeoptimizer.infra.ai.AiGateway;
+import com.winter.airesumeoptimizer.infra.ai.AiGatewayException;
+import com.winter.airesumeoptimizer.infra.ai.AiGatewaySupport;
+import com.winter.airesumeoptimizer.infra.ai.AiInvocationContext;
+import com.winter.airesumeoptimizer.infra.ai.AiSelectionSnapshot;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeIndexedLineDTO;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeParseMode;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumePointerExtractionResultDTO;
@@ -24,12 +30,12 @@ public class ResumePointerExtractionServiceImpl implements ResumePointerExtracti
 
     static final String PROMPT_VERSION = "resume-pointer-extraction-v2.9.19.1";
 
-    private final AiClientService aiClientService;
+    private final AiGateway aiGateway;
     private final ObjectMapper objectMapper;
     private final ConcurrentMap<String, ResumePointerExtractionResultDTO> cache = new ConcurrentHashMap<>();
 
-    public ResumePointerExtractionServiceImpl(AiClientService aiClientService, ObjectMapper objectMapper) {
-        this.aiClientService = aiClientService;
+    public ResumePointerExtractionServiceImpl(AiGateway aiGateway, ObjectMapper objectMapper) {
+        this.aiGateway = aiGateway;
         this.objectMapper = objectMapper;
     }
 
@@ -39,10 +45,25 @@ public class ResumePointerExtractionServiceImpl implements ResumePointerExtracti
             List<ResumeIndexedLineDTO> indexedLines,
             ResumeParseMode parseMode,
             ResumePointerExtractorType extractorType) {
+        return extract(null, resumeId, indexedLines, parseMode, extractorType, null);
+    }
+
+    @Override
+    public ResumePointerExtractionResultDTO extract(
+            Long userId,
+            Long resumeId,
+            List<ResumeIndexedLineDTO> indexedLines,
+            ResumeParseMode parseMode,
+            ResumePointerExtractorType extractorType,
+            AiSelectionSnapshot selection) {
         if (parseMode == ResumeParseMode.FAST || indexedLines == null || indexedLines.isEmpty()) {
             return empty(extractorType, false, false);
         }
-        String cacheKey = cacheKey(resumeId, indexedLines, parseMode, extractorType);
+        if (selection == null && userId != null) {
+            selection = AiGatewaySupport.selectionForNewTask(
+                    aiGateway, userId, "RESUME_POINTER_EXTRACTION_SELECTION");
+        }
+        String cacheKey = cacheKey(userId, resumeId, indexedLines, parseMode, extractorType, selection);
         ResumePointerExtractionResultDTO cached = cache.get(cacheKey);
         if (cached != null) {
             ResumePointerExtractionResultDTO cachedCopy = copy(cached);
@@ -51,7 +72,14 @@ public class ResumePointerExtractionServiceImpl implements ResumePointerExtracti
             return cachedCopy;
         }
         try {
-            String output = aiClientService.complete(buildPrompt(indexedLines, extractorType));
+            String prompt = buildPrompt(indexedLines, extractorType);
+            String output = AiGatewaySupport.completeText(
+                    aiGateway,
+                    new AiInvocationContext(userId, null, "RESUME_POINTER_EXTRACTION", selection),
+                    new AiGatewayRequest(
+                            "RESUME_POINTER_EXTRACTION",
+                            "只输出合法 JSON；不得改写或补充简历事实。",
+                            prompt));
             ResumePointerExtractionResultDTO result = objectMapper.readValue(extractJson(output), ResumePointerExtractionResultDTO.class);
             sanitize(result, indexedLines, extractorType);
             result.setExtractorType(extractorType);
@@ -61,6 +89,12 @@ public class ResumePointerExtractionServiceImpl implements ResumePointerExtracti
             cache.put(cacheKey, copy(result));
             return result;
         } catch (RuntimeException | JsonProcessingException exception) {
+            if (selection != null && selection.isUserByok()) {
+                if (exception instanceof AiGatewayException gatewayException) {
+                    throw gatewayException;
+                }
+                throw new AiGatewayException(AiFailureCode.SCHEMA_INVALID, "AI 简历定位结果格式异常");
+            }
             return empty(extractorType, true, false);
         }
     }
@@ -230,14 +264,21 @@ public class ResumePointerExtractionServiceImpl implements ResumePointerExtracti
         return value.strip().matches("^(公司名称|职位名称|工作时间|工作描述|项目名称|项目描述|开发环境|技术选型|毕业院校|学历|专业|姓名|电话|邮箱|未识别)[:：]?$");
     }
 
-    private String cacheKey(Long resumeId, List<ResumeIndexedLineDTO> indexedLines, ResumeParseMode parseMode, ResumePointerExtractorType extractorType) {
+    private String cacheKey(
+            Long userId,
+            Long resumeId,
+            List<ResumeIndexedLineDTO> indexedLines,
+            ResumeParseMode parseMode,
+            ResumePointerExtractorType extractorType,
+            AiSelectionSnapshot selection) {
         return "pointer"
+                + ":userId=" + (userId == null ? "unknown" : userId)
                 + ":resumeId=" + (resumeId == null ? "unknown" : resumeId)
+                + ":selection=" + (selection == null ? "legacy-system" : selection.cacheIdentity(userId))
                 + ":indexedLinesHash=" + sha256(indexedLines.stream().map(line -> line.getLineId() + ":" + line.getNormalizedText()).reduce("", (left, right) -> left + "\n" + right))
                 + ":parseMode=" + parseMode
                 + ":extractorType=" + extractorType
                 + ":promptVersion=" + PROMPT_VERSION
-                + ":modelName=" + aiClientService.modelName()
                 + ":parserVersion=" + ResumeParseVersions.PARSER_VERSION;
     }
 

@@ -4,7 +4,14 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.winter.airesumeoptimizer.common.logging.LogSanitizer;
-import com.winter.airesumeoptimizer.infra.ai.AiClientService;
+import com.winter.airesumeoptimizer.infra.ai.AiGatewayRequest;
+import com.winter.airesumeoptimizer.infra.ai.AiCompletionResult;
+import com.winter.airesumeoptimizer.infra.ai.AiFailureCode;
+import com.winter.airesumeoptimizer.infra.ai.AiGateway;
+import com.winter.airesumeoptimizer.infra.ai.AiGatewayException;
+import com.winter.airesumeoptimizer.infra.ai.AiGatewaySupport;
+import com.winter.airesumeoptimizer.infra.ai.AiInvocationContext;
+import com.winter.airesumeoptimizer.infra.ai.AiSelectionSnapshot;
 import com.winter.airesumeoptimizer.infra.cache.RedisJsonCacheService;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeAchievementDTO;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeDisplayModelDTO;
@@ -65,21 +72,21 @@ public class ResumeDisplayModelServiceImpl implements ResumeDisplayModelService 
             Map.entry("data", "AI / 算法"),
             Map.entry("other", "其他技能"));
 
-    private final AiClientService aiClientService;
+    private final AiGateway aiGateway;
     private final ObjectMapper objectMapper;
     private final ConcurrentMap<String, ResumeDisplayModelDTO> cache = new ConcurrentHashMap<>();
     private final RedisJsonCacheService redisJsonCacheService;
 
-    public ResumeDisplayModelServiceImpl(AiClientService aiClientService, ObjectMapper objectMapper) {
-        this(aiClientService, objectMapper, null);
+    public ResumeDisplayModelServiceImpl(AiGateway aiGateway, ObjectMapper objectMapper) {
+        this(aiGateway, objectMapper, null);
     }
 
     @Autowired
     public ResumeDisplayModelServiceImpl(
-            AiClientService aiClientService,
+            AiGateway aiGateway,
             ObjectMapper objectMapper,
             RedisJsonCacheService redisJsonCacheService) {
-        this.aiClientService = aiClientService;
+        this.aiGateway = aiGateway;
         this.objectMapper = objectMapper;
         this.redisJsonCacheService = redisJsonCacheService;
     }
@@ -121,46 +128,96 @@ public class ResumeDisplayModelServiceImpl implements ResumeDisplayModelService 
 
     @Override
     public ResumeDisplayModelDTO buildAiDisplayModel(Long resumeId, ResumeStructuredContentDTO structuredContent) {
+        return buildAiDisplayModel(null, resumeId, structuredContent, null);
+    }
+
+    @Override
+    public ResumeDisplayModelDTO buildAiDisplayModel(
+            Long resumeId,
+            ResumeStructuredContentDTO structuredContent,
+            AiSelectionSnapshot selection) {
+        return buildAiDisplayModel(null, resumeId, structuredContent, selection);
+    }
+
+    public ResumeDisplayModelDTO buildAiDisplayModel(
+            Long userId,
+            Long resumeId,
+            ResumeStructuredContentDTO structuredContent,
+            AiSelectionSnapshot selection) {
         long startedAt = System.nanoTime();
         ResumeDisplayModelDTO ruleModel = buildRuleDisplayModel(resumeId, structuredContent);
+        if (selection == null && userId != null) {
+            selection = AiGatewaySupport.selectionForNewTask(
+                    aiGateway, userId, "RESUME_DISPLAY_MODEL_SELECTION");
+        }
         try {
             Map<String, Object> promptInput = buildPromptInput(structuredContent);
-            String cacheKey = buildCacheKey(resumeId, promptInput);
+            String cacheKey = buildCacheKey(userId, resumeId, promptInput, selection);
             ResumeDisplayModelDTO cached = getCachedDisplayModel(cacheKey);
             if (cached != null) {
                 ResumeDisplayModelDTO cachedCopy = copy(cached);
-                applyDisplayMeta(cachedCopy, "AI", true, false, "", elapsedMs(startedAt), true, cacheKey);
+                applyDisplayMeta(cachedCopy, "AI", true, false, "", elapsedMs(startedAt), true, cacheKey, selection);
                 return cachedCopy;
             }
             String prompt = buildPrompt(promptInput);
-            String aiOutput = aiClientService.complete(prompt);
-            ResumeDisplayModelDTO aiModel = readDisplayModel(aiOutput);
+            AiCompletionResult completion = AiGatewaySupport.complete(
+                    aiGateway,
+                    new AiInvocationContext(userId, null, "RESUME_DISPLAY_MODEL", selection),
+                    displayRequest(prompt));
+            ResumeDisplayModelDTO aiModel = readDisplayModel(completion.text());
             ResumeDisplayModelDTO validated = validateAiModel(aiModel, ruleModel, structuredContent);
-            applyDisplayMeta(validated, "AI", true, false, "", elapsedMs(startedAt), false, cacheKey);
+            applyDisplayMeta(validated, "AI", true, false, "", elapsedMs(startedAt), false, cacheKey, selection);
             putCachedDisplayModel(cacheKey, validated);
             return validated;
         } catch (RuntimeException exception) {
+            if (selection != null && selection.isUserByok()) {
+                if (exception instanceof AiGatewayException gatewayException) {
+                    throw gatewayException;
+                }
+                throw new AiGatewayException(AiFailureCode.SCHEMA_INVALID, "AI 展示模型结果格式异常");
+            }
             log.warn("Resume AI display model fallback: resumeId={}, reason={}",
                     resumeId,
                     LogSanitizer.sanitize(exception.getMessage()));
             ResumeDisplayModelDTO fallback = copy(ruleModel);
-            applyDisplayMeta(fallback, "RULE", false, true, safeError(exception.getMessage()), elapsedMs(startedAt), false, "");
+            applyDisplayMeta(fallback, "RULE", false, true, safeError(exception.getMessage()), elapsedMs(startedAt), false, "", selection);
             return fallback;
         }
     }
 
     @Override
     public ResumeDisplayModelDTO getCachedAiDisplayModel(Long resumeId, ResumeStructuredContentDTO structuredContent) {
+        return getCachedAiDisplayModel(null, resumeId, structuredContent, null);
+    }
+
+    @Override
+    public ResumeDisplayModelDTO getCachedAiDisplayModel(
+            Long resumeId,
+            ResumeStructuredContentDTO structuredContent,
+            AiSelectionSnapshot selection) {
+        return getCachedAiDisplayModel(null, resumeId, structuredContent, selection);
+    }
+
+    @Override
+    public ResumeDisplayModelDTO getCachedAiDisplayModel(
+            Long userId,
+            Long resumeId,
+            ResumeStructuredContentDTO structuredContent,
+            AiSelectionSnapshot selection) {
         long startedAt = System.nanoTime();
+        if (selection == null && userId != null) {
+            selection = AiGatewaySupport.selectionForNewTask(
+                    aiGateway, userId, "RESUME_DISPLAY_MODEL_CACHE_SELECTION");
+        }
         try {
             Map<String, Object> promptInput = buildPromptInput(structuredContent);
-            String cacheKey = buildCacheKey(resumeId, promptInput);
+            String cacheKey = buildCacheKey(userId, resumeId, promptInput, selection);
             ResumeDisplayModelDTO cached = getCachedDisplayModel(cacheKey);
             if (cached == null) {
                 return null;
             }
             ResumeDisplayModelDTO cachedCopy = copy(cached);
-            applyDisplayMeta(cachedCopy, "AI", true, false, "", elapsedMs(startedAt), true, cacheKey);
+            applyDisplayMeta(cachedCopy, "AI", true, false, "", elapsedMs(startedAt), true, cacheKey, selection);
             return cachedCopy;
         } catch (RuntimeException exception) {
             log.warn("Resume cached AI display model ignored: resumeId={}, reason={}",
@@ -772,7 +829,8 @@ public class ResumeDisplayModelServiceImpl implements ResumeDisplayModelService 
             String errorMessage,
             long durationMs,
             boolean cacheHit,
-            String cacheKey) {
+            String cacheKey,
+            AiSelectionSnapshot selection) {
         if (model == null) {
             return;
         }
@@ -786,17 +844,23 @@ public class ResumeDisplayModelServiceImpl implements ResumeDisplayModelService 
                 .cacheKeyDigest(cacheKey == null || cacheKey.isBlank() ? "" : sha256(cacheKey).substring(0, 16))
                 .displayPromptVersion(DISPLAY_PROMPT_VERSION)
                 .displayAdapterVersion(DISPLAY_ADAPTER_VERSION)
-                .modelName(modelName())
+                .modelName(modelName(selection))
                 .build());
     }
 
-    private String buildCacheKey(Long resumeId, Map<String, Object> promptInput) {
+    private String buildCacheKey(
+            Long userId,
+            Long resumeId,
+            Map<String, Object> promptInput,
+            AiSelectionSnapshot selection) {
         try {
+            String selectionIdentity = selection == null ? "legacy-system" : selection.cacheIdentity(userId);
             return "resumeDisplay"
+                    + ":userId=" + (userId == null ? "unknown" : userId)
                     + ":resumeId=" + (resumeId == null ? "unknown" : resumeId)
                     + ":structuredDataHash=" + sha256(objectMapper.writeValueAsString(promptInput))
                     + ":displayPromptVersion=" + DISPLAY_PROMPT_VERSION
-                    + ":modelName=" + modelName()
+                    + ":selection=" + selectionIdentity
                     + ":displayAdapterVersion=" + DISPLAY_ADAPTER_VERSION;
         } catch (JsonProcessingException exception) {
             throw new IllegalStateException("AI 展示优化缓存 key 构建失败", exception);
@@ -1196,8 +1260,27 @@ public class ResumeDisplayModelServiceImpl implements ResumeDisplayModelService 
     }
 
     private String modelName() {
-        String modelName = aiClientService.modelName();
-        return modelName == null || modelName.isBlank() ? "unknown" : modelName;
+        // Rule-derived display metadata has no provider invocation context;
+        // never query another user's Credential merely to populate a label.
+        return "unknown";
+    }
+
+    private String modelName(AiSelectionSnapshot selection) {
+        if (selection != null && selection.model() != null && !selection.model().isBlank()) {
+            return selection.model();
+        }
+        return modelName();
+    }
+
+    private AiGatewayRequest displayRequest(String renderedPrompt) {
+        String boundary = "输入：";
+        int boundaryIndex = renderedPrompt.lastIndexOf(boundary);
+        if (boundaryIndex < 0) {
+            return new AiGatewayRequest("RESUME_DISPLAY_MODEL", renderedPrompt, "{}");
+        }
+        String system = renderedPrompt.substring(0, boundaryIndex).strip();
+        String user = renderedPrompt.substring(boundaryIndex).strip();
+        return new AiGatewayRequest("RESUME_DISPLAY_MODEL", system, user);
     }
 
     private long elapsedMs(long startedAt) {

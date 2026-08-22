@@ -565,6 +565,16 @@
   background: var(--app-bg-soft);
 }
 
+.app-sidebar-settings {
+  color: var(--app-text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.app-sidebar-settings.router-link-active {
+  color: var(--app-primary);
+}
+
 .app-sidebar-user strong,
 .app-sidebar-user small {
   display: block;

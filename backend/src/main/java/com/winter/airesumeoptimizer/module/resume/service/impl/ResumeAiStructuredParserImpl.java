@@ -6,7 +6,14 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.winter.airesumeoptimizer.common.logging.LogSanitizer;
-import com.winter.airesumeoptimizer.infra.ai.AiClientService;
+import com.winter.airesumeoptimizer.infra.ai.AiGatewayRequest;
+import com.winter.airesumeoptimizer.infra.ai.AiCompletionResult;
+import com.winter.airesumeoptimizer.infra.ai.AiFailureCode;
+import com.winter.airesumeoptimizer.infra.ai.AiGateway;
+import com.winter.airesumeoptimizer.infra.ai.AiGatewayException;
+import com.winter.airesumeoptimizer.infra.ai.AiGatewaySupport;
+import com.winter.airesumeoptimizer.infra.ai.AiInvocationContext;
+import com.winter.airesumeoptimizer.infra.ai.AiSelectionSnapshot;
 import com.winter.airesumeoptimizer.module.resume.config.ResumeParseProperties;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeAiStructuredParseResultDTO;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeBlockDTO;
@@ -41,7 +48,7 @@ public class ResumeAiStructuredParserImpl implements ResumeAiStructuredParser {
     private final ResumeParseProperties properties;
     private final ResumeStructuredParsePromptService promptService;
     private final ResumeParseValidator resumeParseValidator;
-    private final AiClientService aiClientService;
+    private final AiGateway aiGateway;
     private final ObjectMapper objectMapper;
     private final ConcurrentMap<String, ResumeStructuredContentDTO> cache = new ConcurrentHashMap<>();
 
@@ -49,12 +56,12 @@ public class ResumeAiStructuredParserImpl implements ResumeAiStructuredParser {
             ResumeParseProperties properties,
             ResumeStructuredParsePromptService promptService,
             ResumeParseValidator resumeParseValidator,
-            AiClientService aiClientService,
+            AiGateway aiGateway,
             ObjectMapper objectMapper) {
         this.properties = properties;
         this.promptService = promptService;
         this.resumeParseValidator = resumeParseValidator;
-        this.aiClientService = aiClientService;
+        this.aiGateway = aiGateway;
         this.objectMapper = objectMapper;
     }
 
@@ -72,6 +79,17 @@ public class ResumeAiStructuredParserImpl implements ResumeAiStructuredParser {
             ResumeStructuredContentDTO ruleStructuredContent,
             List<String> qualityWarnings,
             Boolean enabledOverride) {
+        return parse(null, blocks, ruleStructuredContent, qualityWarnings, enabledOverride, null);
+    }
+
+    @Override
+    public ResumeAiStructuredParseResultDTO parse(
+            Long userId,
+            List<ResumeBlockDTO> blocks,
+            ResumeStructuredContentDTO ruleStructuredContent,
+            List<String> qualityWarnings,
+            Boolean enabledOverride,
+            AiSelectionSnapshot selection) {
         long startedAt = System.nanoTime();
         boolean enabled = enabledOverride == null ? properties.aiStructuredParseEnabled() : Boolean.TRUE.equals(enabledOverride);
         if (!enabled) {
@@ -89,11 +107,15 @@ public class ResumeAiStructuredParserImpl implements ResumeAiStructuredParser {
         if (aiBlocks.size() > properties.aiMaxBlocks()) {
             return skipped(true, "AI_BLOCK_LIMIT_EXCEEDED", ruleStructuredContent, qualityWarnings, startedAt);
         }
+        if (selection == null && userId != null) {
+            selection = AiGatewaySupport.selectionForNewTask(
+                    aiGateway, userId, "RESUME_STRUCTURED_PARSE_SELECTION");
+        }
 
         List<String> warnings = new ArrayList<>(qualityWarnings == null ? List.of() : qualityWarnings);
         try {
             ResumeStructuredParsePromptDTO prompt = promptService.buildPrompt(aiBlocks, ruleStructuredContent, warnings);
-            String cacheKey = buildCacheKey(aiBlocks, prompt, ruleStructuredContent);
+            String cacheKey = buildCacheKey(userId, aiBlocks, prompt, ruleStructuredContent, selection);
             ResumeStructuredContentDTO cached = cache.get(cacheKey);
             if (cached != null) {
                 return ResumeAiStructuredParseResultDTO.builder()
@@ -109,7 +131,17 @@ public class ResumeAiStructuredParserImpl implements ResumeAiStructuredParser {
                         .qualityWarnings(cached.getQualityWarnings())
                         .build();
             }
-            String aiOutput = aiClientService.complete(prompt.getPrompt());
+            String trustedPolicy = prompt.getSystemPrompt() == null || prompt.getSystemPrompt().isBlank()
+                    ? "只遵循服务端简历结构化输出契约。"
+                    : prompt.getSystemPrompt();
+            String untrustedData = prompt.getUserPrompt() == null || prompt.getUserPrompt().isBlank()
+                    ? prompt.getPrompt()
+                    : prompt.getUserPrompt();
+            AiCompletionResult completion = AiGatewaySupport.complete(
+                    aiGateway,
+                    new AiInvocationContext(userId, null, "RESUME_STRUCTURED_PARSE", selection),
+                    new AiGatewayRequest("RESUME_STRUCTURED_PARSE", trustedPolicy, untrustedData));
+            String aiOutput = completion.text();
             ResumeStructuredContentDTO aiContent = readAiStructuredContent(aiOutput);
             if (aiContent.getQualityWarnings() != null) {
                 warnings.addAll(aiContent.getQualityWarnings());
@@ -132,10 +164,19 @@ public class ResumeAiStructuredParserImpl implements ResumeAiStructuredParser {
                     .qualityWarnings(validated.getQualityWarnings())
                     .build();
         } catch (JsonProcessingException exception) {
+            if (selection != null && selection.isUserByok()) {
+                throw new AiGatewayException(AiFailureCode.SCHEMA_INVALID, "AI 结构化补全结果格式异常");
+            }
             log.warn("Resume AI structured parse fallback: reason={}", LogSanitizer.sanitize(exception.getMessage()));
             return aiFallback("AI 结构化补全 JSON 解析失败：" + sanitizeErrorMessage(exception.getOriginalMessage()),
                     ruleStructuredContent, qualityWarnings, startedAt);
         } catch (RuntimeException exception) {
+            if (selection != null && selection.isUserByok()) {
+                if (exception instanceof AiGatewayException gatewayException) {
+                    throw gatewayException;
+                }
+                throw new AiGatewayException(AiFailureCode.SCHEMA_INVALID, "AI 结构化补全结果校验失败");
+            }
             log.warn("Resume AI structured parse fallback: reason={}", LogSanitizer.sanitize(exception.getMessage()));
             return aiFallback("AI 结构化补全失败：" + sanitizeErrorMessage(exception.getMessage()),
                     ruleStructuredContent, qualityWarnings, startedAt);
@@ -222,14 +263,23 @@ public class ResumeAiStructuredParserImpl implements ResumeAiStructuredParser {
     }
 
     private String buildCacheKey(
+            Long userId,
             List<ResumeBlockDTO> blocks,
             ResumeStructuredParsePromptDTO prompt,
-            ResumeStructuredContentDTO ruleStructuredContent) {
-        String modelName = aiClientService.modelName();
+            ResumeStructuredContentDTO ruleStructuredContent,
+            AiSelectionSnapshot selection) {
+        String selectionIdentity = selection == null ? "legacy-system" : selection.cacheIdentity(userId);
+        String modelIdentity = selection == null
+                ? nullToUnknown(AiGatewaySupport.modelName(
+                        aiGateway,
+                        new AiInvocationContext(userId, null, "RESUME_STRUCTURED_PARSE_CACHE", null)))
+                : nullToUnknown(selection.model());
         return "structured"
+                + ":userId=" + nullToUnknown(userId)
                 + ":cleanedTextHash=" + hashCleanedText(blocks)
                 + ":promptVersion=" + nullToUnknown(prompt == null ? null : prompt.getPromptVersion())
-                + ":modelName=" + nullToUnknown(modelName)
+                + ":selection=" + selectionIdentity
+                + ":modelName=" + modelIdentity
                 + ":parserVersion=" + ResumeParseVersions.PARSER_VERSION
                 + ":parseMode=" + nullToUnknown(ruleStructuredContent == null ? null : ruleStructuredContent.getParseMode())
                 + ":blockBuilderVersion=" + ResumeParseVersions.BLOCK_BUILDER_VERSION

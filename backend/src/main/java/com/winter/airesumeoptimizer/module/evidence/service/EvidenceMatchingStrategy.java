@@ -1,5 +1,6 @@
 package com.winter.airesumeoptimizer.module.evidence.service;
 
+import com.winter.airesumeoptimizer.infra.ai.AiSelectionSnapshot;
 import com.winter.airesumeoptimizer.module.evidence.dto.EvidenceMatchOutcomeDTO;
 
 /**
@@ -16,4 +17,13 @@ public interface EvidenceMatchingStrategy {
             String frozenJobDescription,
             String jobStructuredContent,
             String resumeStructuredContent);
+
+    default EvidenceMatchOutcomeDTO match(
+            Long userId,
+            String frozenJobDescription,
+            String jobStructuredContent,
+            String resumeStructuredContent,
+            AiSelectionSnapshot selection) {
+        return match(frozenJobDescription, jobStructuredContent, resumeStructuredContent);
+    }
 }

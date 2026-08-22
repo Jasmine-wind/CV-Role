@@ -1,0 +1,17 @@
+package com.winter.airesumeoptimizer.infra.ai;
+
+public enum AiFailureCode {
+    INVALID_CREDENTIAL,
+    PROVIDER_UNAUTHORIZED,
+    MODEL_NOT_FOUND,
+    RATE_LIMITED,
+    TIMEOUT,
+    PROVIDER_UNAVAILABLE,
+    SCHEMA_INVALID,
+    REFUSAL,
+    UNSAFE_BASE_URL,
+    RESPONSE_TOO_LARGE,
+    CREDENTIAL_CHANGED,
+    CONFIGURATION_INVALID,
+    INTERRUPTED
+}

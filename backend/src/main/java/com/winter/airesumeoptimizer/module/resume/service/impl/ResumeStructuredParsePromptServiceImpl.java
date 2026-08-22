@@ -34,9 +34,7 @@ public class ResumeStructuredParsePromptServiceImpl implements ResumeStructuredP
             String ruleJson = objectMapper.writeValueAsString(toPromptRuleContent(ruleStructuredContent));
             String warningsJson = objectMapper.writeValueAsString(qualityWarnings == null ? List.of() : qualityWarnings);
 
-            return ResumeStructuredParsePromptDTO.builder()
-                    .promptVersion(PROMPT_VERSION)
-                    .prompt("""
+            String rendered = """
                             你是简历结构化解析校正器。请只基于输入 classifiedBlocks 和 ruleStructuredContent 补全结构化 JSON。
 
                             约束：
@@ -92,7 +90,16 @@ public class ResumeStructuredParsePromptServiceImpl implements ResumeStructuredP
 
                             inputQualityWarnings:
                             %s
-                            """.formatted(blocksJson, ruleJson, warningsJson))
+                            """.formatted(blocksJson, ruleJson, warningsJson);
+            String boundary = "classifiedBlocks:";
+            int boundaryIndex = rendered.indexOf(boundary);
+            String systemPrompt = boundaryIndex < 0 ? rendered : rendered.substring(0, boundaryIndex).strip();
+            String userPrompt = boundaryIndex < 0 ? "" : rendered.substring(boundaryIndex).strip();
+            return ResumeStructuredParsePromptDTO.builder()
+                    .promptVersion(PROMPT_VERSION)
+                    .prompt(rendered)
+                    .systemPrompt(systemPrompt)
+                    .userPrompt(userPrompt)
                     .build();
         } catch (JsonProcessingException exception) {
             throw new BusinessException(500, "结构化解析 Prompt 序列化失败");

@@ -30,11 +30,18 @@ public class ResumeAnalysisPromptServiceImpl implements ResumeAnalysisPromptServ
             throw new BusinessException(400, "简历解析文本不能为空");
         }
 
+        String rendered = promptTemplateService.render(TEMPLATE_PATH, Map.of(
+                "structuredJson", normalizeStructuredJson(structuredJson),
+                "extractedText", normalizeExtractedText(extractedText)));
+        String boundary = "简历结构化解析 JSON：";
+        int boundaryIndex = rendered.indexOf(boundary);
+        String systemPrompt = boundaryIndex < 0 ? rendered : rendered.substring(0, boundaryIndex).strip();
+        String userPrompt = boundaryIndex < 0 ? "" : rendered.substring(boundaryIndex).strip();
         return ResumeAnalysisPromptDTO.builder()
                 .promptVersion(PROMPT_VERSION)
-                .prompt(promptTemplateService.render(TEMPLATE_PATH, Map.of(
-                        "structuredJson", normalizeStructuredJson(structuredJson),
-                        "extractedText", normalizeExtractedText(extractedText))))
+                .prompt(rendered)
+                .systemPrompt(systemPrompt)
+                .userPrompt(userPrompt)
                 .build();
     }
 

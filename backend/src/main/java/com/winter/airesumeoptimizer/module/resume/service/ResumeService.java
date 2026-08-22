@@ -1,5 +1,6 @@
 package com.winter.airesumeoptimizer.module.resume.service;
 
+import com.winter.airesumeoptimizer.infra.ai.AiSelectionSnapshot;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeParseOptionsDTO;
 import com.winter.airesumeoptimizer.module.resume.vo.ResumeUploadVO;
 import com.winter.airesumeoptimizer.module.resume.vo.ResumeDetailVO;
@@ -19,6 +20,21 @@ public interface ResumeService {
     ResumeParseResultVO parse(Long userId, Long resumeId);
 
     ResumeParseResultVO parse(Long userId, Long resumeId, ResumeParseOptionsDTO options);
+
+    default ResumeParseResultVO parseWithSelection(
+            Long userId,
+            Long resumeId,
+            AiSelectionSnapshot selection) {
+        return parse(userId, resumeId);
+    }
+
+    default ResumeParseResultVO parseWithSelection(
+            Long userId,
+            Long resumeId,
+            ResumeParseOptionsDTO options,
+            AiSelectionSnapshot selection) {
+        return parse(userId, resumeId, options);
+    }
 
     ResumeParseResultVO getParseResult(Long userId, Long resumeId);
 

@@ -95,6 +95,10 @@ app:
       timeout-seconds: ${AI_TIMEOUT_SECONDS:${OPENAI_TIMEOUT_SECONDS:90}}
       temperature: ${AI_TEMPERATURE:${OPENAI_TEMPERATURE:0.2}}
       max-tokens: ${AI_MAX_TOKENS:${OPENAI_MAX_TOKENS:16000}}
+    credentials:
+      enabled: ${AI_CREDENTIALS_ENABLED:false}
+      active-key-id: ${AI_CREDENTIALS_ACTIVE_KEY_ID:v1}
+      key-ring: ${AI_CREDENTIALS_KEY_RING:}
     embedding-compatible:
       api-key: ${EMBEDDING_API_KEY:}
       base-url: ${EMBEDDING_BASE_URL:https://api.siliconflow.cn/v1}

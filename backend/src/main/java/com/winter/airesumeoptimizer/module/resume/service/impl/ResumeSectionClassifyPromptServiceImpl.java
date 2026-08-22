@@ -40,18 +40,21 @@ public class ResumeSectionClassifyPromptServiceImpl implements ResumeSectionClas
         try {
             String inputJson = objectMapper.writeValueAsString(toPromptInput(blocks));
             String sectionsJson = objectMapper.writeValueAsString(SECTIONS);
+            String systemPrompt = """
+                    classify resume blocks. use only blocks[].text and minimal neighbor context. no fabrication. no rewriting.
+                    only classify blocks without locked source section. keep ruleSection when sectionLocked=true.
+                    section must be one of allowedSections. unknown => OTHERS. confidence is 0..1.
+                    return JSON only, no markdown, no explanation, no original text beyond index references.
+                    output fields only: items[].index, items[].section, items[].confidence, items[].reasonCode.
+                    allowedSections=%s
+                    """.formatted(sectionsJson).strip();
+            String userPrompt = "input=" + inputJson
+                    + "\nJSON={\"items\":[{\"index\":0,\"section\":\"BASIC_INFO\",\"confidence\":0.95,\"reasonCode\":\"CONTACT_CONTEXT\"}]}";
             return ResumeSectionClassifyPromptDTO.builder()
                     .promptVersion(PROMPT_VERSION)
-                    .prompt("""
-                            classify resume blocks. use only blocks[].text and minimal neighbor context. no fabrication. no rewriting.
-                            only classify blocks without locked source section. keep ruleSection when sectionLocked=true.
-                            section must be one of allowedSections. unknown => OTHERS. confidence is 0..1.
-                            return JSON only, no markdown, no explanation, no original text beyond index references.
-                            output fields only: items[].index, items[].section, items[].confidence, items[].reasonCode.
-                            allowedSections=%s
-                            input=%s
-                            JSON={"items":[{"index":0,"section":"BASIC_INFO","confidence":0.95,"reasonCode":"CONTACT_CONTEXT"}]}
-                            """.formatted(sectionsJson, inputJson))
+                    .prompt(systemPrompt + "\n" + userPrompt)
+                    .systemPrompt(systemPrompt)
+                    .userPrompt(userPrompt)
                     .build();
         } catch (JsonProcessingException exception) {
             throw new BusinessException(500, "章节归类 Prompt 序列化失败");

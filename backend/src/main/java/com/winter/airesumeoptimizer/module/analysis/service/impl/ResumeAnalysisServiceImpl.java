@@ -5,7 +5,13 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.winter.airesumeoptimizer.common.exception.BusinessException;
 import com.winter.airesumeoptimizer.common.logging.LogSanitizer;
-import com.winter.airesumeoptimizer.infra.ai.AiClientService;
+import com.winter.airesumeoptimizer.infra.ai.AiGatewayRequest;
+import com.winter.airesumeoptimizer.infra.ai.AiCompletionResult;
+import com.winter.airesumeoptimizer.infra.ai.AiGateway;
+import com.winter.airesumeoptimizer.infra.ai.AiGatewayException;
+import com.winter.airesumeoptimizer.infra.ai.AiGatewaySupport;
+import com.winter.airesumeoptimizer.infra.ai.AiInvocationContext;
+import com.winter.airesumeoptimizer.infra.ai.AiSelectionSnapshot;
 import com.winter.airesumeoptimizer.module.analysis.dto.ResumeAnalysisPromptDTO;
 import com.winter.airesumeoptimizer.module.analysis.dto.ResumeAnalysisResultDTO;
 import com.winter.airesumeoptimizer.module.analysis.entity.ResumeAiAnalysis;
@@ -38,7 +44,7 @@ public class ResumeAnalysisServiceImpl implements ResumeAnalysisService {
     private final ResumeAiAnalysisMapper resumeAiAnalysisMapper;
     private final ResumeAnalysisPromptService resumeAnalysisPromptService;
     private final ResumeAnalysisOutputParser resumeAnalysisOutputParser;
-    private final AiClientService aiClientService;
+    private final AiGateway aiGateway;
     private final ObjectMapper objectMapper;
 
     public ResumeAnalysisServiceImpl(
@@ -47,20 +53,24 @@ public class ResumeAnalysisServiceImpl implements ResumeAnalysisService {
             ResumeAiAnalysisMapper resumeAiAnalysisMapper,
             ResumeAnalysisPromptService resumeAnalysisPromptService,
             ResumeAnalysisOutputParser resumeAnalysisOutputParser,
-            AiClientService aiClientService,
+            AiGateway aiGateway,
             ObjectMapper objectMapper) {
         this.resumeMapper = resumeMapper;
         this.resumeParseResultMapper = resumeParseResultMapper;
         this.resumeAiAnalysisMapper = resumeAiAnalysisMapper;
         this.resumeAnalysisPromptService = resumeAnalysisPromptService;
         this.resumeAnalysisOutputParser = resumeAnalysisOutputParser;
-        this.aiClientService = aiClientService;
+        this.aiGateway = aiGateway;
         this.objectMapper = objectMapper;
     }
 
     @Override
     @Transactional
     public ResumeAiAnalysis analyze(Long userId, Long resumeId) {
+        AiSelectionSnapshot selection = AiGatewaySupport.selectionForNewTask(
+                aiGateway,
+                userId,
+                "RESUME_ANALYSIS");
         Resume resume = getOwnedResume(userId, resumeId);
         ResumeParseResult parseResult = getSuccessfulParseResult(resume.getId());
         ResumeAnalysisPromptDTO prompt = resumeAnalysisPromptService.buildPrompt(
@@ -69,12 +79,24 @@ public class ResumeAnalysisServiceImpl implements ResumeAnalysisService {
         log.info("Resume AI analysis started: userId={}, resumeId={}, model={}",
                 userId,
                 resume.getId(),
-                aiClientService.modelName());
+                selection.model());
 
         try {
-            String aiOutput = aiClientService.complete(prompt.getPrompt());
-            ResumeAnalysisResultDTO result = resumeAnalysisOutputParser.parse(aiOutput);
-            ResumeAiAnalysis analysis = saveSuccessAnalysis(resume.getId(), prompt.getPromptVersion(), result);
+            AiCompletionResult completion = AiGatewaySupport.complete(
+                    aiGateway,
+                    new AiInvocationContext(userId, null, "RESUME_ANALYSIS", selection),
+                    new AiGatewayRequest(
+                            "RESUME_ANALYSIS",
+                            prompt.getSystemPrompt() == null || prompt.getSystemPrompt().isBlank()
+                                    ? "只遵循服务端简历分析输出契约，不得编造事实。"
+                                    : prompt.getSystemPrompt(),
+                            prompt.getUserPrompt() == null ? prompt.getPrompt() : prompt.getUserPrompt()));
+            ResumeAnalysisResultDTO result = resumeAnalysisOutputParser.parse(completion.text());
+            ResumeAiAnalysis analysis = saveSuccessAnalysis(
+                    resume.getId(),
+                    prompt.getPromptVersion(),
+                    result,
+                    completion.model());
             log.info("Resume AI analysis succeeded: userId={}, resumeId={}, score={}, model={}",
                     userId,
                     resume.getId(),
@@ -82,15 +104,19 @@ public class ResumeAnalysisServiceImpl implements ResumeAnalysisService {
                     analysis.getModelName());
             return analysis;
         } catch (RuntimeException exception) {
+            if (selection.isUserByok() && exception instanceof AiGatewayException) {
+                throw exception;
+            }
             String errorMessage = normalizeErrorMessage(exception);
             ResumeAiAnalysis analysis = saveFailedAnalysis(
                     resume.getId(),
                     prompt.getPromptVersion(),
-                    errorMessage);
+                    errorMessage,
+                    selection.model());
             log.warn("Resume AI analysis failed: userId={}, resumeId={}, model={}, reason={}",
                     userId,
                     resume.getId(),
-                    aiClientService.modelName(),
+                    selection.model(),
                     LogSanitizer.sanitize(errorMessage));
             return analysis;
         }
@@ -142,7 +168,8 @@ public class ResumeAnalysisServiceImpl implements ResumeAnalysisService {
     private ResumeAiAnalysis saveSuccessAnalysis(
             Long resumeId,
             String promptVersion,
-            ResumeAnalysisResultDTO result) {
+            ResumeAnalysisResultDTO result,
+            String modelName) {
         try {
             ResumeAiAnalysis analysis = getOrCreateAnalysis(resumeId);
             analysis.setAnalysisStatus(ANALYSIS_STATUS_SUCCESS);
@@ -150,24 +177,28 @@ public class ResumeAnalysisServiceImpl implements ResumeAnalysisService {
             analysis.setStrengths(objectMapper.writeValueAsString(result.getStrengths()));
             analysis.setProblems(objectMapper.writeValueAsString(result.getProblems()));
             analysis.setSuggestionsSummary(objectMapper.writeValueAsString(result.getSuggestionsSummary()));
-            analysis.setModelName(aiClientService.modelName());
+            analysis.setModelName(modelName);
             analysis.setPromptVersion(promptVersion);
             analysis.setErrorMessage(null);
             saveAnalysis(analysis);
             return analysis;
         } catch (JsonProcessingException exception) {
-            return saveFailedAnalysis(resumeId, promptVersion, "AI 分析结果序列化失败");
+            return saveFailedAnalysis(resumeId, promptVersion, "AI 分析结果序列化失败", modelName);
         }
     }
 
-    private ResumeAiAnalysis saveFailedAnalysis(Long resumeId, String promptVersion, String errorMessage) {
+    private ResumeAiAnalysis saveFailedAnalysis(
+            Long resumeId,
+            String promptVersion,
+            String errorMessage,
+            String modelName) {
         ResumeAiAnalysis analysis = getOrCreateAnalysis(resumeId);
         analysis.setAnalysisStatus(ANALYSIS_STATUS_FAILED);
         analysis.setScore(null);
         analysis.setStrengths(null);
         analysis.setProblems(null);
         analysis.setSuggestionsSummary(null);
-        analysis.setModelName(aiClientService.modelName());
+        analysis.setModelName(modelName);
         analysis.setPromptVersion(promptVersion);
         analysis.setErrorMessage(truncateErrorMessage(errorMessage));
         saveAnalysis(analysis);

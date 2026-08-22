@@ -16,4 +16,8 @@ public class ResumeStructuredParsePromptDTO {
     private String promptVersion;
 
     private String prompt;
+
+    private String systemPrompt;
+
+    private String userPrompt;
 }

@@ -2,7 +2,13 @@ package com.winter.airesumeoptimizer.infra.ai;
 
 import java.util.List;
 
-public interface AiClientService {
+/**
+ * Legacy compatibility contract retained for old tests and compatibility adapters.
+ * Production business code depends on {@link AiGateway} and calls through
+ * {@link AiGatewaySupport}; this interface must not be injected into business modules.
+ */
+@Deprecated(forRemoval = false)
+public interface AiClientService extends AiGateway {
 
     /**
      * 按角色分离的消息列表执行补全。
@@ -19,4 +25,18 @@ public interface AiClientService {
     }
 
     String modelName();
+
+    @Override
+    default AiCompletionResult complete(AiInvocationContext context, AiGatewayRequest request) {
+        return AiCompletionResult.legacy(
+                complete(List.of(
+                        AiChatMessage.system(request.trustedPolicy()),
+                        AiChatMessage.user(request.untrustedData()))),
+                modelName());
+    }
+
+    @Override
+    default String modelName(AiInvocationContext context) {
+        return modelName();
+    }
 }

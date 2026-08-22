@@ -41,6 +41,20 @@ public class OptimizationTask {
 
     private String providerSnapshot;
 
+    private String aiSourceSnapshot;
+
+    private String aiProviderSnapshot;
+
+    private Long aiCredentialId;
+
+    private Long aiCredentialIdSnapshot;
+
+    private Long aiCredentialRevision;
+
+    private String aiBaseUrlSnapshot;
+
+    private String aiConfigSnapshot;
+
     private String modelSnapshot;
 
     private String templateVersion;

@@ -2,9 +2,15 @@ package com.winter.airesumeoptimizer.module.workspace.service.impl;
 
 import com.winter.airesumeoptimizer.common.exception.BusinessException;
 import com.winter.airesumeoptimizer.common.logging.LogSanitizer;
-import com.winter.airesumeoptimizer.infra.ai.AiChatMessage;
+import com.winter.airesumeoptimizer.infra.ai.AiGatewayRequest;
 import com.winter.airesumeoptimizer.infra.ai.AiClientException;
-import com.winter.airesumeoptimizer.infra.ai.AiClientService;
+import com.winter.airesumeoptimizer.infra.ai.AiCompletionResult;
+import com.winter.airesumeoptimizer.infra.ai.AiFailureCode;
+import com.winter.airesumeoptimizer.infra.ai.AiGateway;
+import com.winter.airesumeoptimizer.infra.ai.AiGatewayException;
+import com.winter.airesumeoptimizer.infra.ai.AiGatewaySupport;
+import com.winter.airesumeoptimizer.infra.ai.AiInvocationContext;
+import com.winter.airesumeoptimizer.infra.ai.AiSelectionSnapshot;
 import com.winter.airesumeoptimizer.module.evidence.service.EvidenceMatchService;
 import com.winter.airesumeoptimizer.module.evidence.vo.EvidenceAnalysisResultVO;
 import com.winter.airesumeoptimizer.module.workspace.dto.BulletRewriteOutputDTO;
@@ -22,6 +28,7 @@ import com.winter.airesumeoptimizer.module.workspace.service.BulletRewriteRefuse
 import com.winter.airesumeoptimizer.module.workspace.service.BulletRewriteService;
 import com.winter.airesumeoptimizer.module.workspace.service.RewriteFactValidator;
 import com.winter.airesumeoptimizer.module.workspace.service.WorkspaceContentService;
+import com.winter.airesumeoptimizer.module.optimization.service.OptimizationTaskService;
 import com.winter.airesumeoptimizer.module.workspace.vo.WorkspaceBulletSuggestionVO;
 import com.winter.airesumeoptimizer.module.workspace.vo.WorkspaceContentVO;
 import java.nio.charset.StandardCharsets;
@@ -30,6 +37,7 @@ import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.regex.Pattern;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -47,7 +55,8 @@ public class BulletRewriteServiceImpl implements BulletRewriteService {
     private final BulletRewritePromptService bulletRewritePromptService;
     private final BulletRewriteOutputParser bulletRewriteOutputParser;
     private final RewriteFactValidator rewriteFactValidator;
-    private final AiClientService aiClientService;
+    private final AiGateway aiGateway;
+    private final OptimizationTaskService optimizationTaskService;
 
     public BulletRewriteServiceImpl(
             WorkspaceContentService workspaceContentService,
@@ -55,13 +64,33 @@ public class BulletRewriteServiceImpl implements BulletRewriteService {
             BulletRewritePromptService bulletRewritePromptService,
             BulletRewriteOutputParser bulletRewriteOutputParser,
             RewriteFactValidator rewriteFactValidator,
-            AiClientService aiClientService) {
+            AiGateway aiGateway) {
+        this(
+                workspaceContentService,
+                evidenceMatchService,
+                bulletRewritePromptService,
+                bulletRewriteOutputParser,
+                rewriteFactValidator,
+                aiGateway,
+                null);
+    }
+
+    @Autowired
+    public BulletRewriteServiceImpl(
+            WorkspaceContentService workspaceContentService,
+            EvidenceMatchService evidenceMatchService,
+            BulletRewritePromptService bulletRewritePromptService,
+            BulletRewriteOutputParser bulletRewriteOutputParser,
+            RewriteFactValidator rewriteFactValidator,
+            AiGateway aiGateway,
+            OptimizationTaskService optimizationTaskService) {
         this.workspaceContentService = workspaceContentService;
         this.evidenceMatchService = evidenceMatchService;
         this.bulletRewritePromptService = bulletRewritePromptService;
         this.bulletRewriteOutputParser = bulletRewriteOutputParser;
         this.rewriteFactValidator = rewriteFactValidator;
-        this.aiClientService = aiClientService;
+        this.aiGateway = aiGateway;
+        this.optimizationTaskService = optimizationTaskService;
     }
 
     @Override
@@ -80,6 +109,15 @@ public class BulletRewriteServiceImpl implements BulletRewriteService {
         // Phase 4 seam：任务归属、版本链校验与 TARGET 文档读取全部复用既有服务；
         // 跨用户访问、任务未完成、版本链异常都在此 fail closed。
         WorkspaceContentVO content = workspaceContentService.getContent(userId, optimizationTaskId);
+        AiSelectionSnapshot selection = optimizationTaskService == null
+                ? null
+                : optimizationTaskService.getExecutionContext(userId, optimizationTaskId).aiSelection();
+        if (selection == null) {
+            selection = AiGatewaySupport.selectionForNewTask(
+                    aiGateway,
+                    userId,
+                    "BULLET_REWRITE");
+        }
         long currentRevision = content.getRevision();
         if (!request.getBaseRevision().equals(currentRevision)) {
             throw stale("简历内容已有更新的版本，本次建议请求已过期");
@@ -109,14 +147,28 @@ public class BulletRewriteServiceImpl implements BulletRewriteService {
                 userId, optimizationTaskId, request.getIntent(), currentRevision);
 
         String aiOutput;
+        String modelName = selection != null && !selection.model().isBlank()
+                ? selection.model()
+                : "unknown";
         try {
             // 平台可信策略进 SYSTEM；简历 / 岗位 / 用户要求等不可信数据进 USER 数据区。
-            aiOutput = aiClientService.complete(List.of(
-                    AiChatMessage.system(prompt.getSystemPolicy()),
-                    AiChatMessage.user(prompt.getUserContent())));
+            AiCompletionResult completion = AiGatewaySupport.complete(
+                    aiGateway,
+                    new AiInvocationContext(userId, optimizationTaskId, "BULLET_REWRITE", selection),
+                    new AiGatewayRequest(
+                            "BULLET_REWRITE",
+                            prompt.getSystemPolicy(),
+                            prompt.getUserContent()));
+            aiOutput = completion.text();
+            modelName = completion.model();
+        } catch (AiGatewayException exception) {
+            log.warn("Bullet rewrite Gateway call failed: model={}, code={}",
+                    modelName,
+                    exception.getFailureCode());
+            throw exception;
         } catch (AiClientException exception) {
             log.warn("Bullet rewrite AI call failed: model={}, reason={}",
-                    aiClientService.modelName(),
+                    modelName,
                     LogSanitizer.sanitize(exception.getMessage()));
             throw new BusinessException(502, "AI 服务暂时不可用，请稍后重试");
         }
@@ -129,6 +181,8 @@ public class BulletRewriteServiceImpl implements BulletRewriteService {
             return rejected(request, currentRevision, persistedOriginal,
                     WorkspaceBulletSuggestionVO.REJECT_CODE_REFUSED,
                     "AI 无法在不新增事实的情况下改写这条要点，请继续手工编辑");
+        } catch (BusinessException exception) {
+            throw new AiGatewayException(AiFailureCode.SCHEMA_INVALID, "AI 返回结果格式异常");
         }
 
         // 事实校验只以当前 Bullet 原文为闭包基线：不跨 Bullet 搬运事实。
@@ -150,7 +204,7 @@ public class BulletRewriteServiceImpl implements BulletRewriteService {
                 .originalText(persistedOriginal)
                 .suggestedText(output.suggestedText())
                 .reason(output.reason())
-                .modelName(aiClientService.modelName())
+                .modelName(modelName)
                 .build();
     }
 
@@ -168,7 +222,7 @@ public class BulletRewriteServiceImpl implements BulletRewriteService {
                 .originalText(persistedOriginal)
                 .rejectCode(rejectCode)
                 .rejectMessage(rejectMessage)
-                .modelName(aiClientService.modelName())
+                .modelName("unknown")
                 .build();
     }
 

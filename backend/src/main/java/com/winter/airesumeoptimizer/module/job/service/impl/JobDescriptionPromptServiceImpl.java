@@ -29,10 +29,17 @@ public class JobDescriptionPromptServiceImpl implements JobDescriptionPromptServ
             throw new BusinessException(400, "目标岗位 JD 原文不能为空");
         }
 
+        String rendered = promptTemplateService.render(TEMPLATE_PATH, Map.of(
+                "rawText", normalizeRawText(rawText)));
+        String boundary = "目标岗位 JD 原文：";
+        int boundaryIndex = rendered.indexOf(boundary);
+        String systemPrompt = boundaryIndex < 0 ? rendered : rendered.substring(0, boundaryIndex).strip();
+        String userPrompt = boundaryIndex < 0 ? "" : rendered.substring(boundaryIndex).strip();
         return JobDescriptionPromptDTO.builder()
                 .promptVersion(PROMPT_VERSION)
-                .prompt(promptTemplateService.render(TEMPLATE_PATH, Map.of(
-                        "rawText", normalizeRawText(rawText))))
+                .prompt(rendered)
+                .systemPrompt(systemPrompt)
+                .userPrompt(userPrompt)
                 .build();
     }
 

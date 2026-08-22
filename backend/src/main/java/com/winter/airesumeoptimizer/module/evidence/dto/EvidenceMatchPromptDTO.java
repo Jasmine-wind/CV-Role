@@ -10,4 +10,8 @@ public class EvidenceMatchPromptDTO {
     private String promptVersion;
 
     private String prompt;
+
+    private String systemPrompt;
+
+    private String userPrompt;
 }

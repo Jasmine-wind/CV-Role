@@ -56,11 +56,43 @@ class RealEvidenceMatchSmokeTest {
         properties.setTemperature(Double.parseDouble(propertyOrDefault("realAi.temperature", "0.2")));
         properties.setMaxTokens(Integer.parseInt(propertyOrDefault("realAi.maxTokens", "8000")));
 
-        AiClientService aiClientService = new OpenAiCompatibleAiClientService(properties, new ObjectMapper());
+        OpenAiCompatibleAiClientService provider = new OpenAiCompatibleAiClientService(
+                new ObjectMapper(),
+                new com.winter.airesumeoptimizer.infra.ai.transport.PinnedHttpTransport());
+        com.winter.airesumeoptimizer.infra.ai.AiGateway gateway = new com.winter.airesumeoptimizer.infra.ai.AiGateway() {
+            @Override
+            public com.winter.airesumeoptimizer.infra.ai.AiCompletionResult complete(
+                    com.winter.airesumeoptimizer.infra.ai.AiInvocationContext context,
+                    com.winter.airesumeoptimizer.infra.ai.AiGatewayRequest request) {
+                var response = provider.complete(new com.winter.airesumeoptimizer.infra.ai.AiProviderRequest(
+                        properties.getApiKey(),
+                        properties.getBaseUrl(),
+                        properties.getModel(),
+                        properties.getTemperature(),
+                        properties.getMaxTokens(),
+                        java.time.Duration.ofSeconds(properties.getTimeoutSeconds()),
+                        java.util.List.of(
+                                com.winter.airesumeoptimizer.infra.ai.AiChatMessage.system(request.trustedPolicy()),
+                                com.winter.airesumeoptimizer.infra.ai.AiChatMessage.user(request.untrustedData()))));
+                return new com.winter.airesumeoptimizer.infra.ai.AiCompletionResult(
+                        response.text(),
+                        com.winter.airesumeoptimizer.infra.ai.AiSource.SYSTEM_DEFAULT,
+                        com.winter.airesumeoptimizer.infra.ai.AiSelectionSnapshot.OPENAI_COMPATIBLE,
+                        properties.getModel(),
+                        null,
+                        null,
+                        com.winter.airesumeoptimizer.infra.ai.AiUsageMetrics.empty(0, 1));
+            }
+
+            @Override
+            public String modelName(com.winter.airesumeoptimizer.infra.ai.AiInvocationContext context) {
+                return properties.getModel();
+            }
+        };
         AiEvidenceMatchingStrategyImpl strategy = new AiEvidenceMatchingStrategyImpl(
                 new EvidenceMatchPromptServiceImpl(new PromptTemplateService(), new ObjectMapper()),
                 new EvidenceMatchOutputParserImpl(new ObjectMapper()),
-                aiClientService);
+                gateway);
 
         EvidenceMatchOutcomeDTO outcome = strategy.match(JOB_DESCRIPTION, JOB_STRUCTURED, RESUME_STRUCTURED);
 

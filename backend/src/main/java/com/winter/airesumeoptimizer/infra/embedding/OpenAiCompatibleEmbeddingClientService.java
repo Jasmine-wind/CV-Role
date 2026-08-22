@@ -2,99 +2,73 @@ package com.winter.airesumeoptimizer.infra.embedding;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.winter.airesumeoptimizer.common.logging.LogSanitizer;
 import com.winter.airesumeoptimizer.infra.ai.AiClientException;
+import com.winter.airesumeoptimizer.infra.ai.transport.OutboundRequest;
+import com.winter.airesumeoptimizer.infra.ai.transport.OutboundResponse;
+import com.winter.airesumeoptimizer.infra.ai.transport.OutboundTransportException;
+import com.winter.airesumeoptimizer.infra.ai.transport.PinnedHttpTransport;
 import java.io.IOException;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-import java.net.http.HttpTimeoutException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+/** Platform-only embedding adapter; it never reads user BYOK Credentials. */
 @Service
 public class OpenAiCompatibleEmbeddingClientService implements EmbeddingClientService {
 
-    private static final Logger log = LoggerFactory.getLogger(OpenAiCompatibleEmbeddingClientService.class);
     private static final String EMBEDDINGS_PATH = "/embeddings";
 
     private final EmbeddingClientProperties properties;
     private final ObjectMapper objectMapper;
-    private final HttpClient httpClient;
+    private final PinnedHttpTransport transport;
 
     @Autowired
     public OpenAiCompatibleEmbeddingClientService(
             EmbeddingClientProperties properties,
-            ObjectMapper objectMapper) {
-        this(properties, objectMapper, HttpClient.newHttpClient());
-    }
-
-    OpenAiCompatibleEmbeddingClientService(
-            EmbeddingClientProperties properties,
             ObjectMapper objectMapper,
-            HttpClient httpClient) {
+            PinnedHttpTransport transport) {
         this.properties = properties;
         this.objectMapper = objectMapper;
-        this.httpClient = httpClient;
+        this.transport = transport;
+    }
+
+    /** Retained for JSON-focused unit tests. */
+    OpenAiCompatibleEmbeddingClientService(
+            EmbeddingClientProperties properties,
+            ObjectMapper objectMapper) {
+        this(properties, objectMapper, new PinnedHttpTransport());
     }
 
     @Override
     public List<Double> embed(String text) {
         validateConfig();
         String normalizedText = normalizeInputText(text);
-
-        HttpRequest request = buildRequest(normalizedText);
         long startedAt = System.nanoTime();
         try {
-            log.info("Embedding request started: model={}, dimension={}, timeoutSeconds={}, inputLength={}",
-                    properties.getModel(),
-                    properties.getDimension(),
-                    resolveTimeoutSeconds(),
-                    normalizedText.length());
-            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            OutboundResponse response = transport.execute(new OutboundRequest(
+                    "POST",
+                    properties.getBaseUrl(),
+                    EMBEDDINGS_PATH,
+                    Map.of(
+                            "Authorization", "Bearer " + properties.getApiKey().strip(),
+                            "Content-Type", "application/json",
+                            "Accept", "application/json"),
+                    buildRequestBody(normalizedText),
+                    Duration.ofSeconds(resolveTimeoutSeconds())));
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                log.warn("Embedding request failed: model={}, dimension={}, inputLength={}, durationMs={}, httpStatus={}",
-                        properties.getModel(),
-                        properties.getDimension(),
-                        normalizedText.length(),
-                        elapsedMillis(startedAt),
-                        response.statusCode());
                 throw buildHttpErrorException(response.statusCode());
             }
             List<Double> embedding = extractEmbedding(response.body());
             validateEmbeddingDimension(embedding);
-            log.info("Embedding request succeeded: model={}, dimension={}, inputLength={}, durationMs={}",
-                    properties.getModel(),
-                    embedding.size(),
-                    normalizedText.length(),
-                    elapsedMillis(startedAt));
             return embedding;
-        } catch (HttpTimeoutException exception) {
-            log.warn("Embedding request timed out: model={}, dimension={}, inputLength={}, timeoutSeconds={}",
-                    properties.getModel(),
-                    properties.getDimension(),
-                    normalizedText.length(),
-                    resolveTimeoutSeconds());
-            throw new AiClientException("Embedding 服务调用超时，请稍后重试或缩短输入文本", exception);
+        } catch (OutboundTransportException exception) {
+            throw mapTransportFailure(exception);
         } catch (IOException exception) {
-            log.warn("Embedding request IO failed: model={}, dimension={}, inputLength={}, message={}",
-                    properties.getModel(),
-                    properties.getDimension(),
-                    normalizedText.length(),
-                    LogSanitizer.sanitize(exception.getMessage()));
-            throw new AiClientException("Embedding 调用失败，请检查网络或 base-url 配置", exception);
-        } catch (InterruptedException exception) {
-            Thread.currentThread().interrupt();
-            log.warn("Embedding request interrupted: model={}", properties.getModel());
-            throw new AiClientException("Embedding 调用被中断", exception);
+            throw new AiClientException("Embedding 请求体序列化失败");
         }
     }
 
@@ -123,14 +97,16 @@ public class OpenAiCompatibleEmbeddingClientService implements EmbeddingClientSe
 
             List<Double> embedding = new ArrayList<>(embeddingNode.size());
             for (JsonNode item : embeddingNode) {
-                if (!item.isNumber()) {
+                if (!item.isNumber() || !Double.isFinite(item.asDouble())) {
                     throw new AiClientException("Embedding 响应向量包含非数字元素");
                 }
                 embedding.add(item.asDouble());
             }
             return embedding;
+        } catch (AiClientException exception) {
+            throw exception;
         } catch (IOException exception) {
-            throw new AiClientException("Embedding 响应 JSON 解析失败", exception);
+            throw new AiClientException("Embedding 响应 JSON 解析失败");
         }
     }
 
@@ -157,25 +133,6 @@ public class OpenAiCompatibleEmbeddingClientService implements EmbeddingClientSe
                 && embedding.size() != configuredDimension) {
             throw new AiClientException("Embedding 向量维度不一致，期望："
                     + configuredDimension + "，实际：" + embedding.size());
-        }
-    }
-
-    private HttpRequest buildRequest(String text) {
-        try {
-            String requestBody = buildRequestBody(text);
-
-            return HttpRequest.newBuilder()
-                    .uri(URI.create(normalizeBaseUrl(properties.getBaseUrl()) + EMBEDDINGS_PATH))
-                    .version(HttpClient.Version.HTTP_1_1)
-                    .timeout(Duration.ofSeconds(resolveTimeoutSeconds()))
-                    .header("Authorization", "Bearer " + properties.getApiKey())
-                    .header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(requestBody))
-                    .build();
-        } catch (IllegalArgumentException exception) {
-            throw new AiClientException("Embedding base-url 配置不正确", exception);
-        } catch (IOException exception) {
-            throw new AiClientException("Embedding 请求体序列化失败", exception);
         }
     }
 
@@ -208,7 +165,7 @@ public class OpenAiCompatibleEmbeddingClientService implements EmbeddingClientSe
         if (properties.getTimeoutSeconds() == null || properties.getTimeoutSeconds() <= 0) {
             return 120;
         }
-        return properties.getTimeoutSeconds();
+        return Math.min(120, properties.getTimeoutSeconds());
     }
 
     private int resolveMaxInputLength() {
@@ -216,17 +173,6 @@ public class OpenAiCompatibleEmbeddingClientService implements EmbeddingClientSe
             return 8000;
         }
         return properties.getMaxInputLength();
-    }
-
-    private String normalizeBaseUrl(String baseUrl) {
-        String normalized = baseUrl.trim();
-        while (normalized.endsWith("/")) {
-            normalized = normalized.substring(0, normalized.length() - 1);
-        }
-        if (normalized.endsWith(EMBEDDINGS_PATH)) {
-            throw new IllegalArgumentException("Embedding base-url 不应以 /embeddings 结尾");
-        }
-        return normalized;
     }
 
     AiClientException buildHttpErrorException(int httpStatus) {
@@ -239,10 +185,16 @@ public class OpenAiCompatibleEmbeddingClientService implements EmbeddingClientSe
         if (httpStatus >= 500) {
             return new AiClientException("SiliconFlow Embedding 服务暂时不可用，请稍后重试");
         }
-        return new AiClientException("Embedding 调用失败，HTTP 状态码：" + httpStatus);
+        return new AiClientException("Embedding 调用失败，Provider 拒绝了请求");
     }
 
-    private long elapsedMillis(long startedAt) {
-        return Duration.ofNanos(System.nanoTime() - startedAt).toMillis();
+    private AiClientException mapTransportFailure(OutboundTransportException exception) {
+        return switch (exception.getKind()) {
+            case UNSAFE_URL -> new AiClientException("Embedding base-url 不安全");
+            case TIMEOUT -> new AiClientException("Embedding 服务调用超时，请稍后重试或缩短输入文本");
+            case RESPONSE_TOO_LARGE -> new AiClientException("Embedding Provider 响应过大");
+            case NETWORK -> new AiClientException("Embedding 调用失败，请检查网络或 base-url 配置");
+            case INTERRUPTED -> new AiClientException("Embedding 调用被中断");
+        };
     }
 }

@@ -8,7 +8,13 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.winter.airesumeoptimizer.common.exception.BusinessException;
 import com.winter.airesumeoptimizer.common.logging.LogSanitizer;
-import com.winter.airesumeoptimizer.infra.ai.AiClientService;
+import com.winter.airesumeoptimizer.infra.ai.AiGatewayRequest;
+import com.winter.airesumeoptimizer.infra.ai.AiCompletionResult;
+import com.winter.airesumeoptimizer.infra.ai.AiGateway;
+import com.winter.airesumeoptimizer.infra.ai.AiGatewayException;
+import com.winter.airesumeoptimizer.infra.ai.AiGatewaySupport;
+import com.winter.airesumeoptimizer.infra.ai.AiInvocationContext;
+import com.winter.airesumeoptimizer.infra.ai.AiSelectionSnapshot;
 import com.winter.airesumeoptimizer.module.analysis.dto.AiRewriteSuggestionPromptDTO;
 import com.winter.airesumeoptimizer.module.analysis.dto.AiRewriteSuggestionResultDTO;
 import com.winter.airesumeoptimizer.module.analysis.dto.AiResumeSuggestionItemDTO;
@@ -78,7 +84,7 @@ public class AiRewriteSuggestionServiceImpl implements AiRewriteSuggestionServic
     private final ResumeParseResultMapper resumeParseResultMapper;
     private final AiRewriteSuggestionPromptService aiRewriteSuggestionPromptService;
     private final AiRewriteSuggestionOutputParser aiRewriteSuggestionOutputParser;
-    private final AiClientService aiClientService;
+    private final AiGateway aiGateway;
     private final ObjectMapper objectMapper;
 
     public AiRewriteSuggestionServiceImpl(
@@ -90,7 +96,7 @@ public class AiRewriteSuggestionServiceImpl implements AiRewriteSuggestionServic
             ResumeParseResultMapper resumeParseResultMapper,
             AiRewriteSuggestionPromptService aiRewriteSuggestionPromptService,
             AiRewriteSuggestionOutputParser aiRewriteSuggestionOutputParser,
-            AiClientService aiClientService,
+            AiGateway aiGateway,
             ObjectMapper objectMapper) {
         this.resumeMapper = resumeMapper;
         this.jobDescriptionMapper = jobDescriptionMapper;
@@ -100,7 +106,7 @@ public class AiRewriteSuggestionServiceImpl implements AiRewriteSuggestionServic
         this.resumeParseResultMapper = resumeParseResultMapper;
         this.aiRewriteSuggestionPromptService = aiRewriteSuggestionPromptService;
         this.aiRewriteSuggestionOutputParser = aiRewriteSuggestionOutputParser;
-        this.aiClientService = aiClientService;
+        this.aiGateway = aiGateway;
         this.objectMapper = objectMapper;
     }
 
@@ -119,6 +125,10 @@ public class AiRewriteSuggestionServiceImpl implements AiRewriteSuggestionServic
             List<String> jobKeywords,
             String tone,
             Integer lengthLimit) {
+        AiSelectionSnapshot selection = AiGatewaySupport.selectionForNewTask(
+                aiGateway,
+                userId,
+                "LEGACY_REWRITE_SUGGESTION");
         Resume resume = getOwnedResume(userId, resumeId);
         String normalizedRewriteType = normalizeRewriteType(rewriteType);
         String normalizedTargetSection = normalizeTargetSection(targetSection);
@@ -157,22 +167,33 @@ public class AiRewriteSuggestionServiceImpl implements AiRewriteSuggestionServic
                 rewriteSuggestion.getJobDescriptionId(),
                 rewriteSuggestion.getAiJobMatchResultId(),
                 rewriteSuggestion.getAiResumeSuggestionId(),
-                aiClientService.modelName());
+                selection.model());
 
         try {
-            String aiOutput = aiClientService.complete(prompt.getPrompt());
-            AiRewriteSuggestionResultDTO result = aiRewriteSuggestionOutputParser.parse(aiOutput);
-            applySuccess(rewriteSuggestion, prompt.getPromptVersion(), result);
+            AiCompletionResult completion = AiGatewaySupport.complete(
+                    aiGateway,
+                    new AiInvocationContext(userId, null, "LEGACY_REWRITE_SUGGESTION", selection),
+                    new AiGatewayRequest(
+                            "LEGACY_REWRITE_SUGGESTION",
+                            prompt.getSystemPrompt() == null || prompt.getSystemPrompt().isBlank()
+                                    ? "只遵循服务端改写输出契约，不得新增事实。"
+                                    : prompt.getSystemPrompt(),
+                            prompt.getUserPrompt() == null ? prompt.getPrompt() : prompt.getUserPrompt()));
+            AiRewriteSuggestionResultDTO result = aiRewriteSuggestionOutputParser.parse(completion.text());
+            applySuccess(rewriteSuggestion, prompt.getPromptVersion(), result, completion.model());
         } catch (RuntimeException exception) {
+            if (selection.isUserByok() && exception instanceof AiGatewayException) {
+                throw exception;
+            }
             String errorMessage = normalizeErrorMessage(exception);
-            applyFailed(rewriteSuggestion, prompt.getPromptVersion(), errorMessage);
+            applyFailed(rewriteSuggestion, prompt.getPromptVersion(), errorMessage, selection.model());
             log.warn("AI rewrite suggestion failed: userId={}, resumeId={}, jobDescriptionId={}, aiJobMatchResultId={}, aiResumeSuggestionId={}, model={}, reason={}",
                     userId,
                     resume.getId(),
                     rewriteSuggestion.getJobDescriptionId(),
                     rewriteSuggestion.getAiJobMatchResultId(),
                     rewriteSuggestion.getAiResumeSuggestionId(),
-                    aiClientService.modelName(),
+                    selection.model(),
                     LogSanitizer.sanitize(errorMessage));
         }
         save(rewriteSuggestion);
@@ -992,12 +1013,13 @@ public class AiRewriteSuggestionServiceImpl implements AiRewriteSuggestionServic
     private void applySuccess(
             AiRewriteSuggestion rewriteSuggestion,
             String promptVersion,
-            AiRewriteSuggestionResultDTO result) {
+            AiRewriteSuggestionResultDTO result,
+            String modelName) {
         rewriteSuggestion.setRewriteStatus(REWRITE_STATUS_SUCCESS);
         rewriteSuggestion.setRewrittenText(result.getRewrittenText());
         rewriteSuggestion.setRewriteReason(result.getRewriteReason());
         rewriteSuggestion.setCaution(buildCaution(result));
-        rewriteSuggestion.setModelName(aiClientService.modelName());
+        rewriteSuggestion.setModelName(modelName);
         rewriteSuggestion.setPromptVersion(promptVersion);
         rewriteSuggestion.setErrorMessage(null);
     }
@@ -1013,12 +1035,13 @@ public class AiRewriteSuggestionServiceImpl implements AiRewriteSuggestionServic
     private void applyFailed(
             AiRewriteSuggestion rewriteSuggestion,
             String promptVersion,
-            String errorMessage) {
+            String errorMessage,
+            String modelName) {
         rewriteSuggestion.setRewriteStatus(REWRITE_STATUS_FAILED);
         rewriteSuggestion.setRewrittenText(null);
         rewriteSuggestion.setRewriteReason(null);
         rewriteSuggestion.setCaution(null);
-        rewriteSuggestion.setModelName(aiClientService.modelName());
+        rewriteSuggestion.setModelName(modelName);
         rewriteSuggestion.setPromptVersion(promptVersion);
         rewriteSuggestion.setErrorMessage(truncateErrorMessage(errorMessage));
     }

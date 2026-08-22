@@ -42,13 +42,20 @@ public class AiResumeSuggestionPromptServiceImpl implements AiResumeSuggestionPr
             throw new BusinessException(400, "AI 匹配结果不能为空");
         }
 
+        String rendered = promptTemplateService.render(TEMPLATE_PATH, Map.of(
+                "resumeStructuredContent", normalize(resumeStructuredContent, MAX_RESUME_STRUCTURED_LENGTH),
+                "jobStructuredContent", normalize(jobStructuredContent, MAX_JOB_STRUCTURED_LENGTH),
+                "aiMatchResult", normalize(aiMatchResult, MAX_MATCH_RESULT_LENGTH),
+                "ragContext", normalizeOptional(ragContext, MAX_RAG_CONTEXT_LENGTH)));
+        String boundary = "简历结构化解析结果：";
+        int boundaryIndex = rendered.indexOf(boundary);
+        String systemPrompt = boundaryIndex < 0 ? rendered : rendered.substring(0, boundaryIndex).strip();
+        String userPrompt = boundaryIndex < 0 ? "" : rendered.substring(boundaryIndex).strip();
         return AiResumeSuggestionPromptDTO.builder()
                 .promptVersion(PROMPT_VERSION)
-                .prompt(promptTemplateService.render(TEMPLATE_PATH, Map.of(
-                        "resumeStructuredContent", normalize(resumeStructuredContent, MAX_RESUME_STRUCTURED_LENGTH),
-                        "jobStructuredContent", normalize(jobStructuredContent, MAX_JOB_STRUCTURED_LENGTH),
-                        "aiMatchResult", normalize(aiMatchResult, MAX_MATCH_RESULT_LENGTH),
-                        "ragContext", normalizeOptional(ragContext, MAX_RAG_CONTEXT_LENGTH))))
+                .prompt(rendered)
+                .systemPrompt(systemPrompt)
+                .userPrompt(userPrompt)
                 .build();
     }
 

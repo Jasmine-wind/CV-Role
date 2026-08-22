@@ -92,14 +92,15 @@ scripts/  生产运维脚本
 - PostgreSQL 是账号、简历元数据、解析结果、岗位、分析结果、向量和任务的事实来源；`export_artifacts` 只记录 PDF 派生文件的归属与位置，不是内容来源。
 - V20.1 将 Phase 3 正式状态原位收敛为 MATCHED / PARTIAL_EVIDENCE / NO_EVIDENCE，并把 Evidence 支持程度收敛为 SUFFICIENT / PARTIAL；旧语义生成的派生分析会失效并保留冻结输入供重试，V1 历史结果不受影响。
 - V22 加法式建立 `export_artifacts`；模板源码随应用打包，不存在 Template 表。
+- V23 加法式建立用户加密 Credential、OptimizationTask AI Selection Snapshot 与最小 attempt Usage ledger；System Default Secret 不进入数据库，Credential / Task / Usage 使用复合用户归属约束。
 - pgvector 当前用于简历 / JD 分块语义检索；向量不可用时部分 AI 链路可以降级。
 - 简历原文件由 `FileStorageService` 抽象访问，本地开发默认 local，生产默认 MinIO。
-- Chat 与 Embedding 都通过后端兼容客户端调用，密钥不得进入前端、日志或 Git。
+- Chat 只通过业务侧 `AiGateway` 调用 OpenAI-compatible Adapter；Embedding 保持 Platform-only。二者共享 pinned HTTPS transport，密钥不得进入前端、日志或 Git。
 - `application.yaml` 提供公共默认值，`application-local/dev/test/prod.yaml` 负责环境差异。
 
 ## 5. 后续 V2 目标架构边界
 
-Phase 2 已完成核心领域模型和主链路迁移。Phase 3 已把 Evidence Matching 与 Gap Analysis 收紧为当前材料可证明的三态并通过 Gate；Phase 4 已建立 Optimization Workspace 与结构化简历编辑并通过 Gate；Phase 5 已实现单 Bullet AI Suggest / Diff / Apply / Reject / Regenerate 并通过 Gate；Phase 6 已完成 Typst Preview / PDF Export / ExportArtifact，Final Gate 已通过。V2 不推翻前后端分离和模块化单体基础，后续仍按 PRD 冻结顺序推进：
+Phase 2 已完成核心领域模型和主链路迁移。Phase 3 已把 Evidence Matching 与 Gap Analysis 收紧为当前材料可证明的三态并通过 Gate；Phase 4 已建立 Optimization Workspace 与结构化简历编辑并通过 Gate；Phase 5 已实现单 Bullet AI Suggest / Diff / Apply / Reject / Regenerate 并通过 Gate；Phase 6 已完成 Typst Preview / PDF Export / ExportArtifact，Final Gate 已通过；Phase 7 已完成 BYOK / AI Gateway 并通过独立 Final Gate。V2 不推翻前后端分离和模块化单体基础，后续仍按 PRD 冻结顺序推进：
 
 ```text
 已完成：Resume / ResumeVersion / JobTarget / OptimizationTask
@@ -107,7 +108,8 @@ Phase 2 已完成核心领域模型和主链路迁移。Phase 3 已把 Evidence 
       Workspace / Editor（结构化简历编辑、自动保存与恢复优化前版本）
       单 Bullet AI Suggest / Diff / Apply / Reject / Regenerate（事实闭包与严格解析，Gate 已通过）
       Typst Preview / ExportArtifact（签名 Preview receipt、preflight、可重试生命周期，Gate 已通过）
-下一步批准阶段：AI Gateway / Provider Credential（Phase 7 尚未开始）
+      AI Gateway / Provider Credential（唯一 Chat seam、BYOK 加密与 SSRF 防护，Final Gate 已通过）
+下一步批准阶段：视觉与状态体验（Phase 8，未经批准不得进入）
 ```
 
 迁移时遵守：
@@ -125,7 +127,7 @@ Phase 2 已完成核心领域模型和主链路迁移。Phase 3 已把 Evidence 
 
 当前必须继续保持：JWT 鉴权、参数校验、资源归属检查、日志脱敏、上传限制、私有对象存储、环境变量注入。
 
-V2 新增 Provider / BYOK 时还必须具备：服务端加密、掩码显示、替换与删除、SSRF 防护、Redirect / Timeout / Response Size 限制和统一错误映射。
+Provider / BYOK 已实现并必须继续保持：服务端 AES-256-GCM 加密、掩码显示、替换与删除、复合用户归属、任务级 Selection Snapshot、真实地址 pinning 的 SSRF 防护、Redirect / Proxy / Timeout / 解码后 Response Size 限制、稳定错误映射和 attempt Usage。BYOK 功能关闭时不得阻断 System Default；已冻结 BYOK Task 的 Secret 不可用时不得 fallback。
 
 Resume 与 JD 均视为不可信数据，不能覆盖平台指令、Schema 或真实性约束。
 

@@ -2,139 +2,160 @@ package com.winter.airesumeoptimizer.infra.ai;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.winter.airesumeoptimizer.common.logging.LogSanitizer;
-import java.io.IOException;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-import java.net.http.HttpTimeoutException;
-import java.time.Duration;
+import com.winter.airesumeoptimizer.infra.ai.transport.OutboundRequest;
+import com.winter.airesumeoptimizer.infra.ai.transport.OutboundResponse;
+import com.winter.airesumeoptimizer.infra.ai.transport.OutboundTransportException;
+import com.winter.airesumeoptimizer.infra.ai.transport.PinnedHttpTransport;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+/**
+ * OpenAI-compatible provider adapter. It is the only component that knows the
+ * endpoint, authorization scheme and provider response shape.
+ *
+ * <p>Business modules can only reach this adapter through the context-aware Gateway.</p>
+ */
 @Service
-public class OpenAiCompatibleAiClientService implements AiClientService {
+public class OpenAiCompatibleAiClientService implements AiProviderAdapter {
 
-    private static final Logger log = LoggerFactory.getLogger(OpenAiCompatibleAiClientService.class);
-    private static final int MAX_ERROR_BODY_LENGTH = 500;
+    private static final String CHAT_COMPLETIONS_PATH = "/chat/completions";
 
-    private final AiClientProperties properties;
     private final ObjectMapper objectMapper;
-    private final HttpClient httpClient;
+    private final PinnedHttpTransport transport;
 
     @Autowired
     public OpenAiCompatibleAiClientService(
-            AiClientProperties properties,
-            ObjectMapper objectMapper) {
-        this(properties, objectMapper, HttpClient.newHttpClient());
-    }
-
-    OpenAiCompatibleAiClientService(
-            AiClientProperties properties,
             ObjectMapper objectMapper,
-            HttpClient httpClient) {
-        this.properties = properties;
+            PinnedHttpTransport transport) {
         this.objectMapper = objectMapper;
-        this.httpClient = httpClient;
+        this.transport = transport;
+    }
+
+    /** Retained for small JSON-focused unit tests. */
+    OpenAiCompatibleAiClientService(ObjectMapper objectMapper) {
+        this(objectMapper, new PinnedHttpTransport());
     }
 
     @Override
-    public String complete(List<AiChatMessage> messages) {
-        validateConfig();
-        List<AiChatMessage> validatedMessages = validateMessages(messages);
-
-        HttpRequest request = buildRequest(validatedMessages);
+    public AiProviderResponse complete(AiProviderRequest request) {
+        validateProviderRequest(request);
+        String payload = serializeRequest(request);
         try {
-            log.info("AI completion request started: model={}, timeoutSeconds={}",
-                    properties.getModel(),
-                    resolveTimeoutSeconds());
-            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            OutboundResponse response = transport.execute(new OutboundRequest(
+                    "POST",
+                    request.baseUrl(),
+                    CHAT_COMPLETIONS_PATH,
+                    Map.of(
+                            "Authorization", "Bearer " + request.apiKey(),
+                            "Content-Type", "application/json",
+                            "Accept", "application/json"),
+                    payload,
+                    request.timeout()));
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                log.warn("AI completion request failed: model={}, httpStatus={}",
-                        properties.getModel(),
-                        response.statusCode());
-                throw new AiClientException("AI 调用失败，HTTP 状态码：" + response.statusCode()
-                        + "，响应：" + truncate(response.body()));
+                throw mapHttpFailure(response);
             }
-            log.info("AI completion request succeeded: model={}, httpStatus={}",
-                    properties.getModel(),
-                    response.statusCode());
-            return extractContent(response.body());
-        } catch (HttpTimeoutException exception) {
-            log.warn("AI completion request timed out: model={}, timeoutSeconds={}",
-                    properties.getModel(),
-                    resolveTimeoutSeconds());
-            throw new AiClientException("AI 调用超时，请稍后重试或缩短简历内容", exception);
-        } catch (IOException exception) {
-            log.warn("AI completion request IO failed: model={}, message={}",
-                    properties.getModel(),
-                    LogSanitizer.sanitize(exception.getMessage()));
-            throw new AiClientException("AI 调用失败，请检查网络或 base-url 配置", exception);
-        } catch (InterruptedException exception) {
-            Thread.currentThread().interrupt();
-            log.warn("AI completion request interrupted: model={}", properties.getModel());
-            throw new AiClientException("AI 调用被中断", exception);
-        }
-    }
-
-    @Override
-    public String modelName() {
-        return properties.getModel();
-    }
-
-    private HttpRequest buildRequest(List<AiChatMessage> messages) {
-        try {
-            List<Map<String, String>> messagePayload = messages.stream()
-                    .map(message -> Map.of(
-                            "role", message.role().name().toLowerCase(),
-                            "content", message.content()))
-                    .toList();
-            String requestBody = objectMapper.writeValueAsString(Map.of(
-                    "model", properties.getModel(),
-                    "temperature", properties.getTemperature(),
-                    "max_tokens", resolveMaxTokens(),
-                    "messages", messagePayload));
-
-            return HttpRequest.newBuilder()
-                    .uri(URI.create(normalizeBaseUrl(properties.getBaseUrl()) + "/chat/completions"))
-                    .timeout(Duration.ofSeconds(resolveTimeoutSeconds()))
-                    .header("Authorization", "Bearer " + properties.getApiKey())
-                    .header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(requestBody))
-                    .build();
-        } catch (IllegalArgumentException exception) {
-            throw new AiClientException("AI base-url 配置不正确", exception);
-        } catch (IOException exception) {
-            throw new AiClientException("AI 请求体序列化失败", exception);
+            return parseResponse(response.body());
+        } catch (OutboundTransportException exception) {
+            throw mapTransportFailure(exception);
         }
     }
 
     String extractContent(String responseBody) {
+        try {
+            return parseResponse(responseBody).text();
+        } catch (AiGatewayException exception) {
+            throw new AiClientException(exception.getMessage());
+        }
+    }
+
+    private AiProviderResponse parseResponse(String responseBody) {
         try {
             JsonNode root = objectMapper.readTree(responseBody);
             JsonNode choiceNode = root.path("choices").path(0);
             JsonNode messageNode = choiceNode.path("message");
             String content = readMessageContent(messageNode);
             if (content.isBlank()) {
-                String finishReason = choiceNode.path("finish_reason").asText("");
-                if ("length".equals(finishReason)) {
-                    throw new AiClientException("AI 响应中缺少文本内容，可能是 max_tokens 不足，请调大 AI_MAX_TOKENS 后重试");
+                if (!messageNode.path("refusal").asText("").isBlank()) {
+                    throw new AiGatewayException(AiFailureCode.REFUSAL, "AI Provider 拒绝生成此内容");
                 }
-                String refusal = messageNode.path("refusal").asText("");
-                if (!refusal.isBlank()) {
-                    throw new AiClientException("AI 拒绝返回文本内容：" + truncate(refusal));
+                if ("length".equals(choiceNode.path("finish_reason").asText(""))) {
+                    throw new AiGatewayException(
+                            AiFailureCode.SCHEMA_INVALID,
+                            "AI 响应中缺少文本内容，可能是 max_tokens 不足，请调大 AI_MAX_TOKENS 后重试");
                 }
-                throw new AiClientException("AI 响应中缺少文本内容，finish_reason=" + emptyToUnknown(finishReason));
+                throw new AiGatewayException(AiFailureCode.SCHEMA_INVALID, "AI Provider 响应缺少文本内容");
             }
-            return content;
-        } catch (IOException exception) {
-            throw new AiClientException("AI 响应 JSON 解析失败", exception);
+            JsonNode usage = root.path("usage");
+            return new AiProviderResponse(
+                    content,
+                    positiveLong(usage.path("prompt_tokens")),
+                    positiveLong(usage.path("completion_tokens")));
+        } catch (AiGatewayException exception) {
+            throw exception;
+        } catch (Exception exception) {
+            throw new AiGatewayException(AiFailureCode.SCHEMA_INVALID, "AI Provider 响应格式不正确");
         }
+    }
+
+    private String serializeRequest(AiProviderRequest request) {
+        try {
+            List<Map<String, String>> messages = request.messages().stream()
+                    .map(message -> Map.of(
+                            "role", message.role().name().toLowerCase(),
+                            "content", message.content()))
+                    .toList();
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("model", request.model());
+            payload.put("temperature", request.temperature());
+            payload.put("max_tokens", request.maxTokens());
+            payload.put("messages", messages);
+            return objectMapper.writeValueAsString(payload);
+        } catch (Exception exception) {
+            throw new AiGatewayException(AiFailureCode.CONFIGURATION_INVALID, "AI 请求无法序列化");
+        }
+    }
+
+    private AiGatewayException mapHttpFailure(OutboundResponse response) {
+        int status = response.statusCode();
+        if (status == 401) {
+            return new AiGatewayException(AiFailureCode.INVALID_CREDENTIAL, "AI Provider API Key 无效");
+        }
+        if (status == 403) {
+            return new AiGatewayException(AiFailureCode.PROVIDER_UNAUTHORIZED, "AI Provider 没有调用权限");
+        }
+        if (status == 404) {
+            return new AiGatewayException(AiFailureCode.MODEL_NOT_FOUND, "AI Provider 未找到指定模型或端点");
+        }
+        if (status == 429) {
+            return new AiGatewayException(
+                    AiFailureCode.RATE_LIMITED,
+                    "AI Provider 请求过于频繁",
+                    true,
+                    retryAfterMillis(response.headers()));
+        }
+        if (status == 408) {
+            return new AiGatewayException(AiFailureCode.TIMEOUT, "AI Provider 请求超时", true);
+        }
+        if (status == 502 || status == 503 || status == 504) {
+            return new AiGatewayException(AiFailureCode.PROVIDER_UNAVAILABLE, "AI Provider 暂时不可用", true);
+        }
+        if (status >= 500) {
+            return new AiGatewayException(AiFailureCode.PROVIDER_UNAVAILABLE, "AI Provider 暂时不可用");
+        }
+        return new AiGatewayException(AiFailureCode.SCHEMA_INVALID, "AI Provider 拒绝了请求");
+    }
+
+    private AiGatewayException mapTransportFailure(OutboundTransportException exception) {
+        return switch (exception.getKind()) {
+            case UNSAFE_URL -> new AiGatewayException(AiFailureCode.UNSAFE_BASE_URL, "AI Provider Base URL 不安全");
+            case TIMEOUT -> new AiGatewayException(AiFailureCode.TIMEOUT, "AI Provider 请求超时", true);
+            case RESPONSE_TOO_LARGE -> new AiGatewayException(AiFailureCode.RESPONSE_TOO_LARGE, "AI Provider 响应过大");
+            case NETWORK -> new AiGatewayException(AiFailureCode.PROVIDER_UNAVAILABLE, "AI Provider 网络不可用", true);
+            case INTERRUPTED -> new AiGatewayException(AiFailureCode.INTERRUPTED, "AI Provider 请求被中断");
+        };
     }
 
     private String readMessageContent(JsonNode messageNode) {
@@ -155,72 +176,48 @@ public class OpenAiCompatibleAiClientService implements AiClientService {
             }
             return result.toString();
         }
-
         JsonNode legacyTextNode = messageNode.path("text");
-        if (legacyTextNode.isTextual()) {
-            return legacyTextNode.asText();
+        return legacyTextNode.isTextual() ? legacyTextNode.asText() : "";
+    }
+
+    private Long positiveLong(JsonNode value) {
+        return value.canConvertToLong() && value.asLong() >= 0 ? value.asLong() : null;
+    }
+
+    private long retryAfterMillis(Map<String, String> headers) {
+        String value = headers.entrySet().stream()
+                .filter(entry -> "retry-after".equalsIgnoreCase(entry.getKey()))
+                .map(Map.Entry::getValue)
+                .findFirst()
+                .orElse("");
+        try {
+            return Math.min(2000L, Math.max(0L, Math.multiplyExact(Long.parseLong(value.strip()), 1000L)));
+        } catch (RuntimeException exception) {
+            return 0L;
         }
-        return "";
     }
 
     private List<AiChatMessage> validateMessages(List<AiChatMessage> messages) {
         if (messages == null || messages.isEmpty()) {
-            throw new AiClientException("AI 输入不能为空");
+            throw new AiGatewayException(AiFailureCode.SCHEMA_INVALID, "AI 输入不能为空");
         }
         for (AiChatMessage message : messages) {
-            if (message == null || message.role() == null || message.content() == null
-                    || message.content().isBlank()) {
-                throw new AiClientException("AI 输入不能为空");
+            if (message == null || message.role() == null || message.content() == null || message.content().isBlank()) {
+                throw new AiGatewayException(AiFailureCode.SCHEMA_INVALID, "AI 输入不能为空");
             }
         }
         return List.copyOf(messages);
     }
 
-    private void validateConfig() {
-        if (properties.getApiKey() == null || properties.getApiKey().isBlank()) {
-            throw new AiClientException("AI API Key 未配置");
+    private void validateProviderRequest(AiProviderRequest request) {
+        if (request == null || request.apiKey() == null || request.apiKey().isBlank()) {
+            throw new AiGatewayException(AiFailureCode.INVALID_CREDENTIAL, "AI API Key 未配置");
         }
-        if (properties.getBaseUrl() == null || properties.getBaseUrl().isBlank()) {
-            throw new AiClientException("AI base-url 未配置");
+        if (request.baseUrl() == null || request.baseUrl().isBlank()
+                || request.model() == null || request.model().isBlank()) {
+            throw new AiGatewayException(AiFailureCode.CONFIGURATION_INVALID, "AI Provider 配置不完整");
         }
-        if (properties.getModel() == null || properties.getModel().isBlank()) {
-            throw new AiClientException("AI 模型名称未配置");
-        }
+        validateMessages(request.messages());
     }
 
-    private int resolveTimeoutSeconds() {
-        if (properties.getTimeoutSeconds() == null || properties.getTimeoutSeconds() <= 0) {
-            return 30;
-        }
-        return properties.getTimeoutSeconds();
-    }
-
-    private int resolveMaxTokens() {
-        if (properties.getMaxTokens() == null || properties.getMaxTokens() <= 0) {
-            return 16000;
-        }
-        return properties.getMaxTokens();
-    }
-
-    private String emptyToUnknown(String value) {
-        if (value == null || value.isBlank()) {
-            return "unknown";
-        }
-        return value;
-    }
-
-    private String normalizeBaseUrl(String baseUrl) {
-        String normalized = baseUrl.trim();
-        while (normalized.endsWith("/")) {
-            normalized = normalized.substring(0, normalized.length() - 1);
-        }
-        return normalized;
-    }
-
-    private String truncate(String value) {
-        if (value == null || value.length() <= MAX_ERROR_BODY_LENGTH) {
-            return value;
-        }
-        return value.substring(0, MAX_ERROR_BODY_LENGTH);
-    }
 }

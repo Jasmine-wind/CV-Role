@@ -6,6 +6,8 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.winter.airesumeoptimizer.common.exception.BusinessException;
 import com.winter.airesumeoptimizer.common.logging.LogSanitizer;
+import com.winter.airesumeoptimizer.infra.ai.AiGatewayException;
+import com.winter.airesumeoptimizer.infra.ai.AiSelectionSnapshot;
 import com.winter.airesumeoptimizer.infra.storage.FileStorageService;
 import com.winter.airesumeoptimizer.infra.storage.StoreFileCommand;
 import com.winter.airesumeoptimizer.infra.storage.StoredFile;
@@ -277,12 +279,26 @@ public class ResumeServiceImpl implements ResumeService {
     @Override
     @Transactional
     public ResumeParseResultVO parse(Long userId, Long resumeId) {
-        return parse(userId, resumeId, null);
+        return parse(userId, resumeId, (ResumeParseOptionsDTO) null);
     }
 
     @Override
     @Transactional
     public ResumeParseResultVO parse(Long userId, Long resumeId, ResumeParseOptionsDTO options) {
+        return parseInternal(userId, resumeId, options, null);
+    }
+
+    @Override
+    @Transactional
+    public ResumeParseResultVO parseWithSelection(Long userId, Long resumeId, AiSelectionSnapshot selection) {
+        return parseInternal(userId, resumeId, null, selection);
+    }
+
+    private ResumeParseResultVO parseInternal(
+            Long userId,
+            Long resumeId,
+            ResumeParseOptionsDTO options,
+            AiSelectionSnapshot selection) {
         long totalStartedAt = System.nanoTime();
         Resume resume = getOwnedResume(userId, resumeId);
         log.info("Resume parse started: userId={}, resumeId={}, fileType={}",
@@ -324,9 +340,11 @@ public class ResumeServiceImpl implements ResumeService {
             ResumeParseMode parseMode = resolveParseMode(options);
             applyBlockParseContext(blocks, parseMode.name(), null);
             ResumeSectionClassifyResultDTO sectionClassifyResult = resumeAiSectionClassifier.classify(
+                    userId,
                     resume.getId(),
                     blocks,
-                    resolveSectionClassifyEnabled(options, parseMode));
+                    resolveSectionClassifyEnabled(options, parseMode),
+                    selection);
             if (sectionClassifyResult == null) {
                 sectionClassifyResult = ResumeSectionClassifyResultDTO.builder()
                         .aiEnabled(false)
@@ -352,10 +370,12 @@ public class ResumeServiceImpl implements ResumeService {
             ruleParseDurationMs = elapsedMs(ruleParseStartedAt);
             Boolean structuredParseEnabled = resolveStructuredParseEnabled(options, parseMode, sectionClassifyResult);
             ResumeAiStructuredParseResultDTO structuredParseResult = resumeAiStructuredParser.parse(
+                    userId,
                     blocks,
                     structuredContent,
                     List.of(),
-                    structuredParseEnabled);
+                    structuredParseEnabled,
+                    selection);
             if (structuredParseResult == null) {
                 structuredParseResult = ResumeAiStructuredParseResultDTO.builder()
                         .aiEnabled(false)
@@ -386,7 +406,7 @@ public class ResumeServiceImpl implements ResumeService {
             resumePointerPostProcessor.attachSourceRefs(structuredContent, indexedLines);
             parseQualityResult = resumeParseQualityCheckService.check(structuredContent, cleanResult, qualityResult);
             mergeStructuredQualityWarnings(structuredContent, structuredParseResult.getQualityWarnings(), parseQualityResult.getWarnings());
-            applyDisplayModels(resume.getId(), parseMode, structuredContent);
+            applyDisplayModels(userId, resume.getId(), parseMode, structuredContent, selection);
             String structuredJson = objectMapper.writeValueAsString(structuredContent);
             String parseStatus = parseQualityResult.failed() ? PARSE_STATUS_FAILED : PARSE_STATUS_SUCCESS;
             ResumeParseResult parseResult = saveParseResult(
@@ -428,6 +448,9 @@ public class ResumeServiceImpl implements ResumeService {
                     exception);
             return toParseResultVO(parseResult);
         } catch (RuntimeException exception) {
+            if (selection != null && selection.isUserByok() && exception instanceof AiGatewayException) {
+                throw exception;
+            }
             String errorMessage = normalizeErrorMessage(exception);
             ResumeParseResult parseResult = saveParseResult(
                     resume.getId(),
@@ -914,7 +937,12 @@ public class ResumeServiceImpl implements ResumeService {
                 .toList());
     }
 
-    private void applyDisplayModels(Long resumeId, ResumeParseMode parseMode, ResumeStructuredContentDTO structuredContent) {
+    private void applyDisplayModels(
+            Long userId,
+            Long resumeId,
+            ResumeParseMode parseMode,
+            ResumeStructuredContentDTO structuredContent,
+            AiSelectionSnapshot selection) {
         if (structuredContent == null) {
             return;
         }
@@ -926,7 +954,11 @@ public class ResumeServiceImpl implements ResumeService {
                 structuredContent.setDisplayModel(ruleDisplayModel);
                 return;
             }
-            ResumeDisplayModelDTO cachedAiDisplayModel = resumeDisplayModelService.getCachedAiDisplayModel(resumeId, structuredContent);
+            ResumeDisplayModelDTO cachedAiDisplayModel = resumeDisplayModelService.getCachedAiDisplayModel(
+                    userId,
+                    resumeId,
+                    structuredContent,
+                    selection);
             structuredContent.setAiDisplayModel(cachedAiDisplayModel);
             structuredContent.setDisplayModel(cachedAiDisplayModel == null ? ruleDisplayModel : cachedAiDisplayModel);
         } catch (RuntimeException exception) {

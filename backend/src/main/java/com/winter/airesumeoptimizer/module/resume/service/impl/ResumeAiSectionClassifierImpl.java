@@ -4,7 +4,15 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.winter.airesumeoptimizer.common.logging.LogSanitizer;
-import com.winter.airesumeoptimizer.infra.ai.AiClientService;
+import com.winter.airesumeoptimizer.infra.ai.AiGatewayRequest;
+import com.winter.airesumeoptimizer.infra.ai.AiClientException;
+import com.winter.airesumeoptimizer.infra.ai.AiCompletionResult;
+import com.winter.airesumeoptimizer.infra.ai.AiFailureCode;
+import com.winter.airesumeoptimizer.infra.ai.AiGateway;
+import com.winter.airesumeoptimizer.infra.ai.AiGatewayException;
+import com.winter.airesumeoptimizer.infra.ai.AiGatewaySupport;
+import com.winter.airesumeoptimizer.infra.ai.AiInvocationContext;
+import com.winter.airesumeoptimizer.infra.ai.AiSelectionSnapshot;
 import com.winter.airesumeoptimizer.module.resume.config.ResumeParseProperties;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeBlockDTO;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeSectionClassificationDTO;
@@ -39,17 +47,17 @@ public class ResumeAiSectionClassifierImpl implements ResumeAiSectionClassifier 
     private final Map<String, List<ResumeSectionClassificationDTO>> cache = new ConcurrentHashMap<>();
     private final ResumeParseProperties properties;
     private final ResumeSectionClassifyPromptService promptService;
-    private final AiClientService aiClientService;
+    private final AiGateway aiGateway;
     private final ObjectMapper objectMapper;
 
     public ResumeAiSectionClassifierImpl(
             ResumeParseProperties properties,
             ResumeSectionClassifyPromptService promptService,
-            AiClientService aiClientService,
+            AiGateway aiGateway,
             ObjectMapper objectMapper) {
         this.properties = properties;
         this.promptService = promptService;
-        this.aiClientService = aiClientService;
+        this.aiGateway = aiGateway;
         this.objectMapper = objectMapper;
     }
 
@@ -65,6 +73,16 @@ public class ResumeAiSectionClassifierImpl implements ResumeAiSectionClassifier 
 
     @Override
     public ResumeSectionClassifyResultDTO classify(Long resumeId, List<ResumeBlockDTO> blocks, Boolean enabledOverride) {
+        return classify(null, resumeId, blocks, enabledOverride, null);
+    }
+
+    @Override
+    public ResumeSectionClassifyResultDTO classify(
+            Long userId,
+            Long resumeId,
+            List<ResumeBlockDTO> blocks,
+            Boolean enabledOverride,
+            AiSelectionSnapshot selection) {
         long startedAt = System.nanoTime();
         boolean enabled = enabledOverride == null ? properties.aiSectionClassifyEnabled() : Boolean.TRUE.equals(enabledOverride);
         if (!enabled) {
@@ -79,13 +97,17 @@ public class ResumeAiSectionClassifierImpl implements ResumeAiSectionClassifier 
         if (classifiableBlocks.isEmpty()) {
             return skipped(true, "ALL_BLOCKS_RULE_CONFIRMED", startedAt);
         }
+        if (selection == null && userId != null) {
+            selection = AiGatewaySupport.selectionForNewTask(
+                    aiGateway, userId, "RESUME_SECTION_CLASSIFY_SELECTION");
+        }
 
         try {
             List<List<ResumeBlockDTO>> batches = partitionBlocks(classifiableBlocks);
             List<ResumeSectionClassifyPromptDTO> prompts = batches.stream()
                     .map(promptService::buildPrompt)
                     .toList();
-            String cacheKey = buildCacheKey(resumeId, classifiableBlocks, prompts);
+            String cacheKey = buildCacheKey(userId, resumeId, classifiableBlocks, prompts, selection);
             if (cacheKey != null) {
                 List<ResumeSectionClassificationDTO> cached = cache.get(cacheKey);
                 if (cached != null) {
@@ -112,8 +134,17 @@ public class ResumeAiSectionClassifierImpl implements ResumeAiSectionClassifier 
                 batchCount++;
                 List<ResumeBlockDTO> batch = batches.get(index);
                 ResumeSectionClassifyPromptDTO prompt = prompts.get(index);
-                String aiOutput = aiClientService.complete(prompt.getPrompt());
-                classifications.addAll(parseOutput(aiOutput, batch));
+                String trustedPolicy = prompt.getSystemPrompt() == null || prompt.getSystemPrompt().isBlank()
+                        ? "只遵循服务端章节分类输出契约。"
+                        : prompt.getSystemPrompt();
+                String untrustedData = prompt.getUserPrompt() == null || prompt.getUserPrompt().isBlank()
+                        ? prompt.getPrompt()
+                        : prompt.getUserPrompt();
+                AiCompletionResult completion = AiGatewaySupport.complete(
+                        aiGateway,
+                        new AiInvocationContext(userId, null, "RESUME_SECTION_CLASSIFY", selection),
+                        new AiGatewayRequest("RESUME_SECTION_CLASSIFY", trustedPolicy, untrustedData));
+                classifications.addAll(parseOutput(completion.text(), batch));
             }
             if (classifications.isEmpty()) {
                 return aiFallback("AI 章节归类结果为空", startedAt);
@@ -136,6 +167,12 @@ public class ResumeAiSectionClassifierImpl implements ResumeAiSectionClassifier 
                     .classifications(classifications)
                     .build();
         } catch (RuntimeException exception) {
+            if (selection != null && selection.isUserByok()) {
+                if (exception instanceof AiGatewayException gatewayException) {
+                    throw gatewayException;
+                }
+                throw new AiGatewayException(AiFailureCode.SCHEMA_INVALID, "AI 章节归类结果格式异常");
+            }
             log.warn("Resume AI section classify fallback: reason={}", LogSanitizer.sanitize(exception.getMessage()));
             return aiFallback("AI 章节归类失败：" + LogSanitizer.sanitize(exception.getMessage()), startedAt);
         }
@@ -154,9 +191,11 @@ public class ResumeAiSectionClassifierImpl implements ResumeAiSectionClassifier 
     }
 
     private String buildCacheKey(
+            Long userId,
             Long resumeId,
             List<ResumeBlockDTO> blocks,
-            List<ResumeSectionClassifyPromptDTO> prompts) {
+            List<ResumeSectionClassifyPromptDTO> prompts,
+            AiSelectionSnapshot selection) {
         if (resumeId == null) {
             return null;
         }
@@ -164,12 +203,21 @@ public class ResumeAiSectionClassifierImpl implements ResumeAiSectionClassifier 
                 .map(ResumeSectionClassifyPromptDTO::getPromptVersion)
                 .distinct()
                 .collect(Collectors.joining("+"));
-        String modelName = aiClientService.modelName();
+        String selectionIdentity = selection == null
+                ? "legacy-system"
+                : selection.cacheIdentity(userId);
+        String modelIdentity = selection == null
+                ? nullToUnknown(AiGatewaySupport.modelName(
+                        aiGateway,
+                        new AiInvocationContext(userId, null, "RESUME_SECTION_CLASSIFY_CACHE", null)))
+                : nullToUnknown(selection.model());
         return "section"
+                + ":userId=" + nullToUnknown(userId)
                 + ":resumeId=" + nullToUnknown(resumeId)
                 + ":cleanedTextHash=" + hashCleanedText(blocks)
                 + ":promptVersion=" + nullToUnknown(promptVersion)
-                + ":modelName=" + nullToUnknown(modelName)
+                + ":selection=" + selectionIdentity
+                + ":modelName=" + modelIdentity
                 + ":parserVersion=" + ResumeParseVersions.PARSER_VERSION
                 + ":parseMode=" + parseMode(blocks)
                 + ":blockBuilderVersion=" + ResumeParseVersions.BLOCK_BUILDER_VERSION

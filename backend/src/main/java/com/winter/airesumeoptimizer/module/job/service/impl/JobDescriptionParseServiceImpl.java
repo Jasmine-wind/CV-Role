@@ -5,7 +5,13 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.winter.airesumeoptimizer.common.exception.BusinessException;
 import com.winter.airesumeoptimizer.common.logging.LogSanitizer;
-import com.winter.airesumeoptimizer.infra.ai.AiClientService;
+import com.winter.airesumeoptimizer.infra.ai.AiGatewayRequest;
+import com.winter.airesumeoptimizer.infra.ai.AiCompletionResult;
+import com.winter.airesumeoptimizer.infra.ai.AiGateway;
+import com.winter.airesumeoptimizer.infra.ai.AiGatewayException;
+import com.winter.airesumeoptimizer.infra.ai.AiGatewaySupport;
+import com.winter.airesumeoptimizer.infra.ai.AiInvocationContext;
+import com.winter.airesumeoptimizer.infra.ai.AiSelectionSnapshot;
 import com.winter.airesumeoptimizer.module.job.dto.JobDescriptionParseResultDTO;
 import com.winter.airesumeoptimizer.module.job.dto.JobDescriptionPromptDTO;
 import com.winter.airesumeoptimizer.module.job.entity.JobDescription;
@@ -15,6 +21,7 @@ import com.winter.airesumeoptimizer.module.job.service.JobDescriptionParseServic
 import com.winter.airesumeoptimizer.module.job.service.JobDescriptionPromptService;
 import com.winter.airesumeoptimizer.module.job.vo.JobDescriptionVO;
 import java.time.LocalDateTime;
+import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -33,47 +40,71 @@ public class JobDescriptionParseServiceImpl implements JobDescriptionParseServic
     private final JobDescriptionMapper jobDescriptionMapper;
     private final JobDescriptionPromptService jobDescriptionPromptService;
     private final JobDescriptionOutputParser jobDescriptionOutputParser;
-    private final AiClientService aiClientService;
+    private final AiGateway aiGateway;
     private final ObjectMapper objectMapper;
 
     public JobDescriptionParseServiceImpl(
             JobDescriptionMapper jobDescriptionMapper,
             JobDescriptionPromptService jobDescriptionPromptService,
             JobDescriptionOutputParser jobDescriptionOutputParser,
-            AiClientService aiClientService,
+            AiGateway aiGateway,
             ObjectMapper objectMapper) {
         this.jobDescriptionMapper = jobDescriptionMapper;
         this.jobDescriptionPromptService = jobDescriptionPromptService;
         this.jobDescriptionOutputParser = jobDescriptionOutputParser;
-        this.aiClientService = aiClientService;
+        this.aiGateway = aiGateway;
         this.objectMapper = objectMapper;
     }
 
     @Override
     @Transactional
     public JobDescriptionVO parse(Long userId, Long jobDescriptionId) {
+        return parse(userId, jobDescriptionId, null);
+    }
+
+    @Override
+    @Transactional
+    public JobDescriptionVO parse(
+            Long userId,
+            Long jobDescriptionId,
+            AiSelectionSnapshot selection) {
         JobDescription jobDescription = getOwnedJobDescription(userId, jobDescriptionId);
         JobDescriptionPromptDTO prompt = jobDescriptionPromptService.buildPrompt(jobDescription.getRawText());
+        String selectedModel = resolveModel(userId, selection);
         log.info("Job description AI parse started: userId={}, jobDescriptionId={}, model={}",
                 userId,
                 jobDescription.getId(),
-                aiClientService.modelName());
+                selectedModel);
 
         try {
-            String aiOutput = aiClientService.complete(prompt.getPrompt());
-            JobDescriptionParseResultDTO result = jobDescriptionOutputParser.parse(aiOutput);
-            saveSuccess(jobDescription, prompt.getPromptVersion(), result);
+            AiCompletionResult completion = AiGatewaySupport.complete(
+                    aiGateway,
+                    new AiInvocationContext(userId, null, "JOB_DESCRIPTION_PARSE", selection),
+                    new AiGatewayRequest(
+                            "JOB_DESCRIPTION_PARSE",
+                            prompt.getSystemPrompt() == null || prompt.getSystemPrompt().isBlank()
+                                    ? "只遵循服务端岗位解析输出契约。"
+                                    : prompt.getSystemPrompt(),
+                            prompt.getUserPrompt() == null ? prompt.getPrompt() : prompt.getUserPrompt()));
+            JobDescriptionParseResultDTO result = jobDescriptionOutputParser.parse(completion.text());
+            if (result == null) {
+                throw new BusinessException(502, "目标岗位解析结果不是合法 JSON");
+            }
+            saveSuccess(jobDescription, prompt.getPromptVersion(), result, completion.model());
             log.info("Job description AI parse succeeded: userId={}, jobDescriptionId={}, model={}",
                     userId,
                     jobDescription.getId(),
-                    jobDescription.getModelName());
+                    completion.model());
         } catch (RuntimeException exception) {
+            if (selection != null && selection.isUserByok() && exception instanceof AiGatewayException) {
+                throw exception;
+            }
             String errorMessage = normalizeErrorMessage(exception);
-            saveFailed(jobDescription, prompt.getPromptVersion(), errorMessage);
+            saveFailed(jobDescription, prompt.getPromptVersion(), errorMessage, selectedModel);
             log.warn("Job description AI parse failed: userId={}, jobDescriptionId={}, model={}, reason={}",
                     userId,
                     jobDescription.getId(),
-                    aiClientService.modelName(),
+                    selectedModel,
                     LogSanitizer.sanitize(errorMessage));
         }
 
@@ -103,26 +134,27 @@ public class JobDescriptionParseServiceImpl implements JobDescriptionParseServic
     private void saveSuccess(
             JobDescription jobDescription,
             String promptVersion,
-            JobDescriptionParseResultDTO result) {
+            JobDescriptionParseResultDTO result,
+            String modelName) {
         try {
             if (result.getJobTitle() != null && !result.getJobTitle().isBlank()) {
                 jobDescription.setTitle(truncateTitle(result.getJobTitle()));
             }
             jobDescription.setParseStatus(PARSE_STATUS_SUCCESS);
             jobDescription.setStructuredContent(objectMapper.writeValueAsString(result));
-            jobDescription.setModelName(aiClientService.modelName());
+            jobDescription.setModelName(modelName);
             jobDescription.setPromptVersion(promptVersion);
             jobDescription.setErrorMessage(null);
             save(jobDescription);
         } catch (JsonProcessingException exception) {
-            saveFailed(jobDescription, promptVersion, "目标岗位解析结果序列化失败");
+            saveFailed(jobDescription, promptVersion, "目标岗位解析结果序列化失败", modelName);
         }
     }
 
-    private void saveFailed(JobDescription jobDescription, String promptVersion, String errorMessage) {
+    private void saveFailed(JobDescription jobDescription, String promptVersion, String errorMessage, String modelName) {
         jobDescription.setParseStatus(PARSE_STATUS_FAILED);
         jobDescription.setStructuredContent(null);
-        jobDescription.setModelName(aiClientService.modelName());
+        jobDescription.setModelName(modelName);
         jobDescription.setPromptVersion(promptVersion);
         jobDescription.setErrorMessage(truncateErrorMessage(errorMessage));
         save(jobDescription);
@@ -131,6 +163,20 @@ public class JobDescriptionParseServiceImpl implements JobDescriptionParseServic
     private void save(JobDescription jobDescription) {
         jobDescription.setUpdatedAt(LocalDateTime.now());
         jobDescriptionMapper.updateById(jobDescription);
+    }
+
+    private String resolveModel(Long userId, AiSelectionSnapshot selection) {
+        if (selection != null && !selection.model().isBlank()) {
+            return selection.model();
+        }
+        try {
+            String model = AiGatewaySupport.modelName(
+                    aiGateway,
+                    new AiInvocationContext(userId, null, "JOB_DESCRIPTION_PARSE_METADATA", selection));
+            return model == null || model.isBlank() ? "unknown" : model;
+        } catch (RuntimeException exception) {
+            return "unknown";
+        }
     }
 
     private String normalizeErrorMessage(RuntimeException exception) {

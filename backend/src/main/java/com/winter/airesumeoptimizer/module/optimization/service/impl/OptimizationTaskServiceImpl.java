@@ -6,6 +6,8 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.winter.airesumeoptimizer.common.exception.BusinessException;
 import com.winter.airesumeoptimizer.common.logging.LogSanitizer;
+import com.winter.airesumeoptimizer.infra.ai.AiSelectionSnapshot;
+import com.winter.airesumeoptimizer.infra.ai.AiSource;
 import com.winter.airesumeoptimizer.module.analysis.entity.AiJobMatchResult;
 import com.winter.airesumeoptimizer.module.analysis.mapper.AiJobMatchResultMapper;
 import com.winter.airesumeoptimizer.module.evidence.entity.EvidenceAnalysis;
@@ -86,6 +88,17 @@ public class OptimizationTaskServiceImpl implements OptimizationTaskService {
             String rawJobDescription,
             String providerSnapshot,
             String modelSnapshot) {
+        return create(userId, resumeId, jobTitle, rawJobDescription, legacySystemSelection(providerSnapshot, modelSnapshot));
+    }
+
+    @Override
+    @Transactional
+    public OptimizationTaskVO create(
+            Long userId,
+            Long resumeId,
+            String jobTitle,
+            String rawJobDescription,
+            AiSelectionSnapshot selection) {
         getOwnedResume(userId, resumeId);
         JobDescriptionSubmitDTO submitRequest = new JobDescriptionSubmitDTO();
         submitRequest.setTitle(jobTitle);
@@ -95,8 +108,7 @@ public class OptimizationTaskServiceImpl implements OptimizationTaskService {
                 userId,
                 resumeId,
                 getOwnedJobDescription(userId, submittedJob.getId()),
-                providerSnapshot,
-                modelSnapshot);
+                requireSelection(selection));
     }
 
     @Override
@@ -107,12 +119,25 @@ public class OptimizationTaskServiceImpl implements OptimizationTaskService {
             Long jobDescriptionId,
             String providerSnapshot,
             String modelSnapshot) {
+        return createFromExisting(
+                userId,
+                resumeId,
+                jobDescriptionId,
+                legacySystemSelection(providerSnapshot, modelSnapshot));
+    }
+
+    @Override
+    @Transactional
+    public OptimizationTaskVO createFromExisting(
+            Long userId,
+            Long resumeId,
+            Long jobDescriptionId,
+            AiSelectionSnapshot selection) {
         return createFromLegacyJob(
                 userId,
                 resumeId,
                 getOwnedJobDescription(userId, jobDescriptionId),
-                providerSnapshot,
-                modelSnapshot);
+                requireSelection(selection));
     }
 
     @Override
@@ -170,7 +195,8 @@ public class OptimizationTaskServiceImpl implements OptimizationTaskService {
                 jobTarget.getLegacyJobDescriptionId(),
                 jobTarget.getId(),
                 sourceVersion.getId(),
-                targetVersion.getId());
+                targetVersion.getId(),
+                toAiSelection(task));
     }
 
     @Override
@@ -283,7 +309,6 @@ public class OptimizationTaskServiceImpl implements OptimizationTaskService {
                 .eq("status", STATUS_RUNNING)
                 .set("status", STATUS_SUCCESS)
                 .set("prompt_snapshot", promptSnapshot)
-                .set("model_snapshot", evidenceAnalysis.getModelName())
                 .set("error_code", null)
                 .set("error_message", null)
                 .set("finished_at", now)
@@ -341,8 +366,7 @@ public class OptimizationTaskServiceImpl implements OptimizationTaskService {
             Long userId,
             Long resumeId,
             JobDescription legacyJob,
-            String providerSnapshot,
-            String modelSnapshot) {
+            AiSelectionSnapshot selection) {
         Resume resume = getOwnedResume(userId, resumeId);
         if (legacyJob.getRawText() == null || legacyJob.getRawText().isBlank()) {
             throw new BusinessException(400, "目标岗位 JD 原文不能为空");
@@ -367,8 +391,7 @@ public class OptimizationTaskServiceImpl implements OptimizationTaskService {
         task.setJobInputSnapshot(legacyJob.getRawText());
         task.setPromptSnapshot(DEFAULT_PROMPT_SNAPSHOT);
         task.setRulesSnapshot(DEFAULT_RULES_SNAPSHOT);
-        task.setProviderSnapshot(normalizeBlank(providerSnapshot));
-        task.setModelSnapshot(normalizeBlank(modelSnapshot));
+        applyAiSelection(task, selection);
         task.setTemplateVersion(DEFAULT_TEMPLATE_VERSION);
         task.setCreatedAt(now);
         task.setUpdatedAt(now);
@@ -548,6 +571,85 @@ public class OptimizationTaskServiceImpl implements OptimizationTaskService {
         } catch (JsonProcessingException exception) {
             throw new BusinessException(500, "任务配置快照保存失败");
         }
+    }
+
+    private AiSelectionSnapshot requireSelection(AiSelectionSnapshot selection) {
+        if (selection == null) {
+            throw new BusinessException(500, "优化任务缺少 AI 选择快照");
+        }
+        if (selection.source() == AiSource.USER_BYOK
+                && (selection.credentialId() == null
+                || selection.credentialRevision() == null
+                || selection.baseUrl().isBlank()
+                || selection.model().isBlank()
+                || selection.configJson().isBlank())) {
+            throw new BusinessException(500, "优化任务的 BYOK 选择快照不完整");
+        }
+        return selection;
+    }
+
+    private AiSelectionSnapshot legacySystemSelection(String providerSnapshot, String modelSnapshot) {
+        return new AiSelectionSnapshot(
+                AiSource.SYSTEM_DEFAULT,
+                normalizeBlank(providerSnapshot),
+                null,
+                null,
+                "",
+                normalizeBlank(modelSnapshot),
+                "{}",
+                null);
+    }
+
+    private void applyAiSelection(OptimizationTask task, AiSelectionSnapshot selection) {
+        AiSelectionSnapshot safeSelection = requireSelection(selection);
+        task.setProviderSnapshot(safeSelection.providerType());
+        task.setAiSourceSnapshot(safeSelection.source().name());
+        task.setAiProviderSnapshot(safeSelection.providerType());
+        task.setAiCredentialId(safeSelection.credentialId());
+        task.setAiCredentialIdSnapshot(safeSelection.credentialId());
+        task.setAiCredentialRevision(safeSelection.credentialRevision());
+        task.setAiBaseUrlSnapshot(safeSelection.baseUrl());
+        task.setModelSnapshot(safeSelection.model());
+        task.setAiConfigSnapshot(safeSelection.configJson());
+    }
+
+    private AiSelectionSnapshot toAiSelection(OptimizationTask task) {
+        AiSource source = AiSource.USER_BYOK.name().equals(task.getAiSourceSnapshot())
+                ? AiSource.USER_BYOK
+                : AiSource.SYSTEM_DEFAULT;
+        if (source == AiSource.SYSTEM_DEFAULT) {
+            // V19-V22 tasks have no Phase 7 fields and deliberately remain system-default.
+            return new AiSelectionSnapshot(
+                    AiSource.SYSTEM_DEFAULT,
+                    task.getAiProviderSnapshot(),
+                    null,
+                    null,
+                    task.getAiBaseUrlSnapshot(),
+                    task.getModelSnapshot(),
+                    task.getAiConfigSnapshot(),
+                    null);
+        }
+        if (task.getAiCredentialIdSnapshot() == null
+                || task.getAiCredentialRevision() == null
+                || isBlank(task.getAiProviderSnapshot())
+                || isBlank(task.getAiBaseUrlSnapshot())
+                || isBlank(task.getModelSnapshot())
+                || isBlank(task.getAiConfigSnapshot())) {
+            throw new BusinessException(500, "优化任务的 BYOK 选择快照损坏");
+        }
+        return new AiSelectionSnapshot(
+                AiSource.USER_BYOK,
+                task.getAiProviderSnapshot(),
+                task.getAiCredentialIdSnapshot(),
+                task.getAiCredentialRevision(),
+                task.getAiBaseUrlSnapshot(),
+                task.getModelSnapshot(),
+                task.getAiConfigSnapshot(),
+                null);
+    }
+
+    private boolean isBlank(String value) {
+        return value == null || value.isBlank();
     }
 
     private OptimizationTaskVO toVO(

@@ -5,7 +5,13 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.winter.airesumeoptimizer.common.exception.BusinessException;
 import com.winter.airesumeoptimizer.common.logging.LogSanitizer;
-import com.winter.airesumeoptimizer.infra.ai.AiClientService;
+import com.winter.airesumeoptimizer.infra.ai.AiGatewayRequest;
+import com.winter.airesumeoptimizer.infra.ai.AiCompletionResult;
+import com.winter.airesumeoptimizer.infra.ai.AiGateway;
+import com.winter.airesumeoptimizer.infra.ai.AiGatewayException;
+import com.winter.airesumeoptimizer.infra.ai.AiGatewaySupport;
+import com.winter.airesumeoptimizer.infra.ai.AiInvocationContext;
+import com.winter.airesumeoptimizer.infra.ai.AiSelectionSnapshot;
 import com.winter.airesumeoptimizer.module.analysis.dto.AiJobMatchPromptDTO;
 import com.winter.airesumeoptimizer.module.analysis.dto.AiJobMatchResultDTO;
 import com.winter.airesumeoptimizer.module.analysis.entity.AiJobMatchResult;
@@ -45,7 +51,7 @@ public class AiJobMatchServiceImpl implements AiJobMatchService {
     private final AiJobMatchResultMapper aiJobMatchResultMapper;
     private final AiJobMatchPromptService aiJobMatchPromptService;
     private final AiJobMatchOutputParser aiJobMatchOutputParser;
-    private final AiClientService aiClientService;
+    private final AiGateway aiGateway;
     private final ObjectMapper objectMapper;
     private final ResumeRagService resumeRagService;
 
@@ -56,7 +62,7 @@ public class AiJobMatchServiceImpl implements AiJobMatchService {
             AiJobMatchResultMapper aiJobMatchResultMapper,
             AiJobMatchPromptService aiJobMatchPromptService,
             AiJobMatchOutputParser aiJobMatchOutputParser,
-            AiClientService aiClientService,
+            AiGateway aiGateway,
             ObjectMapper objectMapper,
             ResumeRagService resumeRagService) {
         this.resumeMapper = resumeMapper;
@@ -65,14 +71,17 @@ public class AiJobMatchServiceImpl implements AiJobMatchService {
         this.aiJobMatchResultMapper = aiJobMatchResultMapper;
         this.aiJobMatchPromptService = aiJobMatchPromptService;
         this.aiJobMatchOutputParser = aiJobMatchOutputParser;
-        this.aiClientService = aiClientService;
-        this.objectMapper = objectMapper;
+        this.aiGateway = aiGateway;        this.objectMapper = objectMapper;
         this.resumeRagService = resumeRagService;
     }
 
     @Override
     @Transactional
     public AiJobMatchResult match(Long userId, Long resumeId, Long jobDescriptionId) {
+        AiSelectionSnapshot selection = AiGatewaySupport.selectionForNewTask(
+                aiGateway,
+                userId,
+                "LEGACY_JOB_MATCH");
         Resume resume = getOwnedResume(userId, resumeId);
         ResumeParseResult parseResult = getSuccessfulResumeParseResult(resume.getId());
         JobDescription jobDescription = getOwnedSuccessfulJobDescription(userId, jobDescriptionId);
@@ -87,18 +96,27 @@ public class AiJobMatchServiceImpl implements AiJobMatchService {
                 userId,
                 resume.getId(),
                 jobDescription.getId(),
-                aiClientService.modelName(),
+                selection.model(),
                 ragContext.isUsed(),
                 ragContext.getMatchCount());
 
         try {
-            String aiOutput = aiClientService.complete(prompt.getPrompt());
-            AiJobMatchResultDTO result = aiJobMatchOutputParser.parse(aiOutput);
+            AiCompletionResult completion = AiGatewaySupport.complete(
+                    aiGateway,
+                    new AiInvocationContext(userId, null, "LEGACY_JOB_MATCH", selection),
+                    new AiGatewayRequest(
+                            "LEGACY_JOB_MATCH",
+                            prompt.getSystemPrompt() == null || prompt.getSystemPrompt().isBlank()
+                                    ? "只遵循服务端岗位匹配输出契约，不得编造事实。"
+                                    : prompt.getSystemPrompt(),
+                            prompt.getUserPrompt() == null ? prompt.getPrompt() : prompt.getUserPrompt()));
+            AiJobMatchResultDTO result = aiJobMatchOutputParser.parse(completion.text());
             AiJobMatchResult savedResult = saveSuccess(
                     resume.getId(),
                     jobDescription.getId(),
                     prompt.getPromptVersion(),
-                    result);
+                    result,
+                    completion.model());
             log.info("AI job match succeeded: userId={}, resumeId={}, jobDescriptionId={}, score={}, model={}",
                     userId,
                     resume.getId(),
@@ -107,17 +125,21 @@ public class AiJobMatchServiceImpl implements AiJobMatchService {
                     savedResult.getModelName());
             return savedResult;
         } catch (RuntimeException exception) {
+            if (selection.isUserByok() && exception instanceof AiGatewayException) {
+                throw exception;
+            }
             String errorMessage = normalizeErrorMessage(exception);
             AiJobMatchResult failedResult = saveFailed(
                     resume.getId(),
                     jobDescription.getId(),
                     prompt.getPromptVersion(),
-                    errorMessage);
+                    errorMessage,
+                    selection.model());
             log.warn("AI job match failed: userId={}, resumeId={}, jobDescriptionId={}, model={}, reason={}",
                     userId,
                     resume.getId(),
                     jobDescription.getId(),
-                    aiClientService.modelName(),
+                    selection.model(),
                     LogSanitizer.sanitize(errorMessage));
             return failedResult;
         }
@@ -206,7 +228,8 @@ public class AiJobMatchServiceImpl implements AiJobMatchService {
             Long resumeId,
             Long jobDescriptionId,
             String promptVersion,
-            AiJobMatchResultDTO result) {
+            AiJobMatchResultDTO result,
+            String modelName) {
         try {
             AiJobMatchResult matchResult = getOrCreateResult(resumeId, jobDescriptionId);
             matchResult.setMatchStatus(MATCH_STATUS_SUCCESS);
@@ -217,13 +240,13 @@ public class AiJobMatchServiceImpl implements AiJobMatchService {
             matchResult.setWeakExperienceDescriptions(objectMapper.writeValueAsString(result.getWeakExperienceDescriptions()));
             matchResult.setEvidence(objectMapper.writeValueAsString(result.getEvidence()));
             matchResult.setRiskNotes(objectMapper.writeValueAsString(result.getRiskNotes()));
-            matchResult.setModelName(aiClientService.modelName());
+            matchResult.setModelName(modelName);
             matchResult.setPromptVersion(promptVersion);
             matchResult.setErrorMessage(null);
             save(matchResult);
             return matchResult;
         } catch (JsonProcessingException exception) {
-            return saveFailed(resumeId, jobDescriptionId, promptVersion, "AI 匹配结果序列化失败");
+            return saveFailed(resumeId, jobDescriptionId, promptVersion, "AI 匹配结果序列化失败", modelName);
         }
     }
 
@@ -231,7 +254,8 @@ public class AiJobMatchServiceImpl implements AiJobMatchService {
             Long resumeId,
             Long jobDescriptionId,
             String promptVersion,
-            String errorMessage) {
+            String errorMessage,
+            String modelName) {
         AiJobMatchResult matchResult = getOrCreateResult(resumeId, jobDescriptionId);
         matchResult.setMatchStatus(MATCH_STATUS_FAILED);
         matchResult.setOverallScore(null);
@@ -241,7 +265,7 @@ public class AiJobMatchServiceImpl implements AiJobMatchService {
         matchResult.setWeakExperienceDescriptions(null);
         matchResult.setEvidence(null);
         matchResult.setRiskNotes(null);
-        matchResult.setModelName(aiClientService.modelName());
+        matchResult.setModelName(modelName);
         matchResult.setPromptVersion(promptVersion);
         matchResult.setErrorMessage(truncateErrorMessage(errorMessage));
         save(matchResult);
