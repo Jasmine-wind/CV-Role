@@ -27,6 +27,13 @@ const restoring = ref(false)
 const previewPreparing = ref(false)
 const previewDrawerVisible = ref(false)
 
+// 窄屏下预览 Drawer 占满宽度，避免产生被压缩的第三栏。
+const isNarrowScreen = ref(window.matchMedia('(max-width: 640px)').matches)
+let narrowMediaQuery: MediaQueryList | null = null
+const handleNarrowChange = (event: MediaQueryListEvent) => {
+  isNarrowScreen.value = event.matches
+}
+
 const jobTitle = computed(() => analysisResult.value?.jobTitle ?? '简历编辑')
 
 // 岗位定向改写只对拥有正式证据分析的任务开放；旧版兼容任务由服务端 fail closed 兜底。
@@ -35,21 +42,24 @@ const suggestEnabled = computed(() => analysisResult.value?.analysisMode === 'EV
 const saveStatusText = computed(() => {
   switch (editor.status.value) {
     case 'dirty':
-      return '有修改未保存'
+      return '修改未保存'
     case 'saving':
-      return '正在保存…'
+      return '正在保存'
     case 'saved':
       return '已保存'
     case 'failed':
-      return '保存失败'
+      return '草稿仍在，可重试'
     case 'conflict':
-      return '存在保存冲突'
+      return '本地草稿未保存，请解决冲突'
     default:
       return ''
   }
 })
 
 const saveStatusClass = computed(() => `save-status is-${editor.status.value}`)
+
+// 未保存 / saving / failed / conflict 时不允许发起 Suggest，避免候选绑定到未落库内容。
+const suggestLocked = computed(() => editor.status.value !== 'saved')
 
 const loadAnalysis = async () => {
   analysisLoading.value = true
@@ -140,6 +150,12 @@ const openPreviewDrawer = async () => {
 
 // Preview / Export 发现服务端 revision 已变化：同步服务端最新版本，杜绝静默渲染旧内容。
 const handlePreviewStale = async () => {
+  // Preview / Export 的过期响应绝不能覆盖已出现的本地草稿。
+  // 正常情况下子组件会丢弃这类过期响应；这里保留防御，等待现有 AutoSave/CAS 冲突流程处理。
+  if (editor.hasUnsavedChanges.value) {
+    ElMessage.warning('当前草稿仍在，未自动替换。请先完成保存或处理冲突后重新预览。')
+    return
+  }
   try {
     await editor.adoptServerVersion()
   } catch {
@@ -159,12 +175,15 @@ onMounted(() => {
   void editor.load()
   void loadAnalysis()
   window.addEventListener('beforeunload', beforeUnloadHandler)
+  narrowMediaQuery = window.matchMedia('(max-width: 640px)')
+  narrowMediaQuery.addEventListener('change', handleNarrowChange)
 })
 
 onBeforeUnmount(() => {
   bulletSuggest.dispose()
   editor.dispose()
   window.removeEventListener('beforeunload', beforeUnloadHandler)
+  narrowMediaQuery?.removeEventListener('change', handleNarrowChange)
 })
 
 const confirmDiscardUnsavedChanges = async () => {
@@ -190,11 +209,10 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
   <section class="workspace-panel">
     <header class="workspace-header">
       <div class="workspace-title">
-        <span>优化工作区</span>
         <h1>{{ jobTitle }}</h1>
+        <span :class="saveStatusClass" role="status">{{ saveStatusText }}</span>
       </div>
       <div class="workspace-toolbar">
-        <span :class="saveStatusClass" role="status">{{ saveStatusText }}</span>
         <el-button :disabled="!editor.canUndo.value" @click="editor.undo()">撤销</el-button>
         <el-button :disabled="!editor.canRedo.value" @click="editor.redo()">重做</el-button>
         <el-button
@@ -210,18 +228,18 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
       </div>
     </header>
 
-    <div v-if="editor.status.value === 'conflict'" class="workspace-conflict">
+    <div v-if="editor.status.value === 'conflict'" class="workspace-conflict" role="alert">
       <p>
-        服务端已存在更新的版本，你的本地修改没有保存。请选择：用当前编辑内容覆盖，或改用服务端最新版本。
+        服务端已存在更新的版本，你的本地修改尚未保存。请选择处理方式：
       </p>
       <div>
         <el-button type="primary" @click="handleOverwrite">用我的内容覆盖</el-button>
-        <el-button @click="handleAdoptServer">使用服务端版本</el-button>
+        <el-button @click="handleAdoptServer">使用最新版本</el-button>
       </div>
     </div>
 
-    <div v-else-if="editor.status.value === 'failed'" class="workspace-failed">
-      <p>{{ editor.saveError.value ?? '保存失败' }}，本地草稿已保留。</p>
+    <div v-else-if="editor.status.value === 'failed'" class="workspace-failed" role="alert">
+      <p>{{ editor.saveError.value ?? '保存失败' }}。草稿仍在，不会丢失。</p>
       <el-button type="primary" @click="handleRetry">重试保存</el-button>
     </div>
 
@@ -239,11 +257,13 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
         :result="analysisResult"
         :loading="analysisLoading"
         :error="analysisError"
+        @retry-load="loadAnalysis"
       />
       <ResumeEditor
         :document="editor.draft.value"
         :suggest="bulletSuggest"
         :suggest-enabled="suggestEnabled"
+        :suggest-locked="suggestLocked"
         @change="handleEditorChange"
       />
     </div>
@@ -254,7 +274,7 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
       v-model="previewDrawerVisible"
       title="预览 / 导出 PDF"
       direction="rtl"
-      size="540px"
+      :size="isNarrowScreen ? '100%' : '540px'"
       destroy-on-close
     >
       <WorkspacePreviewExport
@@ -282,16 +302,18 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
   flex-wrap: wrap;
 }
 
-.workspace-title span {
-  color: var(--app-primary);
-  font-size: 12px;
-  font-weight: 800;
+.workspace-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  flex-wrap: wrap;
 }
 
 .workspace-title h1 {
-  margin: 4px 0 0;
-  color: var(--app-navy);
-  font-size: 24px;
+  margin: 0;
+  color: var(--app-text);
+  font-size: 22px;
 }
 
 .workspace-toolbar {

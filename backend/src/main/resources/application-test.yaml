@@ -22,6 +22,9 @@ app:
   ai:
     openai-compatible:
       timeout-seconds: ${TEST_OPENAI_TIMEOUT_SECONDS:5}
+    usage:
+      retention:
+        enabled: false
 
 logging:
   level:

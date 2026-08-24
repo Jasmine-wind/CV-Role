@@ -3,7 +3,6 @@ package com.winter.airesumeoptimizer.module.resume.service.impl;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
-import com.winter.airesumeoptimizer.common.logging.LogSanitizer;
 import com.winter.airesumeoptimizer.infra.ai.AiGatewayRequest;
 import com.winter.airesumeoptimizer.infra.ai.AiClientException;
 import com.winter.airesumeoptimizer.infra.ai.AiCompletionResult;
@@ -173,8 +172,9 @@ public class ResumeAiSectionClassifierImpl implements ResumeAiSectionClassifier 
                 }
                 throw new AiGatewayException(AiFailureCode.SCHEMA_INVALID, "AI 章节归类结果格式异常");
             }
-            log.warn("Resume AI section classify fallback: reason={}", LogSanitizer.sanitize(exception.getMessage()));
-            return aiFallback("AI 章节归类失败：" + LogSanitizer.sanitize(exception.getMessage()), startedAt);
+            // Parser/provider messages can contain echoed resume content; keep diagnostics non-content only.
+            log.warn("Resume AI section classify fallback: exceptionType={}", exception.getClass().getSimpleName());
+            return aiFallback("AI 章节归类失败", startedAt);
         }
     }
 
@@ -343,10 +343,11 @@ public class ResumeAiSectionClassifierImpl implements ResumeAiSectionClassifier 
         if (lastException == null) {
             lastException = new IllegalArgumentException("AI 输出中未找到 JSON");
         }
-        log.warn("Resume AI section classify JSON parse failed: reason={}, outputPreview={}",
-                rootMessage(lastException),
-                LogSanitizer.sanitize(aiOutput));
-        throw new IllegalArgumentException("AI 章节归类 JSON 解析失败：" + rootMessage(lastException), lastException);
+        // Provider output can echo resume content. Keep only non-content diagnostics.
+        log.warn("Resume AI section classify JSON parse failed: exceptionType={}, outputLength={}",
+                lastException.getClass().getSimpleName(),
+                aiOutput == null ? 0 : aiOutput.length());
+        throw new IllegalArgumentException("AI 章节归类 JSON 解析失败", lastException);
     }
 
     private JsonNode readJsonCandidate(String candidate) throws Exception {
@@ -564,17 +565,4 @@ public class ResumeAiSectionClassifierImpl implements ResumeAiSectionClassifier 
         return null;
     }
 
-    private String rootMessage(Throwable throwable) {
-        Throwable current = throwable;
-        Throwable last = throwable;
-        while (current != null) {
-            last = current;
-            current = current.getCause();
-        }
-        String message = last == null ? null : last.getMessage();
-        if (message == null || message.isBlank()) {
-            message = throwable == null ? "unknown" : throwable.getClass().getSimpleName();
-        }
-        return LogSanitizer.sanitize(message);
-    }
 }

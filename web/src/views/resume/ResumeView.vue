@@ -3,6 +3,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import PageHeader from '@/components/common/PageHeader.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
+import ErrorState from '@/components/common/ErrorState.vue'
 import SkeletonBlock from '@/components/common/SkeletonBlock.vue'
 import { deleteResume, getResumeList, requestResumePreparation, uploadResume } from '@/api/resume'
 import { startAsyncTaskPolling } from '@/utils/asyncTaskPolling'
@@ -16,6 +17,7 @@ const PREPARATION_TIMEOUT_MS = 5 * 60 * 1000
 
 const resumes = ref<ResumeListItem[]>([])
 const loading = ref(false)
+const loadFailed = ref(false)
 const uploading = ref(false)
 const deletingId = ref<number | null>(null)
 const selectedFile = ref<File | null>(null)
@@ -67,10 +69,12 @@ const statusFor = (resume: ResumeListItem) => {
 
 const loadResumes = async () => {
   loading.value = true
+  loadFailed.value = false
   try {
     resumes.value = await getResumeList()
-  } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '获取简历失败')
+  } catch {
+    // 区分真正的加载失败与空数据：失败提供重试，而不是当成没有简历。
+    loadFailed.value = true
   } finally {
     loading.value = false
   }
@@ -243,8 +247,7 @@ onUnmounted(() => {
 <template>
   <section class="resume-page resume-simple-page">
     <PageHeader
-      eyebrow="我的简历"
-      title="维护你的真实简历"
+      title="我的简历"
       description="上传后系统会自动读取并准备内容，你不需要选择解析方式或执行额外步骤。"
     />
 
@@ -269,6 +272,14 @@ onUnmounted(() => {
 
     <SkeletonBlock v-if="loading && !resumes.length" title :rows="5" />
 
+    <ErrorState
+      v-else-if="loadFailed"
+      title="简历列表加载失败"
+      description="暂时无法读取你的简历列表，这不影响已保存的简历。"
+      action-text="重新加载"
+      @action="loadResumes()"
+    />
+
     <section v-else-if="resumes.length" class="resume-simple-list">
       <header>
         <div>
@@ -286,7 +297,7 @@ onUnmounted(() => {
             <small>{{ formatFileSize(resume.fileSize) }} · {{ formatDate(resume.createdAt) }}</small>
           </div>
         </div>
-        <el-tag :type="statusFor(resume).tone">{{ statusFor(resume).label }}</el-tag>
+        <el-tag :type="statusFor(resume).tone" effect="light">{{ statusFor(resume).label }}</el-tag>
         <p v-if="resume.parseStatus === 'FAILED'" class="resume-simple-error">
           {{ resume.parseErrorMessage || '未能读取这份简历，请重试。' }}
         </p>
@@ -353,7 +364,7 @@ onUnmounted(() => {
   justify-content: center;
   min-height: 40px;
   padding: 0 16px;
-  border: 1px solid var(--app-border-strong);
+  border: 1px solid var(--app-border);
   border-radius: var(--app-radius-md);
   color: var(--app-text);
   font-weight: 700;
@@ -367,6 +378,11 @@ onUnmounted(() => {
   height: 1px;
   overflow: hidden;
   opacity: 0;
+}
+
+.resume-file-picker:focus-within {
+  outline: 2px solid var(--app-primary);
+  outline-offset: 2px;
 }
 
 .resume-simple-list {

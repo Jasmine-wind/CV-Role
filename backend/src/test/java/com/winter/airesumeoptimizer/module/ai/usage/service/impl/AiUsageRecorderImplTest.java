@@ -10,14 +10,14 @@ import com.winter.airesumeoptimizer.infra.ai.AiSelectionSnapshot;
 import com.winter.airesumeoptimizer.infra.ai.AiSource;
 import com.winter.airesumeoptimizer.infra.ai.AiUsageMetrics;
 import com.winter.airesumeoptimizer.module.ai.usage.entity.AiUsageRecord;
-import com.winter.airesumeoptimizer.module.ai.usage.mapper.AiUsageRecordMapper;
+import com.winter.airesumeoptimizer.module.ai.usage.service.AiUsageRecordPersistence;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 class AiUsageRecorderImplTest {
 
-    private final AiUsageRecordMapper usageRecordMapper = mock(AiUsageRecordMapper.class);
-    private final AiUsageRecorderImpl recorder = new AiUsageRecorderImpl(usageRecordMapper);
+    private final AiUsageRecordPersistence usageRecordPersistence = mock(AiUsageRecordPersistence.class);
+    private final AiUsageRecorderImpl recorder = new AiUsageRecorderImpl(usageRecordPersistence);
 
     @Test
     void recordSuccessShouldOnlyPersistLedgerFieldsWithoutContentOrSecrets() {
@@ -103,7 +103,7 @@ class AiUsageRecorderImplTest {
 
     private AiUsageRecord captureInsertedRecord() {
         ArgumentCaptor<AiUsageRecord> captor = ArgumentCaptor.forClass(AiUsageRecord.class);
-        verify(usageRecordMapper).insert(captor.capture());
+        verify(usageRecordPersistence).persist(captor.capture());
         return captor.getValue();
     }
 }

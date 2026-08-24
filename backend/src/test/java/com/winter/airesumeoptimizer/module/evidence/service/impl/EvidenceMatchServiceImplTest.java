@@ -86,14 +86,17 @@ class EvidenceMatchServiceImplTest {
 
     @Test
     void analyzeShouldPersistTraceableRequirementsAndEvidenceFromFrozenSnapshot() {
-        when(evidenceMatchingStrategy.match(any(), any(), any())).thenReturn(outcome());
+        when(evidenceMatchingStrategy.match(any(), any(), any(), any(), any(), any())).thenReturn(outcome());
 
         EvidenceAnalysis analysis = service.analyze(1L, 50L, parsedJob());
 
         verify(evidenceMatchingStrategy).match(
+                1L,
+                50L,
                 "岗位要求 Java",
                 "{\"requiredSkills\":[\"Java\"]}",
-                "{\"skills\":[\"熟悉 Java\"]}");
+                "{\"skills\":[\"熟悉 Java\"]}",
+                null);
         assertThat(analysis.getOptimizationTaskId()).isEqualTo(50L);
         assertThat(analysis.getMatchedCount()).isEqualTo(1);
         assertThat(analysis.getPartialEvidenceCount()).isEqualTo(1);
@@ -121,7 +124,7 @@ class EvidenceMatchServiceImplTest {
         existing.setUserId(1L);
         existing.setOptimizationTaskId(50L);
         when(evidenceAnalysisMapper.selectOne(any())).thenReturn(existing);
-        when(evidenceMatchingStrategy.match(any(), any(), any())).thenReturn(outcome());
+        when(evidenceMatchingStrategy.match(any(), any(), any(), any(), any(), any())).thenReturn(outcome());
 
         service.analyze(1L, 50L, parsedJob());
 
@@ -131,7 +134,7 @@ class EvidenceMatchServiceImplTest {
 
     @Test
     void analyzeShouldNotCompleteTaskWhenChildPersistenceFails() {
-        when(evidenceMatchingStrategy.match(any(), any(), any())).thenReturn(outcome());
+        when(evidenceMatchingStrategy.match(any(), any(), any(), any(), any(), any())).thenReturn(outcome());
         when(evidenceRequirementMapper.insert(any(EvidenceRequirement.class))).thenReturn(0);
 
         assertThatThrownBy(() -> service.analyze(1L, 50L, parsedJob()))
@@ -143,7 +146,7 @@ class EvidenceMatchServiceImplTest {
 
     @Test
     void analyzeShouldPropagateCompletionFailureSoTransactionCanRollbackResultReplacement() {
-        when(evidenceMatchingStrategy.match(any(), any(), any())).thenReturn(outcome());
+        when(evidenceMatchingStrategy.match(any(), any(), any(), any(), any(), any())).thenReturn(outcome());
         doThrow(new BusinessException(409, "优化任务当前状态不允许完成分析"))
                 .when(optimizationTaskService)
                 .markSuccess(any(), any(), any(), any());
@@ -166,7 +169,7 @@ class EvidenceMatchServiceImplTest {
                 .isInstanceOf(BusinessException.class)
                 .hasMessage("优化任务缺少简历输入快照");
 
-        verify(evidenceMatchingStrategy, never()).match(any(), any(), any());
+        verify(evidenceMatchingStrategy, never()).match(any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -175,7 +178,7 @@ class EvidenceMatchServiceImplTest {
                 .isInstanceOf(BusinessException.class)
                 .hasMessage("目标岗位结构化解析结果为空");
 
-        verify(evidenceMatchingStrategy, never()).match(any(), any(), any());
+        verify(evidenceMatchingStrategy, never()).match(any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -197,7 +200,7 @@ class EvidenceMatchServiceImplTest {
                 .isInstanceOf(BusinessException.class)
                 .hasMessage("优化任务与冻结简历版本不一致");
 
-        verify(evidenceMatchingStrategy, never()).match(any(), any(), any());
+        verify(evidenceMatchingStrategy, never()).match(any(), any(), any(), any(), any(), any());
     }
 
     @Test

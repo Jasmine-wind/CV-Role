@@ -6,198 +6,172 @@ const router = useRouter()
 const valuePoints = [
   {
     title: '岗位定向',
-    description: '根据你粘贴的真实 JD，检查岗位要求与当前简历表达。',
+    description: '粘贴真实 JD，逐条核对岗位要求与当前简历中的表达。',
   },
   {
     title: '真实可控',
-    description: '分析只依据当前简历；未体现的岗位要求会提示你核对真实经历。',
+    description: '分析只依据你当前的简历材料，AI 不会编造经历或成果。',
   },
   {
-    title: '清晰结果',
-    description: '集中查看已有优势、建议完善项和当前材料尚未体现的要求。',
+    title: '直接得到可投递 PDF',
+    description: '编辑确认后预览排版，导出为可直接投递的 PDF。',
   },
 ]
 </script>
 
 <template>
-  <main class="landing-page landing-simple-page">
+  <main class="landing-page">
     <header class="landing-nav">
       <RouterLink to="/" class="landing-brand">
         <span>CV</span>
-        <strong>CV Role</strong>
+        <strong>简历优化</strong>
       </RouterLink>
-      <div class="landing-nav-actions">
-        <el-button @click="router.push('/login')">登录</el-button>
-        <el-button type="primary" @click="router.push('/register')">开始优化</el-button>
-      </div>
+      <el-button text @click="router.push('/login')">登录</el-button>
     </header>
 
-    <section class="landing-simple-hero">
-      <div class="landing-simple-copy">
-        <p class="landing-eyebrow">岗位定向简历优化</p>
-        <h1>为每一个岗位，准备更合适的简历</h1>
-        <p>
-          上传已有简历，粘贴目标 JD，看清哪里匹配、哪里值得检查，
-          以及哪些岗位要求在当前简历中还没有体现。
-        </p>
-        <div class="landing-hero-actions">
-          <el-button type="primary" size="large" @click="router.push('/register')">开始优化</el-button>
-          <el-button size="large" @click="router.push('/login')">已有账号</el-button>
-        </div>
+    <section class="landing-hero">
+      <h1>为目标岗位准备更合适的简历</h1>
+      <p>
+        上传已有简历，粘贴目标岗位 JD，看清哪些要求已有体现、哪些值得完善，
+        确认后直接得到可投递的 PDF。
+      </p>
+      <div class="landing-hero-actions">
+        <el-button type="primary" size="large" @click="router.push('/register')">
+          开始优化
+        </el-button>
       </div>
-
-      <aside class="landing-simple-preview app-card" aria-label="产品主流程">
-        <span>只需要两项输入</span>
-        <div>
-          <strong>我的简历</strong>
-          <small>你的真实经历与当前表达</small>
-        </div>
-        <div>
-          <strong>目标岗位 JD</strong>
-          <small>当前准备投递的岗位要求</small>
-        </div>
-        <p>选择简历 + 粘贴 JD → 开始分析</p>
-      </aside>
+      <small>第一次使用只需要两项输入：我的简历 + 目标岗位 JD。</small>
     </section>
 
-    <section class="landing-simple-values">
-      <article v-for="item in valuePoints" :key="item.title" class="app-card">
+    <section class="landing-values" aria-label="产品价值">
+      <article v-for="item in valuePoints" :key="item.title">
         <h2>{{ item.title }}</h2>
         <p>{{ item.description }}</p>
       </article>
     </section>
 
-    <section class="landing-simple-final">
-      <h2>复杂步骤留给系统，重要决定留给你</h2>
-      <p>第一次使用只需要上传简历、粘贴 JD、开始分析。</p>
-      <el-button type="primary" size="large" @click="router.push('/register')">立即开始</el-button>
-    </section>
+    <footer class="landing-foot">分析真实可控，重要决定始终留给你。</footer>
   </main>
 </template>
 
 <style scoped>
-.landing-simple-page {
+.landing-page {
   min-height: 100vh;
-  height: auto;
-  overflow: visible;
-  scroll-snap-type: none;
-}
-
-.landing-simple-hero {
   display: grid;
-  grid-template-columns: minmax(0, 1.1fr) minmax(320px, 0.75fr);
-  gap: 64px;
-  width: min(100% - 48px, 1160px);
-  min-height: calc(100vh - 72px);
-  align-items: center;
-  margin: 0 auto;
-  padding: 72px 0;
-}
-
-.landing-simple-copy h1 {
-  max-width: 720px;
-  margin: 0;
-  color: var(--app-navy);
-  font-size: clamp(42px, 6vw, 68px);
-  line-height: 1.08;
-  letter-spacing: -0.04em;
-}
-
-.landing-simple-copy > p:not(.landing-eyebrow) {
-  max-width: 680px;
-  margin: 24px 0 0;
-  color: var(--app-text-secondary);
-  font-size: 18px;
-  line-height: 1.8;
-}
-
-.landing-simple-preview {
-  display: grid;
-  gap: 14px;
-  padding: 28px;
-}
-
-.landing-simple-preview > span {
-  color: var(--app-primary);
-  font-size: 13px;
-  font-weight: 800;
-}
-
-.landing-simple-preview > div {
-  display: grid;
-  gap: 5px;
-  padding: 18px;
-  border: 1px solid var(--app-border);
-  border-radius: var(--app-radius-md);
-  background: var(--app-surface-soft);
-}
-
-.landing-simple-preview strong {
+  grid-template-rows: auto 1fr auto auto;
   color: var(--app-text);
+  background: var(--app-bg);
 }
 
-.landing-simple-preview small,
-.landing-simple-preview p,
-.landing-simple-values p,
-.landing-simple-final p {
-  color: var(--app-text-secondary);
-  line-height: 1.7;
-}
-
-.landing-simple-preview p {
-  margin: 4px 0 0;
-  color: var(--app-primary);
-  font-weight: 800;
-}
-
-.landing-simple-values {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 16px;
-  width: min(100% - 48px, 1160px);
-  margin: 0 auto;
-  padding: 0 0 100px;
-}
-
-.landing-simple-values article {
-  padding: 24px;
-}
-
-.landing-simple-values h2,
-.landing-simple-final h2 {
-  margin: 0;
-  color: var(--app-navy);
-}
-
-.landing-simple-values p {
-  margin: 12px 0 0;
-}
-
-.landing-simple-final {
-  display: grid;
-  justify-items: center;
-  gap: 14px;
-  padding: 84px 24px;
-  text-align: center;
+.landing-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  min-height: 60px;
+  padding: 0 max(24px, calc((100% - 1080px) / 2));
+  border-bottom: 1px solid var(--app-border-soft);
   background: var(--app-surface);
 }
 
-.landing-simple-final h2 {
-  font-size: 32px;
+.landing-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--app-text);
+  font-weight: 800;
 }
 
-.landing-simple-final p {
+.landing-brand span {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border-radius: var(--app-radius-sm);
+  color: #fff;
+  font-size: 12px;
+  background: var(--app-primary);
+}
+
+.landing-hero {
+  display: grid;
+  justify-items: start;
+  align-content: center;
+  gap: 20px;
+  width: min(100% - 48px, 760px);
+  margin: 0 auto;
+  padding: 96px 0 72px;
+}
+
+.landing-hero h1 {
   margin: 0;
+  color: var(--app-text);
+  font-size: clamp(32px, 4.6vw, 46px);
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+}
+
+.landing-hero > p {
+  margin: 0;
+  max-width: 640px;
+  color: var(--app-text-secondary);
+  font-size: 16px;
+  line-height: 1.8;
+}
+
+.landing-hero-actions {
+  display: flex;
+  gap: 12px;
+}
+
+.landing-hero small {
+  color: var(--app-text-muted);
+  font-size: 13px;
+}
+
+.landing-values {
+  width: min(100% - 48px, 1080px);
+  margin: 0 auto;
+  padding: 8px 0 72px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 32px;
+}
+
+.landing-values article {
+  padding-top: 16px;
+  border-top: 1px solid var(--app-border);
+}
+
+.landing-values h2 {
+  margin: 0;
+  color: var(--app-text);
+  font-size: 16px;
+}
+
+.landing-values p {
+  margin: 8px 0 0;
+  color: var(--app-text-secondary);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.landing-foot {
+  padding: 20px 24px;
+  border-top: 1px solid var(--app-border-soft);
+  color: var(--app-text-muted);
+  font-size: 13px;
+  text-align: center;
 }
 
 @media (max-width: 820px) {
-  .landing-simple-hero,
-  .landing-simple-values {
-    grid-template-columns: 1fr;
+  .landing-hero {
+    padding: 64px 0 48px;
   }
 
-  .landing-simple-hero {
-    gap: 36px;
+  .landing-values {
+    grid-template-columns: 1fr;
+    gap: 20px;
   }
 }
 </style>

@@ -70,11 +70,11 @@ const handleSubmit = async () => {
   <main class="auth-page">
     <section class="auth-panel">
       <RouterLink to="/" class="auth-brand">
-        <span>AI</span>
+        <span>CV</span>
         <strong>简历优化</strong>
       </RouterLink>
       <h1 class="auth-title">注册</h1>
-      <p class="auth-subtitle">创建账号后，后续可以上传简历并查看匹配建议。</p>
+      <p class="auth-subtitle">创建账号后，上传简历并粘贴目标岗位 JD 即可开始分析。</p>
 
       <el-form ref="formRef" :model="form" :rules="rules" label-position="top" size="large">
         <el-form-item label="用户名" prop="username">

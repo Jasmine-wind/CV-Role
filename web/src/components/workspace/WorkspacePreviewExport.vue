@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import ErrorState from '@/components/common/ErrorState.vue'
 import {
   deleteWorkspaceArtifact,
   downloadArtifactPdf,
@@ -26,10 +27,16 @@ const props = defineProps<{
 const emit = defineEmits<{ stale: [] }>()
 
 const TEMPLATE_OPTIONS: { value: ResumeTemplateId; label: string }[] = [
-  { value: 'classic', label: 'Classic 经典' },
-  { value: 'modern', label: 'Modern 现代' },
-  { value: 'minimal', label: 'Minimal 简洁' },
+  { value: 'classic', label: '经典' },
+  { value: 'modern', label: '现代' },
+  { value: 'minimal', label: '简洁' },
 ]
+
+const TEMPLATE_LABELS: Record<ResumeTemplateId, string> = {
+  classic: '经典',
+  modern: '现代',
+  minimal: '简洁',
+}
 
 const templateId = ref<ResumeTemplateId>('classic')
 const previewLoading = ref(false)
@@ -40,12 +47,19 @@ const previewUrl = ref<string | null>(null)
 const previewKey = ref('')
 const previewReceipt = ref<string | null>(null)
 const previewPreflight = ref<ExportPreflight | null>(null)
-const previewTemplateVersion = ref<string | null>(null)
-const previewRendererVersion = ref<string | null>(null)
 let previewRequestSequence = 0
 const artifacts = ref<ExportArtifact[]>([])
 const artifactsLoading = ref(false)
+const artifactsLoadError = ref<string | null>(null)
 const downloadingId = ref<number | null>(null)
+
+type OperationFailure = {
+  operation: 'preview' | 'export' | 'download' | 'delete'
+  message: string
+  artifact?: ExportArtifact
+}
+
+const operationFailure = ref<OperationFailure | null>(null)
 
 // 只有最近一次保存成功后，才允许用服务端内容生成 Preview / Export；
 // dirty / saving / failed / conflict 时前端草稿一律不得进入渲染链路。
@@ -63,10 +77,11 @@ const canExport = computed(
 const preflightMessages = computed(() => {
   const result = previewPreflight.value
   if (!result) return []
-  const messages = [`实际 PDF：${result.pageCount} 页`]
+  const messages = [`编译成功，实际 PDF：${result.pageCount} 页`]
   if (result.missingContact) messages.push('缺少联系方式，请返回编辑器补充')
   if (result.pageLimitExceeded) messages.push('超过建议的 2 页，请检查内容取舍')
   if (result.overflowDetected) messages.push('检测到文字超出页面边界，请调整内容后重新预览')
+  if (messages.length === 1) messages.push('联系方式、页数与排版边界均未发现问题')
   return messages
 })
 
@@ -98,8 +113,9 @@ const invalidatePreview = () => {
   previewKey.value = ''
   previewReceipt.value = null
   previewPreflight.value = null
-  previewTemplateVersion.value = null
-  previewRendererVersion.value = null
+  if (operationFailure.value?.operation === 'preview' || operationFailure.value?.operation === 'export') {
+    operationFailure.value = null
+  }
 }
 
 type ApiErrorLike = Error & { code?: number }
@@ -116,8 +132,21 @@ const handleStale = (message: string) => {
   emit('stale')
 }
 
+const isCurrentRequest = (
+  requestSequence: number,
+  taskAtRequest: number,
+  revisionAtRequest: number,
+  templateAtRequest: ResumeTemplateId,
+) =>
+  requestSequence === previewRequestSequence
+  && props.status === 'saved'
+  && props.optimizationTaskId === taskAtRequest
+  && props.revision === revisionAtRequest
+  && templateId.value === templateAtRequest
+
 const handlePreview = async () => {
   if (!canOperate.value || previewLoading.value || props.revision === null) return
+  operationFailure.value = null
   previewLoading.value = true
   const taskAtRequest = props.optimizationTaskId
   const revisionAtRequest = props.revision
@@ -125,14 +154,8 @@ const handlePreview = async () => {
   const requestSequence = ++previewRequestSequence
   try {
     const preview = await previewWorkspacePdf(taskAtRequest, templateAtRequest, revisionAtRequest)
-    if (
-      requestSequence !== previewRequestSequence ||
-      props.status !== 'saved' ||
-      props.optimizationTaskId !== taskAtRequest ||
-      props.revision !== revisionAtRequest ||
-      preview.contentRevision !== revisionAtRequest ||
-      templateId.value !== templateAtRequest
-    ) {
+    if (!isCurrentRequest(requestSequence, taskAtRequest, revisionAtRequest, templateAtRequest)
+      || preview.contentRevision !== revisionAtRequest) {
       return
     }
     revokePreviewUrl()
@@ -140,14 +163,17 @@ const handlePreview = async () => {
     previewKey.value = `${taskAtRequest}:${revisionAtRequest}:${templateAtRequest}`
     previewReceipt.value = preview.previewReceipt
     previewPreflight.value = preview.preflight
-    previewTemplateVersion.value = preview.templateVersion
-    previewRendererVersion.value = preview.rendererVersion
     previewDialogVisible.value = true
   } catch (error) {
+    if (!isCurrentRequest(requestSequence, taskAtRequest, revisionAtRequest, templateAtRequest)) {
+      return
+    }
+    const message = error instanceof Error ? error.message : '预览生成失败，请稍后重试'
     if (isStaleError(error)) {
-      handleStale(error.message)
+      handleStale(message)
     } else {
-      ElMessage.error(error instanceof Error ? error.message : '预览生成失败，请稍后重试')
+      operationFailure.value = { operation: 'preview', message }
+      ElMessage.error(message)
     }
   } finally {
     previewLoading.value = false
@@ -167,10 +193,11 @@ const triggerBrowserDownload = (blob: Blob, fileName: string) => {
 
 const refreshArtifacts = async () => {
   artifactsLoading.value = true
+  artifactsLoadError.value = null
   try {
     artifacts.value = await listWorkspaceArtifacts(props.optimizationTaskId)
-  } catch {
-    artifacts.value = []
+  } catch (error) {
+    artifactsLoadError.value = error instanceof Error ? error.message : '暂时无法读取导出记录'
   } finally {
     artifactsLoading.value = false
   }
@@ -183,22 +210,43 @@ const handleExport = async () => {
     props.revision === null ||
     previewReceipt.value === null
   ) return
+  operationFailure.value = null
   exporting.value = true
+  const taskAtRequest = props.optimizationTaskId
+  const revisionAtRequest = props.revision
+  const templateAtRequest = templateId.value
+  const receiptAtRequest = previewReceipt.value
+  const requestSequence = previewRequestSequence
+  const requestIsCurrent = () =>
+    isCurrentRequest(requestSequence, taskAtRequest, revisionAtRequest, templateAtRequest)
+    && previewKey.value === `${taskAtRequest}:${revisionAtRequest}:${templateAtRequest}`
+    && previewReceipt.value === receiptAtRequest
+  let exportedArtifact: ExportArtifact | null = null
   try {
-    const artifact = await exportWorkspacePdf(props.optimizationTaskId, {
-      templateId: templateId.value,
-      expectedRevision: props.revision,
-      previewReceipt: previewReceipt.value,
+    exportedArtifact = await exportWorkspacePdf(taskAtRequest, {
+      templateId: templateAtRequest,
+      expectedRevision: revisionAtRequest,
+      previewReceipt: receiptAtRequest,
     })
-    const blob = await downloadArtifactPdf(artifact.id)
-    triggerBrowserDownload(blob, artifact.fileName)
     await refreshArtifacts()
+    // 导出请求在本地编辑、任务、模板或预览凭证变化后完成时，绝不自动下载旧版本。
+    if (!requestIsCurrent()) return
+    const blob = await downloadArtifactPdf(exportedArtifact.id)
+    if (!requestIsCurrent()) return
+    triggerBrowserDownload(blob, exportedArtifact.fileName)
     ElMessage.success('PDF 导出成功')
   } catch (error) {
-    if (isStaleError(error)) {
-      handleStale(error.message)
+    if (!requestIsCurrent()) {
+      return
+    }
+    const message = error instanceof Error ? error.message : '导出失败，请稍后重试'
+    if (!exportedArtifact && isStaleError(error)) {
+      handleStale(message)
     } else {
-      ElMessage.error(error instanceof Error ? error.message : '导出失败，请稍后重试')
+      operationFailure.value = exportedArtifact
+        ? { operation: 'download', message, artifact: exportedArtifact }
+        : { operation: 'export', message }
+      ElMessage.error(message)
     }
   } finally {
     exporting.value = false
@@ -207,12 +255,15 @@ const handleExport = async () => {
 
 const handleDownloadArtifact = async (artifact: ExportArtifact) => {
   if (downloadingId.value !== null) return
+  operationFailure.value = null
   downloadingId.value = artifact.id
   try {
     const blob = await downloadArtifactPdf(artifact.id)
     triggerBrowserDownload(blob, artifact.fileName)
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '下载失败，请稍后重试')
+    const message = error instanceof Error ? error.message : '下载失败，请稍后重试'
+    operationFailure.value = { operation: 'download', message, artifact }
+    ElMessage.error(message)
   } finally {
     downloadingId.value = null
   }
@@ -228,13 +279,60 @@ const handleDeleteArtifact = async (artifact: ExportArtifact) => {
   } catch {
     return
   }
+  operationFailure.value = null
   try {
     await deleteWorkspaceArtifact(artifact.id)
     await refreshArtifacts()
     ElMessage.success('已删除导出文件')
   } catch (error) {
     await refreshArtifacts()
-    ElMessage.error(error instanceof Error ? error.message : '删除失败，请稍后重试')
+    const message = error instanceof Error ? error.message : '删除失败，请稍后重试'
+    operationFailure.value = { operation: 'delete', message, artifact }
+    ElMessage.error(message)
+  }
+}
+
+const operationFailureTitle = computed(() => {
+  switch (operationFailure.value?.operation) {
+    case 'preview':
+      return 'PDF 预览未生成'
+    case 'export':
+      return 'PDF 导出失败'
+    case 'download':
+      return 'PDF 下载失败'
+    case 'delete':
+      return '删除导出文件失败'
+    default:
+      return '操作失败'
+  }
+})
+
+const operationFailureActionText = computed(() => {
+  switch (operationFailure.value?.operation) {
+    case 'preview':
+      return '重新预览'
+    case 'export':
+      return '重新导出'
+    case 'download':
+      return '重新下载'
+    case 'delete':
+      return '重试删除'
+    default:
+      return '重试'
+  }
+})
+
+const retryFailedOperation = () => {
+  const failure = operationFailure.value
+  if (!failure) return
+  if (failure.operation === 'preview') {
+    void handlePreview()
+  } else if (failure.operation === 'export') {
+    void handleExport()
+  } else if (failure.operation === 'download' && failure.artifact) {
+    void handleDownloadArtifact(failure.artifact)
+  } else if (failure.operation === 'delete' && failure.artifact) {
+    void handleDeleteArtifact(failure.artifact)
   }
 }
 
@@ -289,12 +387,20 @@ onBeforeUnmount(() => {
         </el-button>
       </div>
       <p v-if="!canOperate" class="operate-hint">{{ operateHint }}</p>
+      <ErrorState
+        v-if="operationFailure"
+        compact
+        :title="operationFailureTitle"
+        :description="operationFailure.message"
+        :action-text="operationFailureActionText"
+        @action="retryFailedOperation"
+      />
       <div v-if="previewPreflight" class="preflight-result" role="status">
         <strong>导出前检查</strong>
         <ul>
           <li v-for="message in preflightMessages" :key="message">{{ message }}</li>
         </ul>
-        <small>模板 v{{ previewTemplateVersion }} · {{ previewRendererVersion }}</small>
+        <small>以上问题不会自动修改内容；告警不阻止导出，编译失败会阻止导出。</small>
       </div>
       <p class="preview-note">
         预览与导出均使用最近一次成功保存的内容；未保存的编辑和未采纳的 AI 建议不会进入 PDF。修改内容或模板后必须重新预览。
@@ -306,13 +412,22 @@ onBeforeUnmount(() => {
         <h3>已导出文件</h3>
         <el-button text size="small" :loading="artifactsLoading" @click="refreshArtifacts">刷新</el-button>
       </div>
-      <p v-if="artifacts.length === 0" class="artifact-empty">还没有导出记录。</p>
+      <p v-if="artifactsLoading && artifacts.length === 0" class="artifact-loading">正在读取导出记录…</p>
+      <ErrorState
+        v-else-if="artifactsLoadError"
+        compact
+        title="已导出文件加载失败"
+        :description="artifactsLoadError"
+        action-text="重新加载"
+        @action="refreshArtifacts"
+      />
+      <p v-else-if="artifacts.length === 0" class="artifact-empty">还没有导出记录。</p>
       <ul v-else>
         <li v-for="artifact in artifacts" :key="artifact.id">
           <div class="artifact-info">
             <span class="artifact-name">{{ artifact.fileName }}</span>
             <span class="artifact-meta">
-              {{ artifact.templateId }} · revision {{ artifact.contentRevision }} ·
+              {{ TEMPLATE_LABELS[artifact.templateId] }} · {{ artifact.pageCount }} 页 ·
               {{ formatFileSize(artifact.fileSize) }} · {{ formatCreatedAt(artifact.createdAt) }}
             </span>
           </div>
@@ -415,7 +530,8 @@ onBeforeUnmount(() => {
   color: var(--app-navy);
 }
 
-.artifact-empty {
+.artifact-empty,
+.artifact-loading {
   margin: 10px 0 0;
   color: var(--app-text-secondary);
   font-size: 13px;

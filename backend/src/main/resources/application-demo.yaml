@@ -1,0 +1,41 @@
+# Explicit non-production Demo profile. It is inert unless both the `demo`
+# profile and APP_DEMO_ENABLED=true are supplied by the demo deployment.
+spring:
+  datasource:
+    url: ${DEMO_DB_URL:jdbc:postgresql://localhost:5432/cv_role_demo}
+    username: ${DEMO_DB_USERNAME:demo}
+    password: ${DEMO_DB_PASSWORD:demo-local-only}
+    driver-class-name: org.postgresql.Driver
+  ai:
+    openai:
+      api-key: demo-deterministic-provider-key
+      base-url: https://demo.invalid/v1
+      chat:
+        options:
+          model: demo-deterministic
+
+jwt:
+  secret: ${DEMO_JWT_SECRET}
+  expiration-minutes: 60
+
+app:
+  demo:
+    enabled: ${APP_DEMO_ENABLED:false}
+    user:
+      username: ${DEMO_USER_USERNAME:demo-user}
+      email: ${DEMO_USER_EMAIL:demo@example.invalid}
+      password: ${DEMO_USER_PASSWORD:}
+  cache:
+    redis:
+      enabled: false
+  storage:
+    type: ${DEMO_STORAGE_TYPE:local}
+    local:
+      base-dir: ${DEMO_LOCAL_STORAGE_BASE_DIR:build/demo-uploads}
+  resume:
+    parse:
+      ai-section-classify-enabled: false
+      ai-structured-parse-enabled: false
+  ai:
+    credentials:
+      enabled: false

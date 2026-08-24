@@ -27,7 +27,7 @@ Product conflicts are resolved by `docs/PRD.md`. Current behavior is determined 
 
 ## Current phase
 
-Phases 1–7 are complete and Phase 7 has passed its independent Final Gate. Phase 8 is the next approved phase but has not started; do not enter it without explicit instruction or present Phase 8 or later capabilities as implemented.
+Phases 1–9 are complete and each has passed its independent Final Gate. No Phase 10 has been approved; do not extend the product beyond the Phase 9 Contract without explicit instruction. Phase 8 changed only the frontend; Phase 9 preserves the Phase 1–8 business semantics, sources of truth, state machines, and security boundaries.
 
 Do not introduce microservices, message queues, Kubernetes, crawlers, auto-apply, a job marketplace, a chatbot-first UI, a complex ATS score system, a template marketplace, or a new technology stack unless the product baseline is explicitly revised.
 

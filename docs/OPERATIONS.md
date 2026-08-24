@@ -798,7 +798,31 @@ docker compose -f docker-compose.prod.yml --env-file .env exec postgres   sh -lc
 
 ---
 
-## 14. 当前正式入口
+## 14. Phase 9 非生产 Demo
+
+Demo 是运维隔离环境，不是生产共享账号或 `DemoAccount` 领域模型。它使用合成普通 User、同一 JWT / ownership / Workspace / Typst / Storage 路径，以及确定性 in-process Provider；BYOK 和外部 AI 均关闭。
+
+```bash
+cp deploy/demo/.env.example deploy/demo/.env
+# 为 DEMO_DB_PASSWORD、DEMO_JWT_SECRET、DEMO_USER_PASSWORD 写入仅用于 Demo 的值
+
+docker compose --env-file deploy/demo/.env -f deploy/demo/docker-compose.yml up -d --build
+```
+
+默认仅绑定 `127.0.0.1:18080`。如需展示，必须由独立访问控制层显式代理；不得改为共享可写生产 Demo，也不得复用生产数据库、bucket、凭据或域名。
+
+Demo reset 是 operator-only 操作，会删除**仅** `cv-role-demo` Compose project 的数据库和本地 Demo storage volume；脚本强制该 project 名称并且只接受 `deploy/demo/` 下的环境文件，且要求 `.env` 中明确设置确认值：
+
+```bash
+DEMO_RESET_CONFIRM=RESET_DEMO_ENVIRONMENT \
+  scripts/ops/reset-demo-environment.sh deploy/demo/.env
+```
+
+不要对生产 Compose、生产 volume 或 `.env` 使用该脚本。
+
+AI Usage 原始 attempt metadata 由应用每日按默认 90 天 retention 清理；它不包含 Resume/JD/Prompt/Output/API Key/Provider URL，不能作为产品漏斗或用户行为历史。
+
+## 15. 当前正式入口
 
 项目正式访问地址：
 

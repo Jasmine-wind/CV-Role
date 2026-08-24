@@ -10,6 +10,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 
 /**
@@ -19,6 +20,7 @@ import org.springframework.stereotype.Service;
  * <p>Business modules can only reach this adapter through the context-aware Gateway.</p>
  */
 @Service
+@Profile("!demo & !phase9-e2e")
 public class OpenAiCompatibleAiClientService implements AiProviderAdapter {
 
     private static final String CHAT_COMPLETIONS_PATH = "/chat/completions";

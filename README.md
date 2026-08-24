@@ -1,8 +1,8 @@
 # CV-Role / AI Resume Optimizer
 
-面向真实求职场景的岗位定向简历优化系统。当前已完成 V2 Phase 1–7：用户选择或上传真实简历、粘贴目标岗位 JD 后即可完成证据分析，在工作区可控编辑，并通过真实 Typst Preview 导出岗位定向 PDF；高级用户可在设置中选择账户级 BYOK。
+面向真实求职场景的岗位定向简历优化系统。当前已实现 V2 Phase 1–9：用户选择或上传真实简历、粘贴目标岗位 JD 后即可完成证据分析，在工作区可控编辑，并通过真实 Typst Preview 导出岗位定向 PDF；高级用户可在设置中选择账户级 BYOK。
 
-> Phase 7 的 BYOK / AI Gateway 已通过独立 Final Gate；当前停止在 Phase 7，不进入 Phase 8。真实现状与差距见 [docs/CONTEXT.md](docs/CONTEXT.md)。
+> Phase 1–9 均已通过独立 Final Gate。Phase 9 完成了只读 Multi-JD Insight、最小 Observability、真实 PostgreSQL/Flyway + MinIO + fake Provider + Playwright E2E，以及非生产 Demo；未创建或批准 Phase 10。真实现状与差距见 [docs/CONTEXT.md](docs/CONTEXT.md)。
 
 
 ## 当前已实现
@@ -16,8 +16,12 @@
 - 两栏优化工作区、结构化编辑、Undo / Redo、自动保存、并发冲突处置和恢复优化前版本
 - 单 Bullet AI Suggest、代码 Diff、Apply / Reject / Regenerate 和事实闭包校验
 - Classic / Modern / Minimal 内置模板、真实 Typst PDF Preview、导出前检查与私有 ExportArtifact 生命周期
+- Landing、首页、分析、工作区与 AI 设置的统一信息层级，以及可恢复的 Loading / Error / Empty / 保存状态
 - 可恢复的异步任务状态查询；旧诊断、建议、局部改写和报告能力仍保留用于兼容
-- 可选账户级 OpenAI-compatible BYOK、加密 Credential、任务级 AI Selection Snapshot 与最小 Usage ledger
+- 可选账户级 OpenAI-compatible BYOK、加密 Credential、任务级 AI Selection Snapshot 与最小 Usage ledger（独立事务、Task attribution、90 天 retention）
+- 达到样本门槛后可从首页查看只读的多 JD 岗位方向洞察；不改变单 JD 主链或创建能力事实
+- 真实 PostgreSQL/Flyway integration、确定性 fake Provider 与 Playwright Chromium 恢复型 E2E
+- 专用、非生产、普通 User 路径的 Demo Compose / 合成 seed / 显式确认 reset 工具
 - OpenAI-compatible Chat / Platform-only Embedding 接入，pgvector 语义检索
 - PostgreSQL、Redis、MinIO、本地文件存储和 Flyway 迁移
 - Vue 3 前端、Docker Compose、Nginx、HTTPS 和运维脚本
@@ -108,7 +112,7 @@ cd backend && ./mvnw test
 cd web && npm run build
 ```
 
-后端测试使用 PostgreSQL test profile；CI 定义见 `.github/workflows/ci.yml`。
+后端测试使用 PostgreSQL/Flyway 与独立 MinIO lifecycle profile；CI 还运行 deterministic fake Provider 的 Chromium E2E。Phase 9 Demo 仅可通过 `deploy/demo/` 的独立环境启动，详见 [docs/OPERATIONS.md](docs/OPERATIONS.md)。
 
 ## 生产部署
 

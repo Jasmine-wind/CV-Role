@@ -60,7 +60,7 @@ const submitCustom = () => {
     </template>
 
     <template v-else-if="mode === 'ready' || mode === 'stale'">
-      <p class="suggestion-title">岗位定向优化建议</p>
+      <p class="suggestion-title">优化建议</p>
       <div class="suggestion-diff" aria-label="改写差异">
         <span
           v-for="(segment, index) in diffSegments"
@@ -68,7 +68,11 @@ const submitCustom = () => {
           :class="`diff-segment is-${segment.type}`"
         >{{ segment.text }}</span>
       </div>
-      <p v-if="reason" class="suggestion-reason">为什么这样改：{{ reason }}</p>
+      <p class="suggestion-diff-legend">
+        <span class="diff-legend-item is-added">新增表达</span>
+        <span class="diff-legend-item is-removed">原表达</span>
+      </p>
+      <p v-if="reason" class="suggestion-reason">修改原因：{{ reason }}</p>
       <p v-if="mode === 'stale'" class="suggestion-stale">
         内容或版本已变化，这条建议已失效，不能采纳。可以重新生成或关闭。
       </p>
@@ -82,8 +86,8 @@ const submitCustom = () => {
         >
           采纳
         </el-button>
-        <el-button size="small" @click="emit('reject')">{{ mode === 'stale' ? '关闭' : '拒绝' }}</el-button>
         <el-button size="small" @click="emit('regenerate')">重新生成</el-button>
+        <el-button size="small" text @click="emit('reject')">{{ mode === 'stale' ? '关闭' : '拒绝' }}</el-button>
       </div>
     </template>
 
@@ -109,10 +113,10 @@ const submitCustom = () => {
 
 <style scoped>
 .bullet-suggestion {
-  border: 1px solid var(--el-color-primary-light-7);
-  border-radius: 8px;
-  background: var(--el-fill-color-lighter);
-  padding: 10px 12px;
+  border: 1px solid var(--el-color-primary-light-8);
+  border-radius: var(--app-radius-sm);
+  background: var(--app-primary-soft);
+  padding: 12px;
   display: grid;
   gap: 8px;
 }
@@ -120,13 +124,14 @@ const submitCustom = () => {
 .bullet-suggestion.is-rejected,
 .bullet-suggestion.is-error {
   border-color: var(--el-color-warning-light-7);
+  background: var(--app-warning-soft);
 }
 
 .suggestion-title {
   margin: 0;
   font-size: 13px;
   font-weight: 700;
-  color: var(--app-navy);
+  color: var(--app-text);
 }
 
 .suggestion-diff {
@@ -146,6 +151,29 @@ const submitCustom = () => {
 }
 
 .diff-segment.is-removed {
+  background: var(--el-color-danger-light-8);
+  color: var(--el-color-danger);
+  text-decoration: line-through;
+}
+
+.suggestion-diff-legend {
+  display: flex;
+  gap: 12px;
+  margin: 0;
+}
+
+.diff-legend-item {
+  font-size: 12px;
+  padding: 0 6px;
+  border-radius: 4px;
+}
+
+.diff-legend-item.is-added {
+  background: var(--el-color-success-light-8);
+  color: var(--el-color-success-dark-2);
+}
+
+.diff-legend-item.is-removed {
   background: var(--el-color-danger-light-8);
   color: var(--el-color-danger);
   text-decoration: line-through;

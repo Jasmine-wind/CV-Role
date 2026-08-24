@@ -1,0 +1,47 @@
+# CI/browser integration profile: real PostgreSQL + Flyway and local storage,
+# but a deterministic in-process Provider adapter. No network AI credential is used.
+spring:
+  datasource:
+    url: ${TEST_DB_URL:jdbc:postgresql://localhost:5432/ai_resume_optimizer_test}
+    username: ${TEST_DB_USERNAME:dawn}
+    password: ${TEST_DB_PASSWORD:test_password}
+    driver-class-name: org.postgresql.Driver
+  ai:
+    openai:
+      api-key: phase9-fake-provider-key
+      base-url: https://phase9-e2e.invalid/v1
+      chat:
+        options:
+          model: phase9-fake
+
+jwt:
+  secret: ${TEST_JWT_SECRET:test-jwt-secret-for-phase9-e2e-at-least-32-chars}
+  expiration-minutes: 30
+
+app:
+  cache:
+    redis:
+      enabled: false
+  storage:
+    type: local
+    local:
+      base-dir: ${TEST_LOCAL_STORAGE_BASE_DIR:build/phase9-e2e-uploads}
+  async:
+    core-pool-size: 1
+    max-pool-size: 1
+    queue-capacity: 32
+  resume:
+    parse:
+      ai-section-classify-enabled: false
+      ai-structured-parse-enabled: false
+  ai:
+    credentials:
+      enabled: false
+    usage:
+      retention:
+        enabled: false
+
+logging:
+  level:
+    root: warn
+    com.winter.airesumeoptimizer: info

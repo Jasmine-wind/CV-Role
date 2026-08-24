@@ -51,8 +51,12 @@ scripts/  生产运维脚本
 - `embedding`：文本分块、向量生成、相似度与 RAG 上下文；当前不进入正式证据匹配主链路。
 - `history`：旧历史聚合与 AI 结果回看。
 - `task`：单进程异步执行记录、归属校验和状态查询；不再承担正式优化业务模型。
+- `insight`：Phase 9 的只读 Multi-JD 聚合 seam；只读 Task / SOURCE / Evidence，不能创建 Capability 或修改任何正式事实。
+- `observability`：只查询 committed retained rows 的内部汇总；没有 product event、用户 dashboard 或事件存储。
+- `ai/usage`：Provider attempt ledger、独立事务写入和 90 天 retention；不是产品漏斗 Source of Truth。
+- `demo`：只在明确 `demo` profile + property 下创建合成普通 User 数据，不参与生产域模型或授权。
 
-前端按 `api/`、`components/`、`layout/`、`router/`、`stores/`、`types/`、`utils/`、`views/` 分层。Phase 4 后的页面路由只包括 Landing、首页、我的简历、按正式优化任务访问的岗位分析结果、按正式优化任务访问的优化工作区、登录和注册；一级导航只有首页和我的简历。Preview / Export 以工作区抽屉形式集成，仅保存成功状态可用。
+前端按 `api/`、`components/`、`layout/`、`router/`、`stores/`、`types/`、`utils/`、`views/` 分层。页面包含 Landing、首页、我的简历、按正式优化任务访问的岗位分析结果、按正式优化任务访问的优化工作区、达到样本门槛后从首页进入的岗位方向洞察、AI 设置、登录和注册；一级导航仍只有首页和我的简历，AI 设置与洞察都不进入首次使用步骤。全局壳只承担 navigation / account / 窄屏菜单（窄屏 sidebar 为 Drawer），页面标题与任务操作由各页面自身承担。Preview / Export 以工作区抽屉形式集成，仅保存成功状态可用。Element Plus 由 unplugin-vue-components 按需解析，路由懒加载；视觉变量集中在 `styles/tokens.scss`（近白背景、弱边框、少阴影、克制圆角、单一主色），状态色只用于真实反馈。
 
 ## 3. 当前主链路
 
@@ -86,21 +90,24 @@ scripts/  生产运维脚本
 - 业务数据库结构只由 `db/migration/` 下的 Flyway 迁移维护。
 - 异步任务是真实状态机，不伪造进度百分比。
 - Phase 6 仅以已 CAS 持久化的 TARGET `RESUME_DOCUMENT_V1` 渲染，不使用 HTML、SOURCE、任务快照或证据分析，不反解析 PDF。revision 0 仍用于 Phase 4 初始化，但必须先原样 CAS Save 才能 Preview。模板是内置只读资源且不保存业务数据；未引入后台渲染任务。
+- Phase 9 Insight 在读取时按 `(userId, resumeId, SHA-256(resume_input_snapshot))` 建立兼容 cohort；近 180 天、去重后的最新 Task、最多 20 个不同 JD、至少 8 个样本。技术锚点只表示“岗位要求包含该字面词”，否则要求文本精确分组；输出只展示三态分布和原始追溯。
+- Phase 9 Observability 从既有业务表和 `ai_usage_records` 查询已提交事实。Usage 每次真实 dispatch 都独立记录，ledger 写入失败不改变业务结果；它不得被用作逻辑漏斗分母。Prompt、输入、输出、URL、Key 和成本不进入 ledger 或日志。
+- `demo` profile 使用确定性 in-process Provider，而生产 profile 仍只装配 pinned OpenAI-compatible Adapter；Demo 环境禁用 BYOK，采用普通 JWT/ownership/Storage/Typst 路径。
 
 ## 4. 数据与外部系统
 
 - PostgreSQL 是账号、简历元数据、解析结果、岗位、分析结果、向量和任务的事实来源；`export_artifacts` 只记录 PDF 派生文件的归属与位置，不是内容来源。
 - V20.1 将 Phase 3 正式状态原位收敛为 MATCHED / PARTIAL_EVIDENCE / NO_EVIDENCE，并把 Evidence 支持程度收敛为 SUFFICIENT / PARTIAL；旧语义生成的派生分析会失效并保留冻结输入供重试，V1 历史结果不受影响。
 - V22 加法式建立 `export_artifacts`；模板源码随应用打包，不存在 Template 表。
-- V23 加法式建立用户加密 Credential、OptimizationTask AI Selection Snapshot 与最小 attempt Usage ledger；System Default Secret 不进入数据库，Credential / Task / Usage 使用复合用户归属约束。
+- V23 加法式建立用户加密 Credential、OptimizationTask AI Selection Snapshot 与最小 attempt Usage ledger；System Default Secret 不进入数据库，Credential / Task / Usage 使用复合用户归属约束。Phase 9 没有新增业务表或 migration；Insight 与 Observability 均使用已有事实表。
 - pgvector 当前用于简历 / JD 分块语义检索；向量不可用时部分 AI 链路可以降级。
 - 简历原文件由 `FileStorageService` 抽象访问，本地开发默认 local，生产默认 MinIO。
 - Chat 只通过业务侧 `AiGateway` 调用 OpenAI-compatible Adapter；Embedding 保持 Platform-only。二者共享 pinned HTTPS transport，密钥不得进入前端、日志或 Git。
-- `application.yaml` 提供公共默认值，`application-local/dev/test/prod.yaml` 负责环境差异。
+- `application.yaml` 提供公共默认值，`application-local/dev/test/prod.yaml` 负责环境差异；`application-demo.yaml` 与 `application-phase9-e2e.yaml` 明确限制为 fake Provider 的非生产环境。
 
 ## 5. 后续 V2 目标架构边界
 
-Phase 2 已完成核心领域模型和主链路迁移。Phase 3 已把 Evidence Matching 与 Gap Analysis 收紧为当前材料可证明的三态并通过 Gate；Phase 4 已建立 Optimization Workspace 与结构化简历编辑并通过 Gate；Phase 5 已实现单 Bullet AI Suggest / Diff / Apply / Reject / Regenerate 并通过 Gate；Phase 6 已完成 Typst Preview / PDF Export / ExportArtifact，Final Gate 已通过；Phase 7 已完成 BYOK / AI Gateway 并通过独立 Final Gate。V2 不推翻前后端分离和模块化单体基础，后续仍按 PRD 冻结顺序推进：
+Phase 2 已完成核心领域模型和主链路迁移。Phase 3 已把 Evidence Matching 与 Gap Analysis 收紧为当前材料可证明的三态并通过 Gate；Phase 4 已建立 Optimization Workspace 与结构化简历编辑并通过 Gate；Phase 5 已实现单 Bullet AI Suggest / Diff / Apply / Reject / Regenerate 并通过 Gate；Phase 6 已完成 Typst Preview / PDF Export / ExportArtifact，Final Gate 已通过；Phase 7 已完成 BYOK / AI Gateway 并通过独立 Final Gate；Phase 8 已完成视觉与状态体验统一（仅前端，独立 Final Gate 已通过）；**Phase 9 已通过独立 Final Gate，Phase 1–9 均正式完成，且未批准或创建 Phase 10。** V2 不推翻前后端分离和模块化单体基础：
 
 ```text
 已完成：Resume / ResumeVersion / JobTarget / OptimizationTask
@@ -109,7 +116,8 @@ Phase 2 已完成核心领域模型和主链路迁移。Phase 3 已把 Evidence 
       单 Bullet AI Suggest / Diff / Apply / Reject / Regenerate（事实闭包与严格解析，Gate 已通过）
       Typst Preview / ExportArtifact（签名 Preview receipt、preflight、可重试生命周期，Gate 已通过）
       AI Gateway / Provider Credential（唯一 Chat seam、BYOK 加密与 SSRF 防护，Final Gate 已通过）
-下一步批准阶段：视觉与状态体验（Phase 8，未经批准不得进入）
+      视觉与状态体验统一（Phase 8 独立 Final Gate 已通过）
+      长期洞察 / 最小观测 / PostgreSQL-Flyway-MinIO-fake Provider E2E / 非生产 Demo（Phase 9 Final Gate PASS）
 ```
 
 迁移时遵守：
@@ -137,4 +145,4 @@ Resume 与 JD 均视为不可信数据，不能覆盖平台指令、Schema 或�
 - 前端：`cd web && npm run build`
 - 部署配置：`docker compose config`（本地）和 `docker compose -f docker-compose.prod.yml --env-file <env> config`（生产模板）
 
-当前 CI 执行后端测试与前端构建。V2 每个阶段必须在不破坏现有主链路的前提下增加针对新模型和新用户流的验证。
+当前 CI 执行 PostgreSQL/Flyway + MinIO 后端测试、前端 unit/type/lint/build，以及由 deterministic fake Provider、PostgreSQL、MinIO、Typst 和 Chromium 组成的浏览器 E2E。V2 每个阶段必须在不破坏现有主链路的前提下增加针对新模型和新用户流的验证。

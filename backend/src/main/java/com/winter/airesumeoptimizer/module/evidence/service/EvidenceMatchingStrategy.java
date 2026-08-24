@@ -26,4 +26,18 @@ public interface EvidenceMatchingStrategy {
             AiSelectionSnapshot selection) {
         return match(frozenJobDescription, jobStructuredContent, resumeStructuredContent);
     }
+
+    /**
+     * Formal analysis calls carry their task identity so the Provider-attempt
+     * ledger can be traced without changing Evidence facts.
+     */
+    default EvidenceMatchOutcomeDTO match(
+            Long userId,
+            Long optimizationTaskId,
+            String frozenJobDescription,
+            String jobStructuredContent,
+            String resumeStructuredContent,
+            AiSelectionSnapshot selection) {
+        return match(userId, frozenJobDescription, jobStructuredContent, resumeStructuredContent, selection);
+    }
 }

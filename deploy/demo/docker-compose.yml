@@ -1,0 +1,67 @@
+# Dedicated, loopback-only, non-production demonstration deployment.
+# It has separate volumes and no live Provider or BYOK configuration.
+name: cv-role-demo
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: cv_role_demo
+      POSTGRES_USER: demo
+      POSTGRES_PASSWORD: ${DEMO_DB_PASSWORD:?DEMO_DB_PASSWORD is required}
+    volumes:
+      - demo-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U demo -d cv_role_demo"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  backend:
+    build:
+      context: ../..
+      dockerfile: backend/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: demo
+      APP_DEMO_ENABLED: "true"
+      DEMO_DB_URL: jdbc:postgresql://postgres:5432/cv_role_demo
+      DEMO_DB_USERNAME: demo
+      DEMO_DB_PASSWORD: ${DEMO_DB_PASSWORD:?DEMO_DB_PASSWORD is required}
+      DEMO_JWT_SECRET: ${DEMO_JWT_SECRET:?DEMO_JWT_SECRET is required}
+      DEMO_USER_USERNAME: ${DEMO_USER_USERNAME:-demo-user}
+      DEMO_USER_EMAIL: ${DEMO_USER_EMAIL:-demo@example.invalid}
+      DEMO_USER_PASSWORD: ${DEMO_USER_PASSWORD:?DEMO_USER_PASSWORD is required}
+      DEMO_STORAGE_TYPE: local
+      DEMO_LOCAL_STORAGE_BASE_DIR: /var/lib/cv-role-demo/uploads
+      AI_CREDENTIALS_ENABLED: "false"
+      APP_REDIS_CACHE_ENABLED: "false"
+      LOG_LEVEL_ROOT: info
+    volumes:
+      - demo-uploads:/var/lib/cv-role-demo
+    expose:
+      - "8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/v3/api-docs >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  web:
+    build:
+      context: ../..
+      dockerfile: web/Dockerfile
+      args:
+        VITE_API_BASE_URL: ""
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${DEMO_WEB_PORT:-18080}:80"
+
+volumes:
+  demo-postgres-data:
+  demo-uploads:

@@ -3,8 +3,10 @@ import { ElMessage } from 'element-plus'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import PageHeader from '@/components/common/PageHeader.vue'
+import ErrorState from '@/components/common/ErrorState.vue'
 import SkeletonBlock from '@/components/common/SkeletonBlock.vue'
 import { retryJobAnalysis, startJobAnalysis } from '@/api/job-analysis'
+import { getJobDirectionInsights } from '@/api/job-direction-insight'
 import { getResumeList, requestResumePreparation, uploadResume } from '@/api/resume'
 import { startAsyncTaskPolling } from '@/utils/asyncTaskPolling'
 import type { AsyncTaskPollingController } from '@/utils/asyncTaskPolling'
@@ -22,7 +24,9 @@ const resumes = ref<ResumeListItem[]>([])
 const selectedResumeId = ref<number | null>(null)
 const jobDescription = ref('')
 const loading = ref(false)
+const loadFailed = ref(false)
 const uploading = ref(false)
+const uploadRowVisible = ref(false)
 const selectedFile = ref<File | null>(null)
 const fileInput = ref<HTMLInputElement | null>(null)
 const activeAnalysis = ref<JobAnalysisStartResult | null>(null)
@@ -32,6 +36,7 @@ const analysisTimedOut = ref(false)
 const startingAnalysis = ref(false)
 const preparationTaskId = ref<number | null>(null)
 const preparationMessage = ref<string | null>(null)
+const hasJobDirectionInsight = ref(false)
 let analysisPolling: AsyncTaskPollingController | null = null
 let preparationPolling: AsyncTaskPollingController | null = null
 
@@ -49,8 +54,18 @@ const canStart = computed(() => Boolean(
 ))
 const currentStage = computed(() => analysisTask.value?.message || '正在保存你的简历和目标岗位')
 
+const loadInsightAvailability = async () => {
+  try {
+    hasJobDirectionInsight.value = (await getJobDirectionInsights()).cohorts.length > 0
+  } catch {
+    // Insight is optional long-term value. Its read failure must never block the single-JD start flow.
+    hasJobDirectionInsight.value = false
+  }
+}
+
 const loadResumes = async (preferredResumeId?: number) => {
   loading.value = true
+  loadFailed.value = false
   try {
     resumes.value = await getResumeList()
     if (preferredResumeId && resumes.value.some((item) => item.id === preferredResumeId)) {
@@ -58,8 +73,9 @@ const loadResumes = async (preferredResumeId?: number) => {
     } else if (!selectedResumeId.value || !resumes.value.some((item) => item.id === selectedResumeId.value)) {
       selectedResumeId.value = resumes.value[0]?.id ?? null
     }
-  } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '获取简历失败')
+  } catch {
+    // 区分真正的加载失败与空数据：失败提供重试，而不是当成没有简历。
+    loadFailed.value = true
   } finally {
     loading.value = false
   }
@@ -135,6 +151,7 @@ const handleUpload = async () => {
     if (fileInput.value) {
       fileInput.value.value = ''
     }
+    uploadRowVisible.value = false
     await loadResumes(uploaded.id)
     if (uploaded.preparationTaskId) {
       startPreparationPolling(uploaded.id, uploaded.preparationTaskId)
@@ -195,7 +212,7 @@ const startAnalysisPolling = (analysis: JobAnalysisStartResult) => {
     onFailed: (task) => {
       analysisTask.value = task
       analysisTimedOut.value = false
-      analysisError.value = task.errorMessage || '岗位分析失败，你的简历和 JD 已保存，可以重试。'
+      analysisError.value = task.errorMessage || '岗位分析没有完成。'
     },
     onCancelled: () => {
       analysisTimedOut.value = false
@@ -288,6 +305,7 @@ const restoreActiveAnalysis = () => {
 onMounted(async () => {
   await loadResumes()
   restoreActiveAnalysis()
+  void loadInsightAvailability()
 })
 
 onUnmounted(() => {
@@ -297,18 +315,38 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <section class="home-page home-focus-page">
+  <section class="home-page">
     <PageHeader
-      eyebrow="岗位定向简历优化"
-      title="针对新岗位优化简历"
-      description="选择一份真实简历，粘贴目标岗位 JD，系统会完成其余准备并给出岗位分析。"
+      title="开始岗位分析"
+      description="选择一份简历，粘贴目标岗位 JD，系统会完成其余准备并给出逐条核对的分析结果。"
     />
 
     <SkeletonBlock v-if="loading && !resumes.length" title :rows="5" />
 
+    <ErrorState
+      v-else-if="loadFailed"
+      title="简历列表加载失败"
+      description="暂时无法读取你的简历列表，这不影响已保存的简历。"
+      action-text="重新加载"
+      @action="loadResumes()"
+    />
+
     <section v-else class="home-start-card app-card">
       <div class="home-start-field">
-        <label for="home-resume">我的简历</label>
+        <div class="home-field-head">
+          <label for="home-resume">我的简历</label>
+          <el-button
+            v-if="resumes.length"
+            text
+            type="primary"
+            size="small"
+            :disabled="analysisRunning"
+            @click="uploadRowVisible = !uploadRowVisible"
+          >
+            {{ uploadRowVisible ? '收起' : '上传另一份' }}
+          </el-button>
+        </div>
+
         <el-select
           v-if="resumes.length"
           id="home-resume"
@@ -328,11 +366,11 @@ onUnmounted(() => {
           </el-option>
         </el-select>
 
-        <div v-else class="home-inline-upload">
-          <p>先上传一份真实简历。上传后系统会自动读取内容。</p>
+        <div v-if="!resumes.length || uploadRowVisible" class="home-inline-upload">
+          <p v-if="!resumes.length">先上传一份真实简历。上传后系统会自动读取内容。</p>
           <label class="home-file-picker">
             <span>{{ selectedFile?.name || '选择简历文件' }}</span>
-            <input ref="fileInput" type="file" accept=".pdf,.doc,.docx" @change="handleFileChange" />
+            <input ref="fileInput" data-testid="home-resume-upload" type="file" accept=".pdf,.doc,.docx" @change="handleFileChange" />
           </label>
           <el-button type="primary" :loading="uploading" :disabled="!selectedFile" @click="handleUpload">
             上传简历
@@ -363,19 +401,53 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <div v-if="activeAnalysis" class="home-analysis-state" :class="analysisError ? 'is-error' : 'is-running'" role="status">
+      <div v-if="analysisError && !activeAnalysis" class="home-analysis-state is-error" role="alert">
+        <span class="home-state-dot" />
+        <div>
+          <strong>岗位分析没有开始</strong>
+          <p>{{ analysisError }}</p>
+          <p>当前选择和岗位 JD 仍保留在本页，可以直接重试。</p>
+          <div class="home-state-actions">
+            <el-button
+              type="primary"
+              plain
+              :loading="startingAnalysis"
+              @click="handleStartAnalysis"
+            >
+              重新开始分析
+            </el-button>
+          </div>
+        </div>
+      </div>
+
+      <div v-else-if="activeAnalysis" class="home-analysis-state" :class="analysisError ? 'is-error' : 'is-running'" role="status">
         <span class="home-state-dot" />
         <div>
           <strong>{{ analysisError ? '岗位分析没有完成' : '正在分析岗位' }}</strong>
-          <p>{{ analysisError || currentStage }}</p>
-          <el-button
-            v-if="analysisError"
-            plain
-            :loading="startingAnalysis"
-            @click="analysisTimedOut ? continueWaiting() : retryAnalysis()"
-          >
-            {{ analysisTimedOut ? '继续等待' : '重试' }}
-          </el-button>
+          <p v-if="analysisError">
+            {{ analysisError }}
+            <template v-if="!analysisTimedOut">你的简历和目标岗位信息已保存，可以直接重试，无需重新填写。</template>
+          </p>
+          <p v-else>{{ currentStage }}</p>
+          <div v-if="analysisError" class="home-state-actions">
+            <el-button
+              v-if="analysisTimedOut"
+              plain
+              :loading="startingAnalysis"
+              @click="continueWaiting()"
+            >
+              继续等待
+            </el-button>
+            <el-button
+              v-else
+              type="primary"
+              plain
+              :loading="startingAnalysis"
+              @click="retryAnalysis()"
+            >
+              重试分析
+            </el-button>
+          </div>
         </div>
       </div>
 
@@ -384,13 +456,13 @@ onUnmounted(() => {
           <strong>{{ selectedResume?.originalFilename || '请选择简历' }}</strong>
           <small>系统不会为了匹配岗位编造你的经历。</small>
         </div>
-        <el-button type="primary" size="large" :loading="startingAnalysis || analysisRunning" :disabled="!canStart" @click="handleStartAnalysis">
+        <el-button data-testid="home-start-analysis" type="primary" size="large" :loading="startingAnalysis || analysisRunning" :disabled="!canStart" @click="handleStartAnalysis">
           开始分析
         </el-button>
       </footer>
     </section>
 
-    <section v-if="resumes.length" class="home-resume-summary">
+    <section v-if="!loadFailed && resumes.length" class="home-resume-summary">
       <header>
         <div>
           <h2>我的简历</h2>
@@ -404,6 +476,7 @@ onUnmounted(() => {
           :key="resume.id"
           type="button"
           :class="{ 'is-selected': selectedResumeId === resume.id }"
+          :disabled="analysisRunning"
           @click="selectedResumeId = resume.id"
         >
           <strong>{{ resume.originalFilename }}</strong>
@@ -412,19 +485,26 @@ onUnmounted(() => {
       </div>
     </section>
 
+    <section v-if="hasJobDirectionInsight" class="home-insight-card app-card">
+      <div>
+        <h2>岗位方向洞察</h2>
+        <p>近期岗位分析已积累出可参考的共同要求；它不会改变当前的单岗位分析结果。</p>
+      </div>
+      <el-button type="primary" plain @click="router.push('/job-direction-insights')">查看方向洞察</el-button>
+    </section>
   </section>
 </template>
 
 <style scoped>
-.home-focus-page {
+.home-page {
   display: grid;
   gap: 24px;
 }
 
 .home-start-card {
   display: grid;
-  gap: 24px;
-  padding: 28px;
+  gap: 22px;
+  padding: 24px;
 }
 
 .home-start-field {
@@ -432,10 +512,18 @@ onUnmounted(() => {
   gap: 10px;
 }
 
-.home-start-field > label {
+.home-field-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.home-start-field > label,
+.home-field-head > label {
   color: var(--app-text);
   font-size: 14px;
-  font-weight: 800;
+  font-weight: 700;
 }
 
 .home-resume-select {
@@ -443,30 +531,33 @@ onUnmounted(() => {
 }
 
 .home-inline-upload {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  display: flex;
+  flex-wrap: wrap;
   gap: 12px;
   align-items: center;
-  padding: 20px;
-  border: 1px dashed var(--app-border-strong);
-  border-radius: var(--app-radius-lg);
+  padding: 16px;
+  border: 1px dashed var(--app-border);
+  border-radius: var(--app-radius-md);
   background: var(--app-surface-soft);
 }
 
 .home-inline-upload p {
+  flex: 1 1 100%;
   margin: 0;
   color: var(--app-text-secondary);
+  font-size: 14px;
 }
 
 .home-file-picker {
   display: inline-flex;
-  min-height: 40px;
+  min-height: 38px;
   align-items: center;
   padding: 0 14px;
-  border: 1px solid var(--app-border-strong);
-  border-radius: var(--app-radius-md);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-sm);
   color: var(--app-text);
-  font-weight: 700;
+  font-size: 14px;
+  font-weight: 600;
   cursor: pointer;
   background: var(--app-surface);
 }
@@ -478,8 +569,14 @@ onUnmounted(() => {
   opacity: 0;
 }
 
+.home-file-picker:focus-within {
+  outline: 2px solid var(--app-primary);
+  outline-offset: 2px;
+}
+
 .home-start-actions,
-.home-resume-summary > header {
+.home-resume-summary > header,
+.home-insight-card {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -497,22 +594,22 @@ onUnmounted(() => {
   margin: 0;
   color: var(--app-text-secondary);
   font-size: 13px;
-  line-height: 1.6;
+  line-height: 1.7;
 }
 
 .home-analysis-state {
   display: flex;
   gap: 14px;
   align-items: flex-start;
-  padding: 18px;
+  padding: 16px;
   border: 1px solid var(--app-border);
   border-radius: var(--app-radius-md);
   background: var(--app-surface-soft);
 }
 
 .home-analysis-state.is-error {
-  border-color: var(--el-color-danger-light-5);
-  background: var(--el-color-danger-light-9);
+  border-color: var(--el-color-danger-light-7);
+  background: var(--app-danger-soft);
 }
 
 .home-state-dot {
@@ -527,9 +624,20 @@ onUnmounted(() => {
   animation: home-pulse 1.4s ease-in-out infinite;
 }
 
+.home-analysis-state.is-error .home-state-dot {
+  background: var(--app-danger);
+  animation: none;
+}
+
 .home-analysis-state > div {
   display: grid;
   gap: 6px;
+}
+
+.home-state-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 2px;
 }
 
 .home-resume-summary {
@@ -539,8 +647,30 @@ onUnmounted(() => {
 
 .home-resume-summary h2 {
   margin: 0;
-  color: var(--app-navy);
-  font-size: 20px;
+  color: var(--app-text);
+  font-size: 18px;
+}
+
+.home-insight-card {
+  padding: 18px 20px;
+}
+
+.home-insight-card > div {
+  display: grid;
+  gap: 5px;
+}
+
+.home-insight-card h2 {
+  margin: 0;
+  color: var(--app-text);
+  font-size: 18px;
+}
+
+.home-insight-card p {
+  margin: 0;
+  color: var(--app-text-secondary);
+  font-size: 13px;
+  line-height: 1.7;
 }
 
 .home-resume-chips {
@@ -553,7 +683,7 @@ onUnmounted(() => {
   display: grid;
   gap: 5px;
   min-width: 0;
-  padding: 16px;
+  padding: 14px;
   border: 1px solid var(--app-border);
   border-radius: var(--app-radius-md);
   color: var(--app-text);
@@ -583,20 +713,15 @@ onUnmounted(() => {
 }
 
 @media (max-width: 760px) {
-  .home-inline-upload,
   .home-start-actions,
-  .home-resume-summary > header {
-    grid-template-columns: 1fr;
+  .home-resume-summary > header,
+  .home-insight-card {
+    flex-direction: column;
     align-items: stretch;
   }
 
-  .home-inline-upload {
-    display: grid;
-  }
-
-  .home-start-actions,
-  .home-resume-summary > header {
-    display: grid;
+  .home-start-actions .el-button {
+    width: 100%;
   }
 }
 </style>

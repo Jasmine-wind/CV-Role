@@ -51,6 +51,17 @@ public class AiEvidenceMatchingStrategyImpl implements EvidenceMatchingStrategy 
             String jobStructuredContent,
             String resumeStructuredContent,
             AiSelectionSnapshot selection) {
+        return match(userId, null, frozenJobDescription, jobStructuredContent, resumeStructuredContent, selection);
+    }
+
+    @Override
+    public EvidenceMatchOutcomeDTO match(
+            Long userId,
+            Long optimizationTaskId,
+            String frozenJobDescription,
+            String jobStructuredContent,
+            String resumeStructuredContent,
+            AiSelectionSnapshot selection) {
         EvidenceMatchPromptDTO prompt = evidenceMatchPromptService.buildPrompt(
                 jobStructuredContent,
                 resumeStructuredContent);
@@ -64,7 +75,7 @@ public class AiEvidenceMatchingStrategyImpl implements EvidenceMatchingStrategy 
         try {
             completion = AiGatewaySupport.complete(
                     aiGateway,
-                    new AiInvocationContext(userId, null, "EVIDENCE_MATCH", selection),
+                    new AiInvocationContext(userId, optimizationTaskId, "EVIDENCE_MATCH", selection),
                     new AiGatewayRequest("EVIDENCE_MATCH", trustedPolicy, untrustedData));
         } catch (AiGatewayException exception) {
             log.warn("Evidence match Gateway call failed: code={}", exception.getFailureCode());

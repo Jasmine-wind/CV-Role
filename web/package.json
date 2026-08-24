@@ -5,14 +5,19 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "run-p type-check \"build-only {@}\" --",
+    "build": "npm run build-only && npm run type-check",
     "preview": "vite preview",
     "test": "vitest run",
+    "test:e2e": "playwright test",
+    "test:e2e:install": "playwright install chromium",
     "build-only": "vite build",
     "type-check": "vue-tsc --build",
     "lint": "run-s lint:*",
     "lint:oxlint": "oxlint . --fix",
     "lint:eslint": "eslint . --fix --cache",
+    "lint:check": "run-p lint:oxlint:check lint:eslint:check",
+    "lint:oxlint:check": "oxlint .",
+    "lint:eslint:check": "eslint .",
     "format": "prettier --write --experimental-cli src/"
   },
   "dependencies": {
@@ -24,6 +29,7 @@
     "vue-router": "^5.0.4"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@tsconfig/node24": "^24.0.4",
     "@types/node": "^24.12.2",
     "@vitejs/plugin-vue": "^6.0.6",
@@ -40,6 +46,7 @@
     "oxlint": "~1.60.0",
     "prettier": "3.8.3",
     "typescript": "~6.0.0",
+    "unplugin-vue-components": "^32.1.0",
     "vite": "^8.0.8",
     "vitest": "^4.1.11",
     "vue-tsc": "^3.2.6"

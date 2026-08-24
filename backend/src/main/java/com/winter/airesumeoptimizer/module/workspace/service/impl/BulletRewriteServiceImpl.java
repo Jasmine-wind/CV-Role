@@ -1,7 +1,6 @@
 package com.winter.airesumeoptimizer.module.workspace.service.impl;
 
 import com.winter.airesumeoptimizer.common.exception.BusinessException;
-import com.winter.airesumeoptimizer.common.logging.LogSanitizer;
 import com.winter.airesumeoptimizer.infra.ai.AiGatewayRequest;
 import com.winter.airesumeoptimizer.infra.ai.AiClientException;
 import com.winter.airesumeoptimizer.infra.ai.AiCompletionResult;
@@ -167,9 +166,10 @@ public class BulletRewriteServiceImpl implements BulletRewriteService {
                     exception.getFailureCode());
             throw exception;
         } catch (AiClientException exception) {
-            log.warn("Bullet rewrite AI call failed: model={}, reason={}",
+            // Provider errors may include echoed untrusted content; do not retain them.
+            log.warn("Bullet rewrite AI call failed: model={}, exceptionType={}",
                     modelName,
-                    LogSanitizer.sanitize(exception.getMessage()));
+                    exception.getClass().getSimpleName());
             throw new BusinessException(502, "AI 服务暂时不可用，请稍后重试");
         }
 

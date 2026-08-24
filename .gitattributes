@@ -1,0 +1,2 @@
+# Browser E2E fixtures are binary documents.
+web/e2e/fixtures/*.pdf binary

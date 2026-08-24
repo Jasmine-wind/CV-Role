@@ -75,20 +75,18 @@ public class ContextAwareAiGatewayService
                     systemProperties.getTemperature(),
                     systemProperties.getMaxTokens());
         } catch (AiGatewayException exception) {
-            recordFailure(context, selection, exception, startedAt, 1);
+            // Material/configuration resolution happens before a Provider dispatch.
             throw exception;
         } catch (RuntimeException exception) {
-            AiGatewayException safe = providerUnavailable();
-            recordFailure(context, selection, safe, startedAt, 1);
-            throw safe;
+            // The attempt ledger must not turn local preflight failures into Provider attempts.
+            throw providerUnavailable();
         }
 
         for (int attempt = 1; attempt <= 2; attempt++) {
             Duration remaining = remaining(deadlineAt);
             if (remaining.isZero() || remaining.isNegative()) {
-                AiGatewayException timeout = new AiGatewayException(AiFailureCode.TIMEOUT, "AI Provider 请求超时");
-                recordFailure(context, selection, timeout, startedAt, 1);
-                throw timeout;
+                // No adapter invocation occurred, so this is not a Provider attempt.
+                throw new AiGatewayException(AiFailureCode.TIMEOUT, "AI Provider 请求超时");
             }
             long attemptStartedAt = System.nanoTime();
             try {
@@ -241,10 +239,8 @@ public class ContextAwareAiGatewayService
             }
         } catch (OutboundTransportException exception) {
             AiGatewayException safe = mapPreflightFailure(exception);
-            recordFailure(context, selection, safe, startedAt, 1);
             return new AiCredentialTestResult(false, safe.getFailureCode(), safe.getMessage(), normalizedModel);
         } catch (AiGatewayException exception) {
-            recordFailure(context, selection, exception, startedAt, 1);
             return new AiCredentialTestResult(
                     false,
                     exception.getFailureCode(),
@@ -252,11 +248,9 @@ public class ContextAwareAiGatewayService
                     normalizedModel);
         } catch (RuntimeException exception) {
             AiGatewayException safe = providerUnavailable();
-            recordFailure(context, selection, safe, startedAt, 1);
             return new AiCredentialTestResult(false, safe.getFailureCode(), safe.getMessage(), normalizedModel);
         }
         AiGatewayException safe = providerUnavailable();
-        recordFailure(context, selection, safe, startedAt, 1);
         return new AiCredentialTestResult(false, safe.getFailureCode(), safe.getMessage(), normalizedModel);
     }
 

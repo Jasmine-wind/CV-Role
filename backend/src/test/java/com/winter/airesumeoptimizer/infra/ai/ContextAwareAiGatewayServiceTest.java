@@ -96,7 +96,7 @@ class ContextAwareAiGatewayServiceTest {
                 .isEqualTo(AiFailureCode.CREDENTIAL_CHANGED);
         verify(adapter, never()).complete(any());
         verify(credentialService, never()).resolveCurrentSelection(42L);
-        verify(usageRecorder).recordFailure(any(), any(), any(), anyLong(), anyInt());
+        verify(usageRecorder, never()).recordFailure(any(), any(), any(), anyLong(), anyInt());
     }
 
     @Test
@@ -231,6 +231,7 @@ class ContextAwareAiGatewayServiceTest {
                 .isEqualTo(AiFailureCode.CONFIGURATION_INVALID);
         verify(adapter, never()).complete(any());
         verify(credentialService, never()).resolveCurrentSelection(anyLong());
+        verify(usageRecorder, never()).recordFailure(any(), any(), any(), anyLong(), anyInt());
     }
 
     @Test
@@ -266,7 +267,7 @@ class ContextAwareAiGatewayServiceTest {
         assertThat(java.time.Duration.ofNanos(System.nanoTime() - startedAt))
                 .isLessThan(java.time.Duration.ofSeconds(1));
         verify(adapter, never()).complete(any());
-        verify(usageRecorder).recordFailure(any(), any(), any(), anyLong(), anyInt());
+        verify(usageRecorder, never()).recordFailure(any(), any(), any(), anyLong(), anyInt());
     }
 
     @Test

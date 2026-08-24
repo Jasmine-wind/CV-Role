@@ -1,6 +1,6 @@
 # CV-Role V2 重构计划
 
-本计划只把 [PRD.md](PRD.md) 已冻结的决策转成实施顺序，不扩展产品范围。当前仓库已完成 **Phase 2 核心领域模型**、**Phase 3 Evidence Matching / Gap Analysis**、**Phase 4 Optimization Workspace**、**Phase 5 单 Bullet AI Suggest / Diff / Apply / Reject / Regenerate**、**Phase 6 Typst Preview / PDF Export** 与 **Phase 7 BYOK / AI Gateway**；Phase 5–7 均已通过独立 Final Gate。Phase 8 尚未开始。
+本计划只把 [PRD.md](PRD.md) 已冻结的决策转成实施顺序，不扩展产品范围。**Phase 1–9 均已通过独立 Final Gate；没有批准或创建 Phase 10。**
 
 ## 目标
 
@@ -116,19 +116,28 @@ SSRF transport 仅允许 HTTPS / DNS hostname / 443；每次请求有界解析�
 
 Final Gate 结论：唯一 Gateway、Credential 加密与生命周期、真实 socket DNS pinning / TLS / redirect / proxy / decoded response limit、task snapshot、System Default / BYOK 选择、attempt Usage、Fresh V1→V23 与 V22→V23、Phase 3 / 5 / 6 回归均已独立验证；发现的 Blocker / Major 已关闭，**Final Gate PASS**。
 
-### Phase 8 — 视觉与状态体验
+### Phase 8 — 视觉与状态体验（已完成，独立 Final Gate 已通过）
 
 - 统一 Landing、Workspace、Loading、Error、Empty 和保存状态。
 - 视觉保持克制、专业、内容驱动；移除指标墙、重复 Card 和内部术语。
 
 门禁：一级导航不超过 3 个；第一屏只展示用户需要采取的决策。
 
-### Phase 9 — 长期洞察、观测与 E2E
+完成状态：Landing 收敛为单主 CTA + 登录次 CTA + 3 个价值点，移除指标墙 / 功能卡墙 / dashboard 预览；首页形成“选择或上传简历 + 粘贴 JD + 开始分析”连续操作面，分析失败明确提示可重试与已保留输入；我的简历区分真正空数据与加载失败；岗位分析页按建议完善 → 已有优势 → 当前材料未体现排序，主 CTA 修改简历 / 次 CTA 分析新岗位；Workspace 保持 Phase 4 状态机并统一状态文案（修改未保存 / 正在保存 / 已保存 / 草稿仍在，可重试 / 本地草稿未保存，请解决冲突），未保存时 Suggest 锁定并提示“请先完成保存，再生成建议”；Preview / Export 保持 Phase 6 receipt / preflight 语义，模板前台名称收敛为经典 / 现代 / 简洁，不再向用户暴露 revision / renderer 等内部术语；AI 设置仅从账号菜单进入，先声明普通分析无需配置；一级导航保持首页 / 我的简历，窄屏 sidebar 变为可键盘操作的 Drawer，Workspace 单列降级；全局样式删除约 1800 行失效样式并收敛 token（弱边框、少阴影、克制圆角、单一主色）。Element Plus 改为按需引入 + 路由懒加载，960 kB 大 chunk 警告消除，入口 chunk 降至约 160 kB；同时修复结构化编辑器对响应式 Proxy 使用 structuredClone 导致手工编辑崩溃的缺陷（改为 JSON 克隆并有回归测试）。独立 Gate 另行关闭了过期 Preview / Export 响应覆盖本地草稿、导出记录加载伪装为空数据和初次分析启动失败不可见的问题；Phase 1–7 业务语义、状态机与安全边界未被改变，后端无业务改动。
 
-- 多 JD 数据自然积累后提供求职方向洞察，不增加首次使用步骤。
-- 补齐产品指标、端到端测试、故障恢复和演示账号。
+Final Gate 结论：真实主链、Desktop / Narrow 浏览器、Workspace 失败与冲突状态、Preview / Export、前后端全量测试、前端 clean build 与 bundle 检查均通过；Contract 内发现的 Blocker / Major 已关闭，**Final Gate PASS**。
 
-门禁：单 JD 主流程始终独立可用；洞察只在数据足够时出现。
+### Phase 9 — 长期洞察、观测与 E2E（已完成，Final Gate PASS）
+
+- 新增只读 Multi-JD Insight：仅从当前用户近 180 天 `SUCCESS` 正式 Task/Evidence 派生；cohort 固定为 `resumeId + frozen resume snapshot hash`，同一冻结 JD 仅取最新成功 Task，最多 20 个不同 JD，至少 8 个才显示。
+- Requirement 只做保守的字面技术锚点或精确规范化分组；展示 `MATCHED / PARTIAL_EVIDENCE / NO_EVIDENCE` 分布和 Task / Requirement / Evidence 追溯，不生成 Capability 事实、不重写历史结果、不建聚合表或 cache。
+- 新增内部 committed-fact Observability 查询，不建立通用事件平台；Usage 仍是每次真实 Provider dispatch 的 ledger，改为 `REQUIRES_NEW` best-effort 写入，正式 JD parse / Evidence 调用绑定 OptimizationTask，原始 attempt 元数据 90 天清理，模型输出不写日志。
+- 建立真实 PostgreSQL/Flyway + MinIO lifecycle integration、确定性 fake Provider、Playwright Chromium 三条恢复型浏览器流和 CI job；覆盖 happy path、同 Task 分析失败重试、CAS 本地草稿冲突、stale Preview / Suggest、Preview / Export。
+- 新增仅在 `demo` profile + `APP_DEMO_ENABLED=true` 下运行的普通 User 合成 seed、loopback-only 专用 Compose 和显式确认 reset 脚本；Demo 禁用 BYOK 和外部 AI，不创建 DemoAccount 或特殊权限。
+
+门禁：单 JD 主流程始终独立可用；洞察只在数据足够时出现；所有 Phase 9 Gate 验证完成前不得宣布 PASS。
+
+Final Gate 结论：只读 cohort、正式 Evidence 追溯、保守分组、实际 Provider-dispatch Usage ledger、`REQUIRES_NEW` 隔离与 retention、真实 PostgreSQL/Flyway/MinIO/Typst/fake Provider Chromium E2E、Demo bootstrap/reset 和 Phase 1–8 回归均已独立验证；Contract 内发现的 Blocker / Major 已最小修复并复测，**Final Gate PASS**。
 
 ## 优先级边界
 

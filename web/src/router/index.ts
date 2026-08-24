@@ -32,6 +32,16 @@ const router = createRouter({
       },
     },
     {
+      path: '/job-direction-insights',
+      name: 'job-direction-insights',
+      component: () => import('@/views/insight/JobDirectionInsightView.vue'),
+      meta: {
+        requiresAuth: true,
+        title: '岗位方向洞察',
+        layoutWidth: 'wide',
+      },
+    },
+    {
       path: '/job-analysis/:optimizationTaskId',
       name: 'job-analysis',
       component: () => import('@/views/job/JobAnalysisView.vue'),
@@ -66,7 +76,7 @@ const router = createRouter({
       component: () => import('@/views/settings/AiProviderSettingsView.vue'),
       meta: {
         requiresAuth: true,
-        title: 'AI Provider 设置',
+        title: 'AI 设置',
       },
     },
     {

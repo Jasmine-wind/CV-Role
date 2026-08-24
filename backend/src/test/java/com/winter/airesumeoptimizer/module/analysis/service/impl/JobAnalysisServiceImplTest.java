@@ -181,7 +181,7 @@ class JobAnalysisServiceImplTest {
         when(resumeService.getParseResult(1L, 10L))
                 .thenThrow(new BusinessException(404, "简历尚未解析"));
         when(resumeService.parse(1L, 10L)).thenReturn(successfulResumeParse());
-        when(jobDescriptionParseService.parse(1L, 20L)).thenReturn(successfulJob());
+        when(jobDescriptionParseService.parse(1L, 20L, null, 50L)).thenReturn(successfulJob());
         when(evidenceMatchService.analyze(org.mockito.ArgumentMatchers.eq(1L),
                 org.mockito.ArgumentMatchers.eq(50L),
                 any(JobDescriptionVO.class))).thenReturn(successfulEvidenceAnalysis());
@@ -189,6 +189,7 @@ class JobAnalysisServiceImplTest {
         service.start(1L, request("目标岗位 JD"));
 
         verify(resumeService).parse(1L, 10L);
+        verify(jobDescriptionParseService).parse(1L, 20L, null, 50L);
         verify(optimizationTaskService).captureResumeSnapshot(1L, 50L, "{\"skills\":[\"Java\"]}");
         verify(evidenceMatchService).analyze(org.mockito.ArgumentMatchers.eq(1L),
                 org.mockito.ArgumentMatchers.eq(50L),
@@ -237,7 +238,7 @@ class JobAnalysisServiceImplTest {
         when(optimizationTaskService.getExecutionContext(1L, 50L))
                 .thenReturn(new ExecutionContext(50L, 10L, 20L, 30L, 40L, 41L, selection));
         when(resumeService.getParseResult(1L, 10L)).thenReturn(successfulResumeParse());
-        when(jobDescriptionParseService.parse(1L, 20L, selection))
+        when(jobDescriptionParseService.parse(1L, 20L, selection, 50L))
                 .thenThrow(new AiGatewayException(AiFailureCode.CREDENTIAL_CHANGED, "AI Credential 已变更或不可用"));
 
         service.retry(1L, 50L);
@@ -257,7 +258,7 @@ class JobAnalysisServiceImplTest {
     @Test
     void startShouldFailBothTaskStatesWhenEvidenceAnalysisRejected() {
         when(resumeService.getParseResult(1L, 10L)).thenReturn(successfulResumeParse());
-        when(jobDescriptionParseService.parse(1L, 20L)).thenReturn(successfulJob());
+        when(jobDescriptionParseService.parse(1L, 20L, null, 50L)).thenReturn(successfulJob());
         when(evidenceMatchService.analyze(org.mockito.ArgumentMatchers.eq(1L),
                 org.mockito.ArgumentMatchers.eq(50L),
                 any(JobDescriptionVO.class)))
@@ -279,7 +280,7 @@ class JobAnalysisServiceImplTest {
 
     private void prepareSuccessfulAnalysis() {
         when(resumeService.getParseResult(1L, 10L)).thenReturn(successfulResumeParse());
-        when(jobDescriptionParseService.parse(1L, 20L)).thenReturn(successfulJob());
+        when(jobDescriptionParseService.parse(1L, 20L, null, 50L)).thenReturn(successfulJob());
         when(evidenceMatchService.analyze(org.mockito.ArgumentMatchers.eq(1L),
                 org.mockito.ArgumentMatchers.eq(50L),
                 any(JobDescriptionVO.class))).thenReturn(successfulEvidenceAnalysis());

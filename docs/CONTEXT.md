@@ -13,8 +13,10 @@
 | Phase 5 | 已完成，Gate 已通过 | 建立单 Bullet AI Suggest、代码 Diff、Apply / Reject / Regenerate；真实性与严格 Parser Blocker 修复已通过独立复审 |
 | Phase 6 | 已完成，Final Gate 已通过 | Typst 三模板、真实 PDF Preview、签名 Preview receipt、导出前检查、ExportArtifact 与可重试生命周期 |
 | Phase 7 | 已完成，Final Gate 已通过 | 唯一 AI Gateway Chat 主链、每用户至多一个加密 BYOK Credential、pinned HTTPS transport、任务级 Selection Snapshot、稳定 failure code、attempt Usage ledger 与最小 Settings UI |
+| Phase 8 | 已完成，独立 Final Gate 已通过 | 视觉与状态体验统一：Landing / 首页 / 分析 / Workspace / Preview / Export / AI 设置信息层级收敛，统一状态与文案，窄屏降级，Element Plus 按需引入消除大 chunk |
+| Phase 9 | 已完成，Final Gate PASS | 只读 Multi-JD Insight、最小 committed-fact Observability、Usage hardening/retention、PostgreSQL/Flyway + MinIO lifecycle + fake Provider + Playwright recovery E2E，以及非生产普通 User Demo 环境 |
 
-当前停止在 Phase 7，独立 Final Gate 已通过。Phase 8 尚未开始，未经明确授权不得进入。Phase 1–6 的冻结语义（Evidence 三态、Rewrite 事实闭包、Preview / Export 只读 seam）未被 Phase 7 改变。
+Phase 1–8 的冻结语义（Evidence 三态、Rewrite 事实闭包、Preview / Export 只读 seam、Workspace CAS 与 Suggest 会话生命周期）保持不变。Phase 9 已通过独立 Final Gate；Phase 1–9 均正式完成，且未批准或创建 Phase 10。
 
 ## 2. 当前系统与主流程
 
@@ -22,7 +24,7 @@
 
 Chat AI 调用在 Phase 7 收敛为唯一 seam：业务模块只依赖 `AiGateway` 并显式携带 user/task 上下文与 Selection Snapshot，不接触 API Key、Authorization、Provider URL 或 HTTP 细节；Gateway 负责 selection、SYSTEM / USER 分离、模型 / 配置、安全传输、重试 / 时限、稳定错误映射和 Usage 记录。Embedding 保持 platform-only，只使用系统配置并经同一 pinned transport，不使用 BYOK。用户 BYOK 只通过 Settings 页配置；无 Credential / DISABLED 时新任务使用 System Default，ACTIVE 时使用 BYOK，BYOK 失败绝不静默回退 System Default。
 
-当前前端路由只有 Landing、首页、我的简历、岗位分析结果、优化工作区、AI Provider 设置、登录和注册；一级导航只有首页和我的简历，BYOK 设置位于账号区，不进入默认用户主流程。岗位库、独立目标岗位管理、旧匹配编排和技术分类式 AI 历史不在默认用户流中。
+当前前端路由只有 Landing、首页、我的简历、岗位分析结果、优化工作区、AI 设置、登录和注册；一级导航只有首页和我的简历，AI 设置仅从顶栏账号菜单进入，不进入默认用户主流程。岗位库、独立目标岗位管理、旧匹配编排和技术分类式 AI 历史不在默认用户流中。全局壳只承担 navigation / account / 窄屏菜单，页面标题与任务操作由各页面自身承担；Element Plus 按需引入且路由懒加载，窄屏下 sidebar 变为 Drawer、Workspace 单列降级。
 
 ```text
 登录
@@ -51,6 +53,10 @@ Preview 与 Export 是同步渲染：只读取服务端已保存的 TARGET `stru
 - Workspace 文档：`RESUME_DOCUMENT_V1` 是唯一规范编辑结构，持久化在 `resume_versions.structured_content`，不存在第二套 Workspace 内容字段。
 - 内容并发：`resume_versions.content_revision` 是服务端乐观并发版本；保存和恢复都必须携带 `expectedRevision` 并通过单条条件更新递增。冲突保留本地草稿，不允许无条件覆盖。
 - 导出物：`export_artifacts` 记录成功生成的 PDF 派生文件及实际 preflight（用户 / 任务 / TARGET / revision / 模板与渲染器版本 / storage metadata / 页数 / 联系方式 / 页数告警 / 越界告警）。READY 可下载；DELETE_PENDING 不可下载但保留重试依据。任务与 TARGET 的关系由复合外键直接约束。
+- Multi-JD Insight：没有表、cache 或 Capability Source of Truth；只读聚合当前用户近 180 天的 `SUCCESS` Task、冻结输入、SOURCE Version 与正式 Evidence。cohort 必须同时匹配 `resumeId + SHA-256(resume_input_snapshot)`；相同规范化冻结 JD 只取最新成功 Task，最多 20 个、至少 8 个才显示。
+- Insight Requirement：仅对单一、字面技术锚点做小型固定注册表分组（否则精确规范化文本）；每个 JD 取最保守三态，结果保留 Task / Requirement / Evidence 追溯，绝不推断用户现实能力或重算 TARGET 编辑。
+- Observability：`ProductObservabilityService` 只查询已提交且仍保留的业务表；没有 `product_events`、用户指标页或长期识别性聚合。不可由现有事实可靠得出的 Workspace entry、Preview success、Suggestion apply 指标继续不记录。
+- AI Usage：每个实际 Provider dispatch 仍是一条最小 ledger row；写入通过独立 `REQUIRES_NEW` 事务，正式 JD parse 与 Evidence 调用绑定 `optimizationTaskId`，写入失败不影响业务。记录不含 Prompt、Resume/JD、Output、Key、URL 或货币成本，原始 metadata 90 天清理。
 
 当前正式迁移为：
 
@@ -103,15 +109,15 @@ Preview 与 Export 是同步渲染：只读取服务端已保存的 TARGET `stru
 - 缺少事实时向用户询问并记录真实补充 / 确认。
 - 用户 Profile / Rules 与平台策略的完整分层；Phase 5 只有平台默认策略和本次自定义要求。
 - Markdown / JSON 迁移导出仍属后续 P1；不属于 Phase 6。
-- 用户数据导出 / 全量删除、最近优化列表和长期多 JD 求职方向洞察。
+- 用户数据导出 / 全量删除和最近优化列表。
 
-以上能力必须继续按 `PLAN.md` 顺序推进；Phase 7 已通过独立 Final Gate，未经批准不进入 Phase 8。
+Phase 1–9 已正式完成；后续能力仍须依 `PLAN.md` 和新的产品决策推进，当前没有批准或创建 Phase 10。
 
 ## 6. 当前技术债与遗留风险
 
 - `requirement_evidences.source_resume_version_id` 的数据库外键只直接约束同用户，没有直接约束为所属任务的 SOURCE；正式服务当前固定写入并校验任务 SOURCE，后续如补强数据库约束必须使用新迁移。
 - V19 / V20 的新增表尚未经过生产规模数据验证；V20.1 会原位改变正式枚举和列语义，旧 Phase 3 应用不能运行在迁移后 Schema 上，部署必须同步升级应用与 Flyway 并遵循备份流程。
-- Workspace CAS 已有单元和 Web MVC 覆盖，但仍缺真实 PostgreSQL 多线程争用与事务故障注入集成测试。
+- Workspace 已有真实 PostgreSQL + Playwright 双页面 CAS conflict / 本地草稿恢复覆盖；更大规模多线程争用与数据库故障注入仍未做压力验证。
 - Workspace 转换器对未知 / 错误类型、超限内容和无法完整转换的旧快照会整体 fail closed；少量旧数据可能需要重新解析，不能用不完整投影覆盖 TARGET。
 - 初始 Workspace 元素 ID 按位置派生，只对同一冻结快照的重复转换稳定，并非语义或内容寻址 ID；Restore 会恢复基线位置 ID。当前 Phase 5 还绑定 revision、草稿序号和原文哈希，未来功能不得只凭元素 ID 判断候选仍有效。
 - 正式 Evidence 目前只保存 SOURCE 版本、section label 和逐字 quote，没有 Workspace 元素 ID 或字符范围。当前单 Bullet 手动选择绕开了该缺口，但可靠的“查看原文”、从建议跳转到编辑位置和更细来源追踪仍缺正式锚点模型。
@@ -120,10 +126,15 @@ Preview 与 Export 是同步渲染：只读取服务端已保存的 TARGET `stru
 - RewriteFactValidator 已从有限危险词拒绝收紧为保守的可证明安全子集：完整 Latin token、数字—单位—对象关系、否定极性、能力程度、责任层级、成果 / 因果、时间 / 范围、Unicode 控制字符及未知中文事实片段无法由当前 Bullet 原文确定支持时一律拒绝。该实现有意允许误拒，用户仍可手工编辑；不得用第二次 LLM、Embedding 或相似度判断放宽真实性门禁。
 - AI Suggest 是同步请求，当前无限流；服务端 AI 默认超时 30 秒、前端请求超时 65 秒。生成窗口内的并发编辑通过候选失效和 CAS 防止落库覆盖，但后续运维仍可评估频控。
 - 首页进行中任务恢复主要依赖会话中保存的任务引用，尚无“最近优化”列表；正式任务本身可按 ID 跨设备查询。
-- 前端主 chunk 超过 Vite 500 kB 提示阈值，主要来自 Element Plus 全量引入；不影响当前正确性，但属于后续体验 / 性能优化项。
+- 前端主 chunk 曾超过 Vite 500 kB 提示阈值；Phase 8 已通过 Element Plus 按需引入 + 路由懒加载消除（入口 chunk 约 160 kB，组件样式随路由分块加载）。
+- 结构化编辑器曾因对响应式 Proxy 调用 structuredClone 导致手工编辑崩溃；已改为与 useWorkspaceEditor 一致的 JSON 克隆并有组件回归测试。
+- 本机开发环境的 DNS 被 VPN 工具劫持为 198.18/15 fake-ip，会被 Phase 7 pinned transport 合法拒绝（UNSAFE_BASE_URL，fail-closed 预期行为）；本地 E2E 需通过 `jdk.net.hosts.file` 提供真实公网 IP 后才能完成真实 Provider 调用。
+- 本地 dev 数据库曾应用过 Phase 6 草稿版 V22，已在本地清理并由正式 V22 / V23 重新应用；该修复只涉及开发库，不涉及已发布迁移。
 - Typst 编译为同步请求：首次冷启动（字体扫描）可达十余秒，后续编译通常在秒级；当前以 30 秒编译超时与前端 65 秒请求超时兜底。若未来内容规模使同步无法满足，必须重新决策而不是自行引入后台导出架构。
 - 渲染依赖部署环境的 Typst 二进制与 CJK 字体：后端镜像与 CI 已内置固定版本（typst v0.15.1 + Noto CJK），非容器化部署必须自行安装；二进制缺失时渲染接口 fail closed，其它链路不受影响。
-- 本环境未使用真实公网 Provider Credential 执行 smoke；Provider 业务语义由合成 Credential、可控 fake Provider 与真实 TLS socket transport 覆盖。真实公网兼容性仍是非 Gate 环境风险。
+- Phase 7 前本环境未使用真实公网 Provider Credential 执行 smoke；Phase 8 浏览器 E2E 已在本地以真实 DeepSeek Credential 走通 JD 解析、证据匹配、单 Bullet Suggest 与 Preview / Export（需上述 fake-ip DNS 规避）。不同公网 Provider 的兼容性仍是部署环境相关风险。
+- Snapshot-hash cohort 会在材料变化后拆分样本，字面锚点策略也会保守地少聚合；这是避免混合不同材料或错误语义合并的既定取舍。
+- Demo 仅允许 `demo` profile 与 `APP_DEMO_ENABLED=true` 的独立数据库/存储环境；当前没有用户全量删除入口，Phase 9 不应被表述为已完成账号生命周期。
 - 本机使用 Java 25 时需要显式开启 annotation processing 才能生成 Lombok 代码；CI 的标准运行环境是 Java 21。
 
 ## 7. 文档与事实优先级

@@ -3,7 +3,6 @@ package com.winter.airesumeoptimizer.module.resume.service.impl;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.winter.airesumeoptimizer.common.logging.LogSanitizer;
 import com.winter.airesumeoptimizer.infra.ai.AiGatewayRequest;
 import com.winter.airesumeoptimizer.infra.ai.AiCompletionResult;
 import com.winter.airesumeoptimizer.infra.ai.AiFailureCode;
@@ -176,9 +175,10 @@ public class ResumeDisplayModelServiceImpl implements ResumeDisplayModelService 
                 }
                 throw new AiGatewayException(AiFailureCode.SCHEMA_INVALID, "AI 展示模型结果格式异常");
             }
-            log.warn("Resume AI display model fallback: resumeId={}, reason={}",
+            // Parser/provider messages can contain echoed resume content.
+            log.warn("Resume AI display model fallback: resumeId={}, exceptionType={}",
                     resumeId,
-                    LogSanitizer.sanitize(exception.getMessage()));
+                    exception.getClass().getSimpleName());
             ResumeDisplayModelDTO fallback = copy(ruleModel);
             applyDisplayMeta(fallback, "RULE", false, true, safeError(exception.getMessage()), elapsedMs(startedAt), false, "", selection);
             return fallback;
@@ -220,9 +220,9 @@ public class ResumeDisplayModelServiceImpl implements ResumeDisplayModelService 
             applyDisplayMeta(cachedCopy, "AI", true, false, "", elapsedMs(startedAt), true, cacheKey, selection);
             return cachedCopy;
         } catch (RuntimeException exception) {
-            log.warn("Resume cached AI display model ignored: resumeId={}, reason={}",
+            log.warn("Resume cached AI display model ignored: resumeId={}, exceptionType={}",
                     resumeId,
-                    LogSanitizer.sanitize(exception.getMessage()));
+                    exception.getClass().getSimpleName());
             return null;
         }
     }
@@ -1287,12 +1287,9 @@ public class ResumeDisplayModelServiceImpl implements ResumeDisplayModelService 
         return TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
     }
 
-    private String safeError(String message) {
-        if (message == null || message.isBlank()) {
-            return "AI 展示优化失败";
-        }
-        String cleaned = LogSanitizer.sanitize(message).replaceAll("\\s+", " ").strip();
-        return cleaned.length() > 140 ? cleaned.substring(0, 140) : cleaned;
+    private String safeError(String ignoredMessage) {
+        // Never surface parser/provider text because it may contain resume-derived content.
+        return "AI 展示优化失败";
     }
 
     private String sha256(String value) {

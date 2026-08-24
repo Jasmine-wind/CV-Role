@@ -5,7 +5,7 @@ import com.winter.airesumeoptimizer.infra.ai.AiInvocationContext;
 import com.winter.airesumeoptimizer.infra.ai.AiSelectionSnapshot;
 import com.winter.airesumeoptimizer.infra.ai.AiUsageMetrics;
 import com.winter.airesumeoptimizer.module.ai.usage.entity.AiUsageRecord;
-import com.winter.airesumeoptimizer.module.ai.usage.mapper.AiUsageRecordMapper;
+import com.winter.airesumeoptimizer.module.ai.usage.service.AiUsageRecordPersistence;
 import com.winter.airesumeoptimizer.module.ai.usage.service.AiUsageRecorder;
 import java.time.LocalDateTime;
 import org.springframework.stereotype.Service;
@@ -14,10 +14,10 @@ import org.springframework.stereotype.Service;
 @Service
 public class AiUsageRecorderImpl implements AiUsageRecorder {
 
-    private final AiUsageRecordMapper usageRecordMapper;
+    private final AiUsageRecordPersistence usageRecordPersistence;
 
-    public AiUsageRecorderImpl(AiUsageRecordMapper usageRecordMapper) {
-        this.usageRecordMapper = usageRecordMapper;
+    public AiUsageRecorderImpl(AiUsageRecordPersistence usageRecordPersistence) {
+        this.usageRecordPersistence = usageRecordPersistence;
     }
 
     @Override
@@ -58,7 +58,7 @@ public class AiUsageRecorderImpl implements AiUsageRecorder {
         record.setCompletionTokens(toInt(completionTokens));
         record.setTotalTokens(sum(promptTokens, completionTokens));
         record.setCreatedAt(LocalDateTime.now());
-        usageRecordMapper.insert(record);
+        usageRecordPersistence.persist(record);
     }
 
     private Integer toInt(Long value) {

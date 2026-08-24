@@ -53,11 +53,11 @@ const handleSubmit = async () => {
   <main class="auth-page">
     <section class="auth-panel">
       <RouterLink to="/" class="auth-brand">
-        <span>AI</span>
+        <span>CV</span>
         <strong>简历优化</strong>
       </RouterLink>
       <h1 class="auth-title">登录</h1>
-      <p class="auth-subtitle">使用用户名或邮箱登录，继续完成简历优化流程。</p>
+      <p class="auth-subtitle">使用用户名或邮箱登录，继续为目标岗位准备简历。</p>
 
       <el-form ref="formRef" :model="form" :rules="rules" label-position="top" size="large">
         <el-form-item label="用户名或邮箱" prop="account">

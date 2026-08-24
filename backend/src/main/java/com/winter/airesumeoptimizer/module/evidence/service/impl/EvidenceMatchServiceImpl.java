@@ -97,17 +97,13 @@ public class EvidenceMatchServiceImpl implements EvidenceMatchService {
                 userId,
                 optimizationTaskId);
 
-        EvidenceMatchOutcomeDTO outcome = selection == null
-                ? evidenceMatchingStrategy.match(
-                        task.getJobInputSnapshot(),
-                        jobStructuredContent,
-                        resumeSnapshot)
-                : evidenceMatchingStrategy.match(
-                        userId,
-                        task.getJobInputSnapshot(),
-                        jobStructuredContent,
-                        resumeSnapshot,
-                        selection);
+        EvidenceMatchOutcomeDTO outcome = evidenceMatchingStrategy.match(
+                userId,
+                optimizationTaskId,
+                task.getJobInputSnapshot(),
+                jobStructuredContent,
+                resumeSnapshot,
+                selection);
         deleteExistingAnalysis(userId, optimizationTaskId);
         EvidenceAnalysis analysis = saveAnalysis(userId, task, outcome);
         // 与正式结果落库共享当前事务；完成状态更新失败时，旧结果删除和新结果写入一并回滚。

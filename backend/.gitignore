@@ -1,5 +1,7 @@
 HELP.md
 target/
+# 本地存储模式的上传目录（包含用户简历原文件，不得入库）。
+uploads/
 .mvn/wrapper/maven-wrapper.jar
 !**/src/main/**/target/
 !**/src/test/**/target/

@@ -59,7 +59,7 @@ public class JobDescriptionParseServiceImpl implements JobDescriptionParseServic
     @Override
     @Transactional
     public JobDescriptionVO parse(Long userId, Long jobDescriptionId) {
-        return parse(userId, jobDescriptionId, null);
+        return parse(userId, jobDescriptionId, null, null);
     }
 
     @Override
@@ -68,6 +68,16 @@ public class JobDescriptionParseServiceImpl implements JobDescriptionParseServic
             Long userId,
             Long jobDescriptionId,
             AiSelectionSnapshot selection) {
+        return parse(userId, jobDescriptionId, selection, null);
+    }
+
+    @Override
+    @Transactional
+    public JobDescriptionVO parse(
+            Long userId,
+            Long jobDescriptionId,
+            AiSelectionSnapshot selection,
+            Long optimizationTaskId) {
         JobDescription jobDescription = getOwnedJobDescription(userId, jobDescriptionId);
         JobDescriptionPromptDTO prompt = jobDescriptionPromptService.buildPrompt(jobDescription.getRawText());
         String selectedModel = resolveModel(userId, selection);
@@ -79,7 +89,7 @@ public class JobDescriptionParseServiceImpl implements JobDescriptionParseServic
         try {
             AiCompletionResult completion = AiGatewaySupport.complete(
                     aiGateway,
-                    new AiInvocationContext(userId, null, "JOB_DESCRIPTION_PARSE", selection),
+                    new AiInvocationContext(userId, optimizationTaskId, "JOB_DESCRIPTION_PARSE", selection),
                     new AiGatewayRequest(
                             "JOB_DESCRIPTION_PARSE",
                             prompt.getSystemPrompt() == null || prompt.getSystemPrompt().isBlank()

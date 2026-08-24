@@ -15,6 +15,8 @@ const props = defineProps<{
   document: ResumeDocument
   suggest?: BulletSuggestController | null
   suggestEnabled?: boolean
+  /** 草稿未保存 / 保存中 / 失败 / 冲突时禁止发起 Suggest。 */
+  suggestLocked?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -36,9 +38,11 @@ const LIMITS = {
 const newId = () => crypto.randomUUID()
 const draggedSectionId = ref<string | null>(null)
 
-/** 深拷贝后原地修改再整体发出，保证父级始终收到不可变的新文档。 */
+/** 深拷贝后原地修改再整体发出，保证父级始终收到不可变的新文档。
+ * 父级传入的 document 是 Vue reactive proxy，structuredClone 无法克隆 Proxy，
+ * 与 useWorkspaceEditor 一致使用 JSON 克隆。 */
 const mutate = (mutator: (doc: ResumeDocument) => void) => {
-  const next = structuredClone(props.document)
+  const next = JSON.parse(JSON.stringify(props.document)) as ResumeDocument
   mutator(next)
   emit('change', next)
 }
@@ -162,6 +166,11 @@ const suggestCardMode = (bulletId: string): SuggestCardMode | null => {
 
 const handleSuggestCommand = (bulletId: string, command: BulletSuggestIntent | 'CUSTOM') => {
   if (!props.suggest || props.suggest.busy.value) return
+  // 未保存内容不得进入 Suggest：明确告知用户先完成保存，而不是静默禁用。
+  if (props.suggestLocked) {
+    ElMessage.warning('请先完成保存，再生成建议')
+    return
+  }
   if (command === 'CUSTOM') {
     props.suggest.startCustomCompose(bulletId)
     return

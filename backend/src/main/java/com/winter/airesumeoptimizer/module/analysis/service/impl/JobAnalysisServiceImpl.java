@@ -208,12 +208,11 @@ public class JobAnalysisServiceImpl implements JobAnalysisService {
                     resumeParseResult.getStructuredJson());
 
             asyncTaskService.updateStage(asyncTaskId, "正在理解岗位要求");
-            JobDescriptionVO parsedJob = context.aiSelection() == null
-                    ? jobDescriptionParseService.parse(userId, context.jobDescriptionId())
-                    : jobDescriptionParseService.parse(
-                            userId,
-                            context.jobDescriptionId(),
-                            context.aiSelection());
+            JobDescriptionVO parsedJob = jobDescriptionParseService.parse(
+                    userId,
+                    context.jobDescriptionId(),
+                    context.aiSelection(),
+                    context.optimizationTaskId());
             if (!STATUS_SUCCESS.equals(parsedJob.getParseStatus())) {
                 if (context.aiSelection() != null && context.aiSelection().isUserByok()) {
                     failTask(

@@ -24,6 +24,24 @@ vi.mock('element-plus', () => ({
     success: messageSuccess,
   },
   ElMessageBox: { confirm: vi.fn().mockResolvedValue(undefined) },
+  // 按需引入会把 El* 组件以局部导入形式注入 SFC，测试中用轻量 stub 替代。
+  ElButton: {
+    props: ['disabled', 'loading'],
+    template: '<button :disabled="disabled"><slot /></button>',
+  },
+  ElRadioGroup: {
+    name: 'ElRadioGroup',
+    props: ['modelValue', 'size'],
+    emits: ['update:modelValue'],
+    template: '<div><slot /></div>',
+  },
+  ElRadioButton: {
+    props: ['value'],
+    template: '<span><slot /></span>',
+  },
+  ElDialog: {
+    template: '<div><slot /></div>',
+  },
 }))
 
 vi.mock('@/api/workspace', () => ({
@@ -79,23 +97,12 @@ const artifact = {
 
 const deferred = <T>() => {
   let resolve!: (value: T) => void
-  const promise = new Promise<T>((promiseResolve) => {
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
     resolve = promiseResolve
+    reject = promiseReject
   })
-  return { promise, resolve }
-}
-
-const ButtonStub = {
-  props: ['disabled', 'loading'],
-  emits: ['click'],
-  template: '<button :disabled="disabled" @click="$emit(\'click\')"><slot /></button>',
-}
-
-const RadioGroupStub = {
-  name: 'ElRadioGroup',
-  props: ['modelValue'],
-  emits: ['update:modelValue'],
-  template: '<div><slot /></div>',
+  return { promise, resolve, reject }
 }
 
 const mountComponent = () =>
@@ -105,14 +112,6 @@ const mountComponent = () =>
       revision: 3,
       status: 'saved',
       onStale: staleHandler,
-    },
-    global: {
-      components: {
-        ElButton: ButtonStub,
-        ElRadioGroup: RadioGroupStub,
-        ElRadioButton: { template: '<span><slot /></span>' },
-        ElDialog: { template: '<div><slot /></div>' },
-      },
     },
   })
 
@@ -153,6 +152,23 @@ describe('WorkspacePreviewExport', () => {
       expectedRevision: 3,
       previewReceipt: 'signed-receipt',
     })
+  })
+
+  it('reports a post-export download failure separately and offers the artifact download retry', async () => {
+    previewMock.mockResolvedValue(previewResult())
+    exportMock.mockResolvedValue(artifact)
+    downloadMock.mockRejectedValue(new Error('导出文件暂时无法下载'))
+    const wrapper = mountComponent()
+    await flushPromises()
+
+    await button(wrapper, '预览 PDF').trigger('click')
+    await flushPromises()
+    await button(wrapper, '导出 PDF').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('PDF 下载失败')
+    expect(wrapper.text()).toContain('导出文件暂时无法下载')
+    expect(button(wrapper, '重新下载')).toBeTruthy()
   })
 
   it('shows contact, page-limit, and executable overflow warnings from real preflight', async () => {
@@ -200,7 +216,7 @@ describe('WorkspacePreviewExport', () => {
     await flushPromises()
     expect(button(wrapper, '导出 PDF').attributes('disabled')).toBeUndefined()
 
-    wrapper.findComponent(RadioGroupStub).vm.$emit('update:modelValue', 'modern')
+    wrapper.findComponent({ name: 'ElRadioGroup' }).vm.$emit('update:modelValue', 'modern')
     await flushPromises()
     expect(button(wrapper, '导出 PDF').attributes('disabled')).toBeDefined()
 
@@ -223,6 +239,67 @@ describe('WorkspacePreviewExport', () => {
     expect(button(wrapper, '导出 PDF').attributes('disabled')).toBeDefined()
   })
 
+  it('drops a stale preview failure after a newer local edit instead of requesting server adoption', async () => {
+    const pending = deferred<ReturnType<typeof previewResult>>()
+    previewMock.mockReturnValue(pending.promise)
+    const wrapper = mountComponent()
+    await flushPromises()
+
+    await button(wrapper, '预览 PDF').trigger('click')
+    await wrapper.setProps({ status: 'dirty' })
+    pending.reject(Object.assign(new Error('预览已失效'), { code: 409 }))
+    await flushPromises()
+
+    expect(staleHandler).not.toHaveBeenCalled()
+    expect(messageWarning).not.toHaveBeenCalled()
+  })
+
+  it('drops a stale export failure after a newer local edit instead of requesting server adoption', async () => {
+    previewMock.mockResolvedValue(previewResult())
+    const pending = deferred<typeof artifact>()
+    exportMock.mockReturnValue(pending.promise)
+    const wrapper = mountComponent()
+    await flushPromises()
+    await button(wrapper, '预览 PDF').trigger('click')
+    await flushPromises()
+
+    await button(wrapper, '导出 PDF').trigger('click')
+    await wrapper.setProps({ status: 'dirty' })
+    pending.reject(Object.assign(new Error('预览凭证已过期'), { code: 409 }))
+    await flushPromises()
+
+    expect(staleHandler).not.toHaveBeenCalled()
+    expect(messageWarning).not.toHaveBeenCalled()
+  })
+
+  it('does not auto-download an export that completes after a newer local edit', async () => {
+    previewMock.mockResolvedValue(previewResult())
+    const pending = deferred<typeof artifact>()
+    exportMock.mockReturnValue(pending.promise)
+    const wrapper = mountComponent()
+    await flushPromises()
+    await button(wrapper, '预览 PDF').trigger('click')
+    await flushPromises()
+
+    await button(wrapper, '导出 PDF').trigger('click')
+    await wrapper.setProps({ status: 'dirty' })
+    pending.resolve(artifact)
+    await flushPromises()
+
+    expect(downloadMock).not.toHaveBeenCalled()
+    expect(HTMLAnchorElement.prototype.click).not.toHaveBeenCalled()
+  })
+
+  it('renders an artifact-list load failure instead of an empty state', async () => {
+    listMock.mockRejectedValue(new Error('读取导出记录失败'))
+    const wrapper = mountComponent()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('已导出文件加载失败')
+    expect(wrapper.text()).toContain('读取导出记录失败')
+    expect(wrapper.text()).not.toContain('还没有导出记录。')
+  })
+
   it('surfaces non-stale preview errors without enabling export', async () => {
     previewMock.mockRejectedValue(new Error('PDF response invalid'))
     const wrapper = mountComponent()
@@ -232,6 +309,8 @@ describe('WorkspacePreviewExport', () => {
     await flushPromises()
 
     expect(messageError).toHaveBeenCalledWith('PDF response invalid')
+    expect(wrapper.text()).toContain('PDF 预览未生成')
+    expect(wrapper.text()).toContain('PDF response invalid')
     expect(button(wrapper, '导出 PDF').attributes('disabled')).toBeDefined()
   })
 })

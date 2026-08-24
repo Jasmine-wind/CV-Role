@@ -5,7 +5,6 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.winter.airesumeoptimizer.common.logging.LogSanitizer;
 import com.winter.airesumeoptimizer.infra.ai.AiGatewayRequest;
 import com.winter.airesumeoptimizer.infra.ai.AiCompletionResult;
 import com.winter.airesumeoptimizer.infra.ai.AiFailureCode;
@@ -167,8 +166,9 @@ public class ResumeAiStructuredParserImpl implements ResumeAiStructuredParser {
             if (selection != null && selection.isUserByok()) {
                 throw new AiGatewayException(AiFailureCode.SCHEMA_INVALID, "AI 结构化补全结果格式异常");
             }
-            log.warn("Resume AI structured parse fallback: reason={}", LogSanitizer.sanitize(exception.getMessage()));
-            return aiFallback("AI 结构化补全 JSON 解析失败：" + sanitizeErrorMessage(exception.getOriginalMessage()),
+            // Jackson diagnostics can include model output; do not retain or return them.
+            log.warn("Resume AI structured parse fallback: exceptionType={}", exception.getClass().getSimpleName());
+            return aiFallback("AI 结构化补全 JSON 解析失败",
                     ruleStructuredContent, qualityWarnings, startedAt);
         } catch (RuntimeException exception) {
             if (selection != null && selection.isUserByok()) {
@@ -177,8 +177,8 @@ public class ResumeAiStructuredParserImpl implements ResumeAiStructuredParser {
                 }
                 throw new AiGatewayException(AiFailureCode.SCHEMA_INVALID, "AI 结构化补全结果校验失败");
             }
-            log.warn("Resume AI structured parse fallback: reason={}", LogSanitizer.sanitize(exception.getMessage()));
-            return aiFallback("AI 结构化补全失败：" + sanitizeErrorMessage(exception.getMessage()),
+            log.warn("Resume AI structured parse fallback: exceptionType={}", exception.getClass().getSimpleName());
+            return aiFallback("AI 结构化补全失败",
                     ruleStructuredContent, qualityWarnings, startedAt);
         }
     }
@@ -453,16 +453,6 @@ public class ResumeAiStructuredParserImpl implements ResumeAiStructuredParser {
                 .contains(fieldName);
     }
 
-    private String sanitizeErrorMessage(String message) {
-        if (message == null || message.isBlank()) {
-            return "unknown";
-        }
-        String singleLine = LogSanitizer.sanitize(message).replaceAll("\\s+", " ").strip();
-        if (singleLine.length() <= 120) {
-            return singleLine;
-        }
-        return singleLine.substring(0, 120);
-    }
 
     private String extractJsonObject(String value) throws JsonProcessingException {
         if (value == null) {

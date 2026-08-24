@@ -10,6 +10,10 @@ const props = defineProps<{
   error: string | null
 }>()
 
+const emit = defineEmits<{
+  retryLoad: []
+}>()
+
 const requirements = computed(() => props.result?.evidenceAnalysis?.requirements ?? [])
 
 const byLevel = (level: string): EvidenceRequirementItem[] =>
@@ -30,9 +34,16 @@ const missing = computed(() => byLevel('NO_EVIDENCE'))
     </header>
 
     <p v-if="loading" class="suggestions-status">正在读取分析结论…</p>
-    <p v-else-if="error" class="suggestions-status">{{ error }}</p>
+    <div v-else-if="error" class="suggestions-error" role="alert">
+      <p>{{ error }}</p>
+      <el-button size="small" @click="emit('retryLoad')">重新加载</el-button>
+    </div>
 
     <template v-else-if="requirements.length">
+      <p class="suggestions-summary" aria-label="三态数量摘要">
+        建议完善 {{ partial.length }} · 已有优势 {{ matched.length }} · 当前材料未体现 {{ missing.length }}
+      </p>
+
       <section v-if="partial.length" class="suggestion-group">
         <h3>建议完善 · {{ partial.length }}</h3>
         <article v-for="item in partial" :key="item.evidenceRequirementId" class="suggestion-card">
@@ -95,8 +106,8 @@ const missing = computed(() => byLevel('NO_EVIDENCE'))
 
 .workspace-suggestions h2 {
   margin: 0;
-  color: var(--app-navy);
-  font-size: 20px;
+  color: var(--app-text);
+  font-size: 18px;
 }
 
 .suggestions-note {
@@ -112,6 +123,33 @@ const missing = computed(() => byLevel('NO_EVIDENCE'))
   font-size: 13px;
 }
 
+.suggestions-error {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+  padding: 12px;
+  border: 1px solid var(--el-color-danger-light-7);
+  border-radius: var(--app-radius-sm);
+  background: var(--app-danger-soft);
+}
+
+.suggestions-error p {
+  margin: 0;
+  color: var(--app-text);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.suggestions-summary {
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: var(--app-radius-sm);
+  color: var(--app-text);
+  font-size: 13px;
+  font-weight: 600;
+  background: var(--app-surface-soft);
+}
+
 .suggestion-group {
   display: grid;
   gap: 10px;
@@ -119,7 +157,7 @@ const missing = computed(() => byLevel('NO_EVIDENCE'))
 
 .suggestion-group h3 {
   margin: 0;
-  color: var(--app-primary);
+  color: var(--app-text);
   font-size: 13px;
   font-weight: 800;
 }
@@ -141,6 +179,7 @@ const missing = computed(() => byLevel('NO_EVIDENCE'))
   margin: 0;
   color: var(--app-text);
   font-size: 14px;
+  line-height: 1.6;
 }
 
 .suggestion-card p {
@@ -174,7 +213,7 @@ const missing = computed(() => byLevel('NO_EVIDENCE'))
 }
 
 .suggestion-tip {
-  color: var(--app-navy);
+  color: var(--app-text);
   font-weight: 600;
 }
 </style>

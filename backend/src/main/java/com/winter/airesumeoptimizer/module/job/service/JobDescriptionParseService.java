@@ -13,4 +13,13 @@ public interface JobDescriptionParseService {
             AiSelectionSnapshot selection) {
         return parse(userId, jobDescriptionId);
     }
+
+    /** Binds a formal analysis Provider attempt to its OptimizationTask when available. */
+    default JobDescriptionVO parse(
+            Long userId,
+            Long jobDescriptionId,
+            AiSelectionSnapshot selection,
+            Long optimizationTaskId) {
+        return parse(userId, jobDescriptionId, selection);
+    }
 }

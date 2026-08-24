@@ -7,7 +7,8 @@
   --el-color-primary-light-9: var(--app-primary-soft);
   --el-color-primary-dark-2: var(--app-primary-hover);
 
-  --el-border-radius-base: 10px;
+  --el-border-radius-base: 8px;
+  --el-border-radius-small: 6px;
   --el-border-color: var(--app-border);
   --el-border-color-light: var(--app-border-soft);
   --el-fill-color-light: var(--app-bg-soft);
@@ -55,7 +56,7 @@
 .el-card {
   --el-card-border-color: var(--app-border);
   border-radius: var(--app-radius-lg);
-  box-shadow: var(--app-shadow-card);
+  box-shadow: none;
 }
 
 .el-tag {

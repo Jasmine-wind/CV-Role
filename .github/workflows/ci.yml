@@ -9,7 +9,7 @@ on:
 
 jobs:
   backend:
-    name: Backend Tests
+    name: Backend Tests (PostgreSQL / Flyway)
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -35,6 +35,11 @@ jobs:
       TEST_DB_USERNAME: dawn
       TEST_DB_PASSWORD: test_password
       DASHSCOPE_API_KEY: ""
+      MINIO_INTEGRATION_ENABLED: "true"
+      TEST_MINIO_ENDPOINT: http://127.0.0.1:9000
+      TEST_MINIO_ACCESS_KEY: phase9-test-minio
+      TEST_MINIO_SECRET_KEY: phase9-test-minio-secret
+      TEST_MINIO_BUCKET: phase9-integration
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -57,11 +62,24 @@ jobs:
           sudo chmod +x /usr/local/bin/typst
           typst --version
 
-      - name: Run backend tests
+      - name: Start ephemeral MinIO lifecycle target
+        run: |
+          docker run -d --name phase9-minio \
+            -e MINIO_ROOT_USER="$TEST_MINIO_ACCESS_KEY" \
+            -e MINIO_ROOT_PASSWORD="$TEST_MINIO_SECRET_KEY" \
+            -p 9000:9000 minio/minio:RELEASE.2025-04-22T22-12-26Z server /data
+          for attempt in {1..30}; do
+            if curl -fsS "$TEST_MINIO_ENDPOINT/minio/health/live" >/dev/null; then exit 0; fi
+            sleep 1
+          done
+          docker logs phase9-minio
+          exit 1
+
+      - name: Run backend tests, including real PostgreSQL/Flyway and MinIO integration
         run: ./mvnw test
 
   frontend:
-    name: Frontend Build
+    name: Frontend Unit / Type / Build
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -78,7 +96,143 @@ jobs:
           cache-dependency-path: web/package-lock.json
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --include=dev
+
+      - name: Run frontend unit tests
+        run: npm test
+
+      - name: Run non-mutating lint
+        run: npm run lint:check
+
+      - name: Run type check
+        run: npm run type-check
 
       - name: Build frontend
         run: npm run build
+
+  phase9-e2e:
+    name: Phase 9 Browser E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: ai_resume_optimizer_test
+          POSTGRES_USER: dawn
+          POSTGRES_PASSWORD: test_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U dawn -d ai_resume_optimizer_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      TEST_JWT_SECRET: ci-phase9-e2e-jwt-secret-change-me-at-least-32-chars
+      TEST_DB_URL: jdbc:postgresql://localhost:5432/ai_resume_optimizer_test
+      TEST_DB_USERNAME: dawn
+      TEST_DB_PASSWORD: test_password
+      APP_STORAGE_TYPE: minio
+      MINIO_ENDPOINT: http://127.0.0.1:9000
+      MINIO_ACCESS_KEY: phase9-e2e-minio
+      MINIO_SECRET_KEY: phase9-e2e-minio-secret
+      MINIO_BUCKET: phase9-e2e
+      PLAYWRIGHT_BASE_URL: http://127.0.0.1:5173
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install Typst compiler and production fonts
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xz-utils fonts-noto-cjk
+          curl -fsSL https://github.com/typst/typst/releases/download/v0.15.1/typst-x86_64-unknown-linux-musl.tar.xz -o /tmp/typst.tar.xz
+          echo 'a6d077d0a95eed5a2eba715b2dae06be954f624ccbf85758a03f389ded33118c  /tmp/typst.tar.xz' | sha256sum -c -
+          tar -xJf /tmp/typst.tar.xz -C /tmp
+          sudo mv /tmp/typst-x86_64-unknown-linux-musl/typst /usr/local/bin/typst
+          sudo chmod +x /usr/local/bin/typst
+
+      - name: Install frontend and Chromium dependencies
+        working-directory: web
+        run: |
+          npm ci --include=dev
+          npx playwright install --with-deps chromium
+
+      - name: Start ephemeral MinIO for the browser's real storage path
+        run: |
+          docker run -d --name phase9-e2e-minio \
+            -e MINIO_ROOT_USER="$MINIO_ACCESS_KEY" \
+            -e MINIO_ROOT_PASSWORD="$MINIO_SECRET_KEY" \
+            -p 9000:9000 minio/minio:RELEASE.2025-04-22T22-12-26Z server /data
+          for attempt in {1..30}; do
+            if curl -fsS "$MINIO_ENDPOINT/minio/health/live" >/dev/null; then exit 0; fi
+            sleep 1
+          done
+          docker logs phase9-e2e-minio
+          exit 1
+
+      - name: Start deterministic fake-provider backend
+        run: |
+          (
+            cd backend
+            SPRING_PROFILES_ACTIVE=phase9-e2e ./mvnw spring-boot:run \
+              >"$RUNNER_TEMP/phase9-backend.log" 2>&1 &
+            echo $! >"$RUNNER_TEMP/phase9-backend.pid"
+          )
+          for attempt in {1..60}; do
+            if curl -fsS http://127.0.0.1:8080/v3/api-docs >/dev/null; then exit 0; fi
+            sleep 2
+          done
+          cat "$RUNNER_TEMP/phase9-backend.log"
+          exit 1
+
+      - name: Start frontend
+        run: |
+          (
+            cd web
+            VITE_API_BASE_URL=http://127.0.0.1:8080 npm run dev -- --host 127.0.0.1 --port 5173 \
+              >"$RUNNER_TEMP/phase9-frontend.log" 2>&1 &
+            echo $! >"$RUNNER_TEMP/phase9-frontend.pid"
+          )
+          for attempt in {1..30}; do
+            if curl -fsS http://127.0.0.1:5173 >/dev/null; then exit 0; fi
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/phase9-frontend.log"
+          exit 1
+
+      - name: Run Chromium recovery flows
+        working-directory: web
+        run: npm run test:e2e
+
+      - name: Capture MinIO diagnostics
+        if: always()
+        run: docker logs phase9-e2e-minio >"$RUNNER_TEMP/phase9-e2e-minio.log" 2>&1 || true
+
+      - name: Upload E2E diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase9-e2e-artifacts
+          path: |
+            ${{ runner.temp }}/phase9-backend.log
+            ${{ runner.temp }}/phase9-frontend.log
+            ${{ runner.temp }}/phase9-e2e-minio.log
+            web/playwright-report/
+            web/test-results/
+          if-no-files-found: ignore
