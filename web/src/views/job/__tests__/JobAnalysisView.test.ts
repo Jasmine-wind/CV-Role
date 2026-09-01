@@ -126,6 +126,11 @@ describe('JobAnalysisView', () => {
     await noEvidenceItem?.find('.analysis-item-toggle').trigger('click')
     expect(noEvidenceItem?.find('.analysis-item-detail').text()).toContain('手动补充')
     expect(noEvidenceItem?.find('.analysis-item-detail').text()).not.toContain('进入编辑器')
+    expect(noEvidenceItem?.find('.analysis-item-detail').text()).not.toContain('需要核对')
+
+    await wrapper.find('.analysis-strengths .analysis-item-toggle').trigger('click')
+    expect(wrapper.find('.analysis-strengths .analysis-item-detail').text()).toContain('材料 2')
+    expect(wrapper.find('.analysis-strengths .analysis-conclusion').exists()).toBe(false)
     expect(wrapper.text()).toContain('当前材料未体现')
   })
 

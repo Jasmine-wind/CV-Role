@@ -44,11 +44,18 @@ public class TypstResumeSourceMapper {
                 .append(toTypstString(basics == null ? null : basics.getHighestEducation())).append(",\n");
         builder.append("    contacts: ");
         List<ResumeDocumentContactDTO> contacts = basics == null ? null : basics.getContacts();
-        if (contacts == null || contacts.isEmpty()) {
+        List<ResumeDocumentContactDTO> renderableContacts = contacts == null
+                ? List.of()
+                : contacts.stream()
+                        .filter(contact -> contact != null
+                                && contact.getValue() != null
+                                && !contact.getValue().isBlank())
+                        .toList();
+        if (renderableContacts.isEmpty()) {
             builder.append("()");
         } else {
             builder.append("(\n");
-            for (ResumeDocumentContactDTO contact : contacts) {
+            for (ResumeDocumentContactDTO contact : renderableContacts) {
                 builder.append("      (type: ")
                         .append(toTypstString(contact == null ? null : contact.getType()))
                         .append(", label: ")

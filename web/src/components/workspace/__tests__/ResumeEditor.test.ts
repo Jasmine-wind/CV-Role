@@ -96,6 +96,20 @@ describe('ResumeEditor', () => {
     expect(changed).not.toBe(draft.value)
   })
 
+  it('shows duplicate contact values and blank drafts only once', () => {
+    const document = makeDocument()
+    document.basics.contacts = [
+      { id: 'c1', type: 'EMAIL', label: '邮箱', value: 'test@example.com' },
+      { id: 'c2', type: 'EMAIL', label: '邮箱', value: 'test@example.com' },
+      { id: 'c3', type: 'OTHER', label: '其他', value: '' },
+      { id: 'c4', type: 'OTHER', label: '其他', value: '  ' },
+    ]
+
+    const wrapper = mount(ResumeEditor, { props: { document } })
+
+    expect(wrapper.findAll('.contact-row')).toHaveLength(2)
+  })
+
   it('renders semantic fields without offering non-exported skill bullets or generic custom metadata', () => {
     const wrapper = mount(ResumeEditor, {
       props: {

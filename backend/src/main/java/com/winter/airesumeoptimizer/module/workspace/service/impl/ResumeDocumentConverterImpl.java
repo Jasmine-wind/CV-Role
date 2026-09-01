@@ -133,6 +133,7 @@ public class ResumeDocumentConverterImpl implements ResumeDocumentConverter {
             throw new BusinessException(400, "基础信息字段数量超出编辑上限");
         }
         List<ResumeDocumentContactDTO> contacts = new ArrayList<>();
+        Set<String> seenContactValues = new HashSet<>();
         for (ResumeDocumentContactDTO contact : basics.getContacts()) {
             if (contact == null || contact.getValue() == null) {
                 throw new BusinessException(400, "简历基础信息格式不正确");
@@ -148,11 +149,18 @@ public class ResumeDocumentConverterImpl implements ResumeDocumentConverter {
             if (label == null || label.isBlank()) {
                 label = type.getDefaultLabel();
             }
+            String value = requireWithinLength(
+                    contact.getValue(), CONTACT_FIELD_MAX_LENGTH, "基础信息字段值超出编辑上限");
+            String normalizedId = idAllocator.allocate(contact.getId());
+            String contactKey = type.name() + "\u0000" + (value == null ? "" : value.strip());
+            if (!seenContactValues.add(contactKey)) {
+                continue;
+            }
             contacts.add(ResumeDocumentContactDTO.builder()
-                    .id(idAllocator.allocate(contact.getId()))
+                    .id(normalizedId)
                     .type(type.name())
                     .label(requireWithinLength(label, CONTACT_FIELD_MAX_LENGTH, "基础信息字段名超出编辑上限"))
-                    .value(requireWithinLength(contact.getValue(), CONTACT_FIELD_MAX_LENGTH, "基础信息字段值超出编辑上限"))
+                    .value(value)
                     .build());
         }
         return ResumeDocumentBasicsDTO.builder()

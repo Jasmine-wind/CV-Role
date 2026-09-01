@@ -12,7 +12,7 @@
   weight: "regular",
   lang: "zh",
 )
-#set par(leading: 0.34em, justify: false)
+#set par(leading: 0.42em, justify: false)
 
 #let basics = resume.basics
 #let sections = resume.sections
@@ -93,35 +93,35 @@
     text(size: 9.5pt, fill: muted, "最高学历：" + basics.highest-education)
   }
   if basics.contacts.len() > 0 {
-    v(0.18em)
+    v(0.24em)
     stack(
       dir: ttb,
-      spacing: 0.1em,
+      spacing: 0.24em,
       ..basics.contacts.map(c => text(size: 9pt, fill: muted, contact-item(c))),
     )
   }
-  v(0.3em)
+  v(0.42em)
   line(length: 100%, stroke: 1.6pt + accent)
 }
 
 #let section-title(title) = {
-  v(0.3em)
+  v(0.42em)
   block(
-    inset: (left: 0.58em, y: 0.06em),
+    inset: (left: 0.62em, y: 0.08em),
     stroke: (left: 2.6pt + accent),
     text(size: 12.5pt, weight: "bold", fill: accent, title),
   )
-  v(0.14em)
+  v(0.2em)
 }
 
 #let compact-section-title(title) = {
-  v(0.08em)
+  v(0.14em)
   block(
-    inset: (left: 0.58em, y: 0.03em),
+    inset: (left: 0.62em, y: 0.05em),
     stroke: (left: 2.6pt + accent),
     text(size: 11.5pt, weight: "bold", fill: accent, title),
   )
-  v(0.06em)
+  v(0.1em)
 }
 
 #let render-entry-header(entry) = {
@@ -155,7 +155,7 @@
       marker: rect(width: 0.28em, height: 0.28em, fill: accent),
       indent: 1.08em,
       body-indent: 0.34em,
-      spacing: 0.42em,
+      spacing: 0.52em,
       ..entry.bullets.slice(start, end-index),
     )
   }
@@ -199,7 +199,7 @@
       render-plain-bullets(entry)
     }
   }
-  v(0.14em)
+  v(0.22em)
 }
 
 #let render-skill-entry(entry) = {
@@ -223,7 +223,7 @@
       linebreak()
     }
   }
-  v(0.18em)
+  v(0.24em)
 }
 
 #let render-generic-bullets(title, entry) = {

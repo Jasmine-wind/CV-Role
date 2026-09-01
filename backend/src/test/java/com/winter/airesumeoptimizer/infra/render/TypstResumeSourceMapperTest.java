@@ -105,6 +105,21 @@ class TypstResumeSourceMapperTest {
     }
 
     @Test
+    void mapToDataSourceOmitsBlankContactRows() {
+        ResumeDocumentDTO document = documentWithBullet("同一条内容");
+        document.getBasics().setContacts(List.of(
+                ResumeDocumentContactDTO.builder()
+                        .id("c-1").type("PHONE").label("电话").value("13800000000").build(),
+                ResumeDocumentContactDTO.builder()
+                        .id("c-2").type("OTHER").label("其他").value(" ").build()));
+
+        String source = mapper.mapToDataSource(document);
+
+        assertThat(source).contains("label: \"电话\", value: \"13800000000\"");
+        assertThat(source).doesNotContain("label: \"其他\"");
+    }
+
+    @Test
     void mapToDataSourceRejectsNullDocument() {
         assertThatThrownBy(() -> mapper.mapToDataSource(null))
                 .isInstanceOf(ResumeRenderException.class);

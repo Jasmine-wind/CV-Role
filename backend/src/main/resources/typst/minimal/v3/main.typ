@@ -14,7 +14,7 @@
   fill: ink,
   lang: "zh",
 )
-#set par(leading: 0.33em, justify: false)
+#set par(leading: 0.4em, justify: false)
 
 #let basics = resume.basics
 #let sections = resume.sections
@@ -84,12 +84,12 @@
 
 #let render-header() = {
   if basics.name != "" {
-    text(size: 19pt, weight: "bold", basics.name)
-    v(0.2em)
+    text(size: 20pt, weight: "bold", basics.name)
+    v(0.28em)
   }
   if basics.contacts.len() > 0 {
     text(size: 9.5pt, fill: muted, basics.contacts.map(contact-item).join("   ·   "))
-    v(0.12em)
+    v(0.2em)
   }
   if basics.job-intention != "" or (basics.highest-education != "" and education-contains(basics.highest-education) == false) {
     let meta-parts = ()
@@ -100,24 +100,24 @@
       meta-parts.push("最高学历：" + basics.highest-education)
     }
     text(size: 9.5pt, fill: muted, meta-parts.join("   ·   "))
-    v(0.12em)
+    v(0.2em)
   }
 }
 
 #let section-title(title) = {
-  v(0.3em)
+  v(0.42em)
   text(size: 10.5pt, weight: "bold", upper(title))
-  v(0.08em)
+  v(0.1em)
   line(length: 100%, stroke: 0.4pt + rule)
-  v(0.14em)
+  v(0.2em)
 }
 
 #let compact-section-title(title) = {
-  v(0.08em)
+  v(0.14em)
   text(size: 10.5pt, weight: "bold", upper(title))
-  v(0.03em)
+  v(0.05em)
   line(length: 100%, stroke: 0.4pt + rule)
-  v(0.06em)
+  v(0.1em)
 }
 
 #let render-entry-header(entry) = {
@@ -151,7 +151,7 @@
       marker: text(fill: muted)[–],
       indent: 1.08em,
       body-indent: 0.34em,
-      spacing: 0.42em,
+      spacing: 0.52em,
       ..entry.bullets.slice(start, end-index),
     )
   }
@@ -195,7 +195,7 @@
       render-plain-bullets(entry)
     }
   }
-  v(0.14em)
+  v(0.22em)
 }
 
 #let render-skill-entry(entry) = {
@@ -219,7 +219,7 @@
       linebreak()
     }
   }
-  v(0.18em)
+  v(0.24em)
 }
 
 #let render-generic-bullets(title, entry) = {

@@ -301,7 +301,15 @@ onMounted(loadResult)
                 </div>
                 <p v-else class="detail-muted">当前材料中没有找到可引用的证据。</p>
               </div>
-              <p v-if="item.conclusion" class="analysis-conclusion">{{ item.conclusion }}</p>
+              <p
+                v-if="
+                  item.conclusion &&
+                  (item.matchLevel !== 'NO_EVIDENCE' || item.evidences.length > 0)
+                "
+                class="analysis-conclusion"
+              >
+                {{ item.conclusion }}
+              </p>
               <p v-if="item.suggestion" class="analysis-suggestion">{{ item.suggestion }}</p>
               <p v-if="item.matchLevel === 'NO_EVIDENCE'" class="analysis-boundary">
                 这只代表当前材料未体现，不代表你没有这项能力。只有在确有真实经历时，才手动补充到简历；系统不会自动加入。
@@ -370,7 +378,6 @@ onMounted(loadResult)
               }}</span>
             </button>
             <div v-if="isMatchedExpanded(item)" class="analysis-item-detail">
-              <p v-if="item.conclusion" class="analysis-conclusion">{{ item.conclusion }}</p>
               <div v-if="item.evidences.length" class="evidence-list">
                 <p v-for="evidence in item.evidences" :key="evidence.requirementEvidenceId">
                   <span v-if="evidence.sectionLabel">{{ evidence.sectionLabel }}：</span>

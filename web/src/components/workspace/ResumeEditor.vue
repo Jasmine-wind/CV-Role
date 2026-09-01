@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ElMessage } from 'element-plus'
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import BulletSuggestionCard from '@/components/workspace/BulletSuggestionCard.vue'
 import type {
   ResumeDocument,
@@ -35,6 +35,28 @@ const LIMITS = {
 }
 
 const newId = () => crypto.randomUUID()
+
+const compactContactRows = (contacts: ResumeDocumentBasics['contacts']) => {
+  const seen = new Set<string>()
+  let emptyContactKept = false
+  return contacts.filter((contact) => {
+    const value = contact.value?.trim() ?? ''
+    if (!value) {
+      if (emptyContactKept) return false
+      emptyContactKept = true
+      return true
+    }
+    const key = `${contact.type || 'OTHER'}\u0000${value}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+const visibleContacts = computed(() =>
+  compactContactRows(props.document.basics.contacts ?? []),
+)
+
 const draggedSectionId = ref<string | null>(null)
 const editingSectionTitle = ref<string | null>(null)
 const expandedEntryFields = ref<Set<string>>(new Set())
@@ -45,6 +67,7 @@ const expandedEntryFields = ref<Set<string>>(new Set())
 const mutate = (mutator: (doc: ResumeDocument) => void) => {
   const next = JSON.parse(JSON.stringify(props.document)) as ResumeDocument
   mutator(next)
+  next.basics.contacts = compactContactRows(next.basics.contacts ?? [])
   emit('change', next)
 }
 
@@ -158,6 +181,10 @@ const setContactType = (contactId: string, type: string) => {
 const addContact = () => {
   if (props.document.basics.contacts.length >= LIMITS.contacts) {
     ElMessage.warning('联系方式数量已达上限')
+    return
+  }
+  if (props.document.basics.contacts.some((contact) => !contact.value?.trim())) {
+    ElMessage.warning('请先填写或删除当前空白联系方式')
     return
   }
   updateBasics((basics) => {
@@ -363,7 +390,7 @@ const handleSuggestCommand = (bulletId: string, command: BulletSuggestIntent | '
           />
         </label>
 
-        <div v-for="contact in document.basics.contacts" :key="contact.id" class="contact-row">
+        <div v-for="contact in visibleContacts" :key="contact.id" class="contact-row">
           <label class="contact-type-field">
             <span>类型</span>
             <select
@@ -411,14 +438,14 @@ const handleSuggestCommand = (bulletId: string, command: BulletSuggestIntent | '
 
         <details class="supplement-details">
           <summary>
-            <span>补充信息</span>
+            <span>补充信息（可选）</span>
             <small v-if="document.basics.jobIntention || document.basics.highestEducation"
               >已填写</small
             >
           </summary>
           <div class="supplement-grid">
             <label class="editor-field">
-              <span>求职意向</span>
+              <span>求职意向（可选）</span>
               <el-input
                 :model-value="document.basics.jobIntention ?? ''"
                 :maxlength="LIMITS.entryField"
@@ -429,7 +456,7 @@ const handleSuggestCommand = (bulletId: string, command: BulletSuggestIntent | '
               />
             </label>
             <label class="editor-field">
-              <span>最高学历</span>
+              <span>最高学历（可选）</span>
               <el-input
                 :model-value="document.basics.highestEducation ?? ''"
                 :maxlength="LIMITS.entryField"

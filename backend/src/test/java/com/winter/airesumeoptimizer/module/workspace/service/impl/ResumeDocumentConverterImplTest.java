@@ -73,6 +73,26 @@ class ResumeDocumentConverterImplTest {
     }
 
     @Test
+    void normalizeShouldCollapseDuplicateContactRows() {
+        ResumeDocumentDTO document = validDocument();
+        document.getBasics().setContacts(new ArrayList<>(List.of(
+                ResumeDocumentContactDTO.builder()
+                        .id("c-1").type("PHONE").label("电话").value("13800000000").build(),
+                ResumeDocumentContactDTO.builder()
+                        .id("c-2").type("PHONE").label("手机号").value("13800000000").build(),
+                ResumeDocumentContactDTO.builder()
+                        .id("c-3").type("OTHER").label("其他").value("").build(),
+                ResumeDocumentContactDTO.builder()
+                        .id("c-4").type("OTHER").label("其他").value("  ").build())));
+
+        ResumeDocumentDTO normalized = converter.normalize(document);
+
+        assertThat(normalized.getBasics().getContacts())
+                .extracting(ResumeDocumentContactDTO::getId)
+                .containsExactly("c-1", "c-3");
+    }
+
+    @Test
     void normalizeShouldRejectUnknownContactType() {
         ResumeDocumentDTO document = validDocument();
         document.getBasics().getContacts().get(0).setType("FAX");
