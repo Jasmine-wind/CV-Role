@@ -13,6 +13,7 @@ import com.winter.airesumeoptimizer.module.optimization.mapper.OptimizationTaskM
 import com.winter.airesumeoptimizer.module.optimization.mapper.ResumeVersionMapper;
 import com.winter.airesumeoptimizer.module.resume.entity.Resume;
 import com.winter.airesumeoptimizer.module.resume.mapper.ResumeMapper;
+import com.winter.airesumeoptimizer.module.resume.service.ResumeCanonicalDocumentService;
 import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentDTO;
 import com.winter.airesumeoptimizer.module.workspace.dto.WorkspaceContentSaveRequestDTO;
 import com.winter.airesumeoptimizer.module.workspace.service.ResumeDocumentConverter;
@@ -37,6 +38,7 @@ public class WorkspaceContentServiceImpl implements WorkspaceContentService {
     private final JobTargetMapper jobTargetMapper;
     private final ResumeMapper resumeMapper;
     private final ResumeDocumentConverter resumeDocumentConverter;
+    private final ResumeCanonicalDocumentService resumeCanonicalDocumentService;
     private final ObjectMapper objectMapper;
 
     public WorkspaceContentServiceImpl(
@@ -45,12 +47,14 @@ public class WorkspaceContentServiceImpl implements WorkspaceContentService {
             JobTargetMapper jobTargetMapper,
             ResumeMapper resumeMapper,
             ResumeDocumentConverter resumeDocumentConverter,
+            ResumeCanonicalDocumentService resumeCanonicalDocumentService,
             ObjectMapper objectMapper) {
         this.optimizationTaskMapper = optimizationTaskMapper;
         this.resumeVersionMapper = resumeVersionMapper;
         this.jobTargetMapper = jobTargetMapper;
         this.resumeMapper = resumeMapper;
         this.resumeDocumentConverter = resumeDocumentConverter;
+        this.resumeCanonicalDocumentService = resumeCanonicalDocumentService;
         this.objectMapper = objectMapper;
     }
 
@@ -65,7 +69,7 @@ public class WorkspaceContentServiceImpl implements WorkspaceContentService {
             document = readPersistedDocument(target);
         } else {
             // revision 0：TARGET 仍是分析时冻结内容的原始副本，按冻结快照确定性地生成编辑文档。
-            document = resumeDocumentConverter.fromParsedSnapshot(resolveFrozenSnapshot(context));
+            document = documentFromFrozenSnapshot(resolveFrozenSnapshot(context));
         }
         return WorkspaceContentVO.builder()
                 .optimizationTaskId(context.task().getId())
@@ -115,7 +119,7 @@ public class WorkspaceContentServiceImpl implements WorkspaceContentService {
         validateExpectedRevision(expectedRevision);
         EditableTaskContext context = resolveEditableTarget(userId, optimizationTaskId);
         // 恢复只读取任务冻结快照重新生成文档；SOURCE、快照与证据分析不被回写。
-        ResumeDocumentDTO restored = resumeDocumentConverter.fromParsedSnapshot(resolveFrozenSnapshot(context));
+        ResumeDocumentDTO restored = documentFromFrozenSnapshot(resolveFrozenSnapshot(context));
         return writeTargetContent(context, restored, expectedRevision);
     }
 
@@ -264,23 +268,28 @@ public class WorkspaceContentServiceImpl implements WorkspaceContentService {
         if (content == null || content.isBlank()) {
             throw new BusinessException(500, "简历内容格式不正确");
         }
-        try {
-            ResumeDocumentDTO document = objectMapper.readValue(content, ResumeDocumentDTO.class);
-            // 入库前已经归一化。若再次校验会改变 ID/内容，说明持久化数据已损坏，必须 fail closed。
-            ResumeDocumentDTO normalized = resumeDocumentConverter.normalize(document);
-            if (!serialize(document).equals(serialize(normalized))) {
-                throw new BusinessException(500, "简历内容格式不正确");
-            }
-            return normalized;
-        } catch (JsonProcessingException exception) {
-            throw new BusinessException(500, "简历内容格式不正确");
-        }
+        // V1 语义内容直接归一化，Slice A 之前的 generic V1 内容确定性升级；损坏内容在升级器内 fail closed。
+        return resumeDocumentConverter.upgradeLegacyDocument(content);
     }
 
     /**
      * 编辑文档的原始输入优先使用任务冻结的 resume_input_snapshot；
      * 历史回填任务可能没有快照，此时退回该任务 SOURCE 的冻结结构化内容。
      */
+    private ResumeDocumentDTO documentFromFrozenSnapshot(String snapshot) {
+        try {
+            com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(snapshot);
+            String schemaVersion = root == null ? null : root.path("schemaVersion").asText(null);
+            if (ResumeDocumentDTO.SCHEMA_VERSION.equals(schemaVersion)) {
+                return resumeDocumentConverter.upgradeLegacyDocument(snapshot);
+            }
+        } catch (JsonProcessingException exception) {
+            throw new BusinessException(500, "简历内容格式不正确，请重新解析");
+        }
+        // 历史任务冻结的是旧 structured_json 候选；只读确定性投影，不能作为新任务输入。
+        return resumeCanonicalDocumentService.buildFromStructuredJson(snapshot).document();
+    }
+
     private String resolveFrozenSnapshot(EditableTaskContext context) {
         String snapshot = context.task().getResumeInputSnapshot();
         if (snapshot != null && !snapshot.isBlank()) {

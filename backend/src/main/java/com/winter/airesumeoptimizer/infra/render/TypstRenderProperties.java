@@ -17,4 +17,10 @@ public class TypstRenderProperties {
 
     /** 单次同步编译超时；超时即终止进程，Preview / Export 返回可重试错误。 */
     private Duration timeout = Duration.ofSeconds(30);
+
+    /**
+     * 可选的固定字体目录。生产镜像提供只包含审核过的 CJK 静态字重的目录；
+     * 为空时保留本地系统字体发现，便于开发机运行。
+     */
+    private String fontPath = "";
 }

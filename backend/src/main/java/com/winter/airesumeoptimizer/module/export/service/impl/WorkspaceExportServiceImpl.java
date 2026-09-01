@@ -15,6 +15,7 @@ import com.winter.airesumeoptimizer.module.export.dto.WorkspaceExportRequestDTO;
 import com.winter.airesumeoptimizer.module.export.mapper.ExportArtifactMapper;
 import com.winter.airesumeoptimizer.module.export.service.ArtifactDownload;
 import com.winter.airesumeoptimizer.module.export.service.ExportArtifactCleanupService;
+import com.winter.airesumeoptimizer.module.export.service.ExportDocumentGate;
 import com.winter.airesumeoptimizer.module.export.service.ExportPreflight;
 import com.winter.airesumeoptimizer.module.export.service.ExportPreflightChecker;
 import com.winter.airesumeoptimizer.module.export.service.PreviewReceiptClaims;
@@ -53,6 +54,7 @@ public class WorkspaceExportServiceImpl implements WorkspaceExportService {
     private final ExportArtifactMapper exportArtifactMapper;
     private final OptimizationTaskMapper optimizationTaskMapper;
     private final ExportPreflightChecker preflightChecker;
+    private final ExportDocumentGate exportDocumentGate;
     private final PreviewReceiptService previewReceiptService;
     private final ExportArtifactCleanupService exportArtifactCleanupService;
     private final TransactionTemplate transactionTemplate;
@@ -64,6 +66,7 @@ public class WorkspaceExportServiceImpl implements WorkspaceExportService {
             ExportArtifactMapper exportArtifactMapper,
             OptimizationTaskMapper optimizationTaskMapper,
             ExportPreflightChecker preflightChecker,
+            ExportDocumentGate exportDocumentGate,
             PreviewReceiptService previewReceiptService,
             ExportArtifactCleanupService exportArtifactCleanupService,
             TransactionTemplate transactionTemplate) {
@@ -73,6 +76,7 @@ public class WorkspaceExportServiceImpl implements WorkspaceExportService {
         this.exportArtifactMapper = exportArtifactMapper;
         this.optimizationTaskMapper = optimizationTaskMapper;
         this.preflightChecker = preflightChecker;
+        this.exportDocumentGate = exportDocumentGate;
         this.previewReceiptService = previewReceiptService;
         this.exportArtifactCleanupService = exportArtifactCleanupService;
         this.transactionTemplate = transactionTemplate;
@@ -82,9 +86,19 @@ public class WorkspaceExportServiceImpl implements WorkspaceExportService {
     public RenderedPdf preview(Long userId, Long optimizationTaskId, String templateId, Long expectedRevision) {
         ResumeTemplateId template = resolveTemplate(templateId);
         WorkspaceContentVO content = currentSavedContent(userId, optimizationTaskId, expectedRevision);
+        OptimizationTask task = getOwnedTask(userId, content.getOptimizationTaskId());
         long targetVersionId = resolveTargetVersionId(userId, content.getOptimizationTaskId());
+        // Document Quality Gate：预览是审查工具，仅在无法形成文档时阻断；
+        // 待确认/内容阻断项允许预览并以响应头透传，正式导出仍被拒绝。
+        ExportDocumentGate.GateResult gate = exportDocumentGate.check(userId, task, content.getDocument());
+        if (gate.blocked() && !gate.needsReview() && isUnrenderable(gate.blockCode())) {
+            throw new BusinessException(409, gate.blockCode() + "：简历内容当前不可预览");
+        }
         ResumePdfRenderResult rendered = render(content, template);
-        ExportPreflight preflight = preflightChecker.check(content.getDocument(), rendered.layout());
+        // Any non-rendering Document Gate blocker is still previewable for diagnosis, but
+        // must be surfaced as a non-exportable preflight result to the client.
+        ExportPreflight preflight = preflightChecker.check(
+                content.getDocument(), rendered.layout(), gate.blocked() || gate.needsReview());
         String checksum = sha256Hex(rendered.pdf());
         String receipt = previewReceiptService.issue(new PreviewReceiptClaims(
                 userId,
@@ -106,6 +120,12 @@ public class WorkspaceExportServiceImpl implements WorkspaceExportService {
         }
         ResumeTemplateId template = resolveTemplate(request.getTemplateId());
         WorkspaceContentVO content = currentSavedContent(userId, optimizationTaskId, request.getExpectedRevision());
+        // 在产生编译/存储副作用前先过 Document Quality Gate：不可信内容禁止正式导出。
+        OptimizationTask task = getOwnedTask(userId, content.getOptimizationTaskId());
+        ExportDocumentGate.GateResult gate = exportDocumentGate.check(userId, task, content.getDocument());
+        if (gate.blocked()) {
+            throw new BusinessException(409, gate.blockCode() + "：简历内容未通过质量检查，不能导出");
+        }
         // 在产生编译/存储副作用前冻结 TARGET 关系并验证服务端签名 Preview receipt。
         Long targetVersionId = resolveTargetVersionId(userId, content.getOptimizationTaskId());
         PreviewReceiptClaims receipt = verifyReceipt(request.getPreviewReceipt());
@@ -117,7 +137,18 @@ public class WorkspaceExportServiceImpl implements WorkspaceExportService {
         if (!checksum.equals(receipt.pdfChecksum())) {
             throw new BusinessException(409, "预览结果已失效，请重新预览后导出");
         }
-        ExportPreflight preflight = preflightChecker.check(content.getDocument(), rendered.layout());
+        ExportPreflight preflight = preflightChecker.check(
+                content.getDocument(), rendered.layout(), gate.blocked() || gate.needsReview());
+        // PDF Quality Gate：越界、孤立末页和不可读字号属于不可交付排版，正式导出阻断；预览阶段仅作告警。
+        if (preflight.overflowDetected()) {
+            throw new BusinessException(409, "CONTENT_OUT_OF_PAGE_BOUNDS：排版存在文字越界，请调整后重新预览");
+        }
+        if (preflight.orphanFinalPage()) {
+            throw new BusinessException(409, "ORPHAN_FINAL_PAGE：末页内容过少，请调整后重新预览");
+        }
+        if (preflight.readabilityTooSmall()) {
+            throw new BusinessException(409, "READABILITY_TOO_SMALL：字号过小，请调整模板或内容后重新预览");
+        }
         String fileName = artifactFileName(content, template);
 
         StoredFile stored;
@@ -146,6 +177,9 @@ public class WorkspaceExportServiceImpl implements WorkspaceExportService {
         artifact.setMissingContact(preflight.missingContact());
         artifact.setPageLimitExceeded(preflight.pageLimitExceeded());
         artifact.setOverflowDetected(preflight.overflowDetected());
+        artifact.setReadabilityTooSmall(preflight.readabilityTooSmall());
+        artifact.setDocumentGateStatus(gate.status());
+        artifact.setOrphanFinalPage(preflight.orphanFinalPage());
         artifact.setCreatedAt(LocalDateTime.now());
 
         try {
@@ -217,6 +251,21 @@ public class WorkspaceExportServiceImpl implements WorkspaceExportService {
             throw new BusinessException(409, "简历内容已更新，预览已失效，请刷新后重试");
         }
         return content;
+    }
+
+    private boolean isUnrenderable(String blockCode) {
+        return ExportDocumentGate.CODE_RESUME_PARSE_PENDING.equals(blockCode)
+                || ExportDocumentGate.CODE_RESUME_QUALITY_FAILED.equals(blockCode);
+    }
+
+    private OptimizationTask getOwnedTask(Long userId, Long optimizationTaskId) {
+        OptimizationTask task = optimizationTaskMapper.selectOne(new LambdaQueryWrapper<OptimizationTask>()
+                .eq(OptimizationTask::getId, optimizationTaskId)
+                .eq(OptimizationTask::getUserId, userId));
+        if (task == null) {
+            throw new BusinessException(404, "优化任务不存在");
+        }
+        return task;
     }
 
     private ResumePdfRenderResult render(WorkspaceContentVO content, ResumeTemplateId template) {
@@ -337,6 +386,9 @@ public class WorkspaceExportServiceImpl implements WorkspaceExportService {
                 .missingContact(artifact.getMissingContact())
                 .pageLimitExceeded(artifact.getPageLimitExceeded())
                 .overflowDetected(artifact.getOverflowDetected())
+                .documentGateStatus(artifact.getDocumentGateStatus())
+                .orphanFinalPage(artifact.getOrphanFinalPage())
+                .readabilityTooSmall(artifact.getReadabilityTooSmall())
                 .fileName(fileName)
                 .createdAt(artifact.getCreatedAt())
                 .build();

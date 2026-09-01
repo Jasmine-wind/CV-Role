@@ -43,6 +43,9 @@ export interface BulletSuggestOptions {
 
 const defaultApi: BulletSuggestApi = { suggest: requestBulletSuggestion }
 
+/** 比较候选与原文时只忽略首尾和连续空白，不改变任何事实字符。 */
+export const normalizeComparableBulletText = (text: string) => text.replace(/\s+/gu, ' ').trim()
+
 const toHex = (bytes: ArrayBuffer) =>
   Array.from(new Uint8Array(bytes))
     .map((value) => value.toString(16).padStart(2, '0'))
@@ -55,10 +58,7 @@ export const sha256Hex = async (text: string): Promise<string> => {
   return toHex(digest)
 }
 
-const findBulletText = (
-  document: ResumeDocument | null,
-  bulletId: string,
-): string | null => {
+const findBulletText = (document: ResumeDocument | null, bulletId: string): string | null => {
   if (!document) return null
   for (const section of document.sections) {
     for (const entry of section.entries) {
@@ -184,25 +184,48 @@ export function useBulletSuggest(
         userInstruction: instruction,
       })
       if (disposed || result.requestId !== latestRequestId) return
+      if (
+        result.bulletId !== bulletId ||
+        result.baseRevision !== binding.baseRevision ||
+        typeof result.originalText !== 'string' ||
+        normalizeComparableBulletText(result.originalText) !==
+          normalizeComparableBulletText(binding.originalText)
+      ) {
+        errorMessage.value = '建议响应与当前内容不一致，已丢弃，请重试'
+        phase.value = 'error'
+        return
+      }
       if (result.state === 'READY' && result.suggestedText !== null) {
+        // AI 有时只改变换行或首尾空格；这种结果没有可供用户判断的修改，
+        // 直接丢弃，不产生候选、Apply 或 Undo。
+        if (
+          normalizeComparableBulletText(binding.originalText) ===
+          normalizeComparableBulletText(result.suggestedText)
+        ) {
+          resetToIdle()
+          return
+        }
         candidate.value = {
           requestId: result.requestId,
-          bulletId: result.bulletId,
-          baseRevision: result.baseRevision,
+          bulletId,
+          baseRevision: binding.baseRevision,
           sequence: binding.sequence,
-          originalText: result.originalText,
+          originalText: binding.originalText,
           suggestedText: result.suggestedText,
           reason: result.reason ?? '',
           modelName: result.modelName,
         }
         phase.value = 'ready'
-      } else {
+      } else if (result.state === 'REJECTED') {
         rejectInfo.value = {
-          bulletId: result.bulletId,
+          bulletId,
           code: result.rejectCode,
           message: result.rejectMessage,
         }
         phase.value = 'rejected'
+      } else {
+        errorMessage.value = '建议响应格式无效，已丢弃，请重试'
+        phase.value = 'error'
       }
     } catch (error) {
       if (disposed || requestId !== latestRequestId) return
@@ -211,7 +234,11 @@ export function useBulletSuggest(
     }
   }
 
-  const suggest = (bulletId: string, intent: BulletSuggestIntent, instruction: string | null = null) => {
+  const suggest = (
+    bulletId: string,
+    intent: BulletSuggestIntent,
+    instruction: string | null = null,
+  ) => {
     void issue(bulletId, intent, instruction)
   }
 

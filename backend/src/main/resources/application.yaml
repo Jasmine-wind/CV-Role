@@ -79,6 +79,7 @@ app:
   render:
     typst-binary: ${APP_RENDER_TYPST_BINARY:typst}
     timeout: ${APP_RENDER_TIMEOUT:30s}
+    font-path: ${APP_RENDER_FONT_PATH:}
     preview-receipt-ttl: ${APP_RENDER_PREVIEW_RECEIPT_TTL:10m}
     parse:
       mode: ${RESUME_PARSE_MODE:BALANCED}

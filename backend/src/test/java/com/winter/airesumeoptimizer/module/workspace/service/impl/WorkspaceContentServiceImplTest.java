@@ -21,6 +21,7 @@ import com.winter.airesumeoptimizer.module.optimization.mapper.OptimizationTaskM
 import com.winter.airesumeoptimizer.module.optimization.mapper.ResumeVersionMapper;
 import com.winter.airesumeoptimizer.module.resume.entity.Resume;
 import com.winter.airesumeoptimizer.module.resume.mapper.ResumeMapper;
+import com.winter.airesumeoptimizer.module.resume.service.impl.ResumeCanonicalDocumentServiceImpl;
 import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentBulletDTO;
 import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentDTO;
 import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentEntryDTO;
@@ -60,15 +61,16 @@ class WorkspaceContentServiceImplTest {
     private static final Long TARGET_VERSION_ID = 41L;
     private static final Long JOB_TARGET_ID = 30L;
 
-    /** 冻结的 V1 解析快照（displayModel 形态），也是任务输入快照。 */
+    /** 冻结的 V1 解析快照（structuredData 形态），也是任务输入快照。 */
     private static final String FROZEN_SNAPSHOT = """
             {
               "name": "张三",
               "phone": "13800000000",
-              "displayModel": {
-                "workExperienceCards": [
-                  { "company": "某公司", "position": "Java 开发", "timeRange": "2020 - 至今",
-                    "responsibilities": ["负责订单服务开发"] }
+              "structuredData": {
+                "experiences": [
+                  { "type": "WORK", "organization": "某公司", "role": "Java 开发",
+                    "startDate": "2020", "endDate": "至今",
+                    "description": "负责订单服务开发", "bullets": ["负责订单服务开发"] }
                 ]
               }
             }
@@ -85,6 +87,7 @@ class WorkspaceContentServiceImplTest {
             jobTargetMapper,
             resumeMapper,
             new ResumeDocumentConverterImpl(objectMapper),
+            new ResumeCanonicalDocumentServiceImpl(objectMapper),
             objectMapper);
 
     private OptimizationTask task;
@@ -217,6 +220,21 @@ class WorkspaceContentServiceImplTest {
     }
 
     @Test
+    void getContentShouldReadCanonicalV1SnapshotAtPristineRevision() throws Exception {
+        String canonical = "{\"schemaVersion\":\"RESUME_DOCUMENT_V1\",\"basics\":{\"name\":\"张三\",\"contacts\":[]},\"sections\":[{\"id\":\"s-1\",\"kind\":\"EXPERIENCE\",\"title\":\"工作经历\",\"entries\":[{\"id\":\"e-1\",\"organization\":\"某公司\",\"role\":\"Java 开发\",\"school\":null,\"degree\":null,\"major\":null,\"startDate\":\"2020\",\"endDate\":\"至今\",\"location\":null,\"group\":null,\"skillItems\":null,\"bullets\":[]}]}]}";
+        task.setResumeInputSnapshot(canonical);
+        sourceVersion.setStructuredContent(canonical);
+        targetVersion.setStructuredContent(canonical);
+        dbContent.set(canonical);
+
+        WorkspaceContentVO result = service.getContent(USER_ID, TASK_ID);
+
+        assertThat(result.getDocument().getSchemaVersion()).isEqualTo(ResumeDocumentDTO.SCHEMA_VERSION);
+        assertThat(result.getDocument().getSections().get(0).getEntries().get(0).getOrganization())
+                .isEqualTo("某公司");
+    }
+
+    @Test
     void getContentShouldReturnLastPersistedDocumentWhenRevisionPositive() throws Exception {
         ResumeDocumentDTO stored = ResumeDocumentDTO.builder()
                 .schemaVersion(ResumeDocumentDTO.SCHEMA_VERSION)
@@ -229,7 +247,7 @@ class WorkspaceContentServiceImplTest {
                         .title("工作经历")
                         .entries(List.of(ResumeDocumentEntryDTO.builder()
                                 .id("s-1-e-1")
-                                .heading("某公司 · Java 开发")
+                                .organization("某公司")
                                 .bullets(List.of(ResumeDocumentBulletDTO.builder()
                                         .id("s-1-e-1-b-1")
                                         .text("用户已经改过的内容")
@@ -245,6 +263,21 @@ class WorkspaceContentServiceImplTest {
         assertThat(result.getRevision()).isEqualTo(3L);
         assertThat(result.getDocument().getSections().get(0).getEntries().get(0).getBullets().get(0).getText())
                 .isEqualTo("用户已经改过的内容");
+    }
+
+    @Test
+    void getContentShouldReadLegacyGenericV1TargetWithoutMutatingIt() {
+        String legacy = "{\"schemaVersion\":\"RESUME_DOCUMENT_V1\",\"basics\":{\"name\":\"张三\",\"contacts\":[{\"id\":\"c-1\",\"label\":\"邮箱\",\"value\":\"zhang@example.com\"}]},\"sections\":[{\"id\":\"s-1\",\"kind\":\"EXPERIENCE\",\"title\":\"工作经历\",\"entries\":[{\"id\":\"e-1\",\"heading\":\"某公司\",\"meta\":\"2020 - 至今\",\"bullets\":[{\"id\":\"b-1\",\"text\":\"负责服务开发\"}]}]}]}";
+        dbRevision.set(3L);
+        dbContent.set(legacy);
+
+        WorkspaceContentVO result = service.getContent(USER_ID, TASK_ID);
+
+        assertThat(result.getDocument().getSchemaVersion()).isEqualTo(ResumeDocumentDTO.SCHEMA_VERSION);
+        assertThat(result.getDocument().getSections().get(0).getEntries().get(0).getOrganization())
+                .isEqualTo("某公司");
+        assertThat(result.getDocument().getSections().get(0).getEntries().get(0).getStartDate())
+                .isEqualTo("2020");
     }
 
     @Test
@@ -476,7 +509,9 @@ class WorkspaceContentServiceImplTest {
         // 恢复结果必须与首次按快照生成的文档完全一致（确定性转换）。
         ResumeDocumentDTO restored = service.getContent(USER_ID, TASK_ID).getDocument();
         assertThat(restored).usingRecursiveComparison()
-                .isEqualTo(new ResumeDocumentConverterImpl(objectMapper).fromParsedSnapshot(FROZEN_SNAPSHOT));
+                .isEqualTo(new ResumeCanonicalDocumentServiceImpl(objectMapper)
+                        .buildFromStructuredJson(FROZEN_SNAPSHOT)
+                        .document());
 
         // SOURCE / 快照 / 证据侧数据保持不变。
         assertThat(sourceVersion.getStructuredContent()).isEqualTo(FROZEN_SNAPSHOT);
@@ -595,7 +630,7 @@ class WorkspaceContentServiceImplTest {
                         .title("工作经历")
                         .entries(List.of(ResumeDocumentEntryDTO.builder()
                                 .id("s-1-e-1")
-                                .heading("某公司 · Java 开发")
+                                .organization("某公司")
                                 .bullets(List.of(ResumeDocumentBulletDTO.builder()
                                         .id("s-1-e-1-b-1")
                                         .text(bulletText)

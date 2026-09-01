@@ -1,6 +1,7 @@
 package com.winter.airesumeoptimizer.integration;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.winter.airesumeoptimizer.infra.ai.AiInvocationContext;
@@ -31,6 +32,7 @@ import com.winter.airesumeoptimizer.module.resume.mapper.ResumeMapper;
 import com.winter.airesumeoptimizer.module.user.entity.User;
 import com.winter.airesumeoptimizer.module.user.mapper.UserMapper;
 import java.time.LocalDateTime;
+import java.util.List;
 import javax.sql.DataSource;
 import org.flywaydb.core.Flyway;
 import org.flywaydb.core.api.MigrationVersion;
@@ -89,7 +91,7 @@ class Phase9PostgresFlywayIntegrationTest {
 
     @Test
     void freshFlywaySchemaEnforcesOwnershipAndDerivesInsightWithoutPersistedAggregate() {
-        assertThat(flyway.info().current().getVersion().getVersion()).isEqualTo("23");
+        assertThat(flyway.info().current().getVersion().getVersion()).isEqualTo("24");
         User owner = user("integration-owner");
         User other = user("integration-other");
         Resume resume = resume(owner.getId());
@@ -170,14 +172,50 @@ class Phase9PostgresFlywayIntegrationTest {
                     .load();
             upgraded.migrate();
 
-            assertThat(upgraded.info().current().getVersion().getVersion()).isEqualTo("23");
+            assertThat(upgraded.info().current().getVersion().getVersion()).isEqualTo("24");
             assertThat(jdbcTemplate.queryForObject(
                     "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = ? AND table_name = 'ai_usage_records'",
                     Integer.class,
                     schema)).isEqualTo(1);
+            assertThat(jdbcTemplate.queryForObject(
+                    "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = ? AND table_name = 'resume_parse_results' AND column_name = 'canonical_source_version_id'",
+                    Integer.class,
+                    schema)).isEqualTo(1);
+            assertThat(jdbcTemplate.queryForObject(
+                    "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = ? AND table_name = 'resume_parse_results' AND column_name = 'canonical_document'",
+                    Integer.class,
+                    schema)).isEqualTo(0);
         } finally {
             jdbcTemplate.execute("DROP SCHEMA IF EXISTS " + schema + " CASCADE");
         }
+    }
+
+    @Test
+    void canonicalPointerRejectsTargetedVersionAtDatabaseBoundary() {
+        User owner = user("canonical-pointer-owner");
+        Resume resume = resume(owner.getId());
+        seedFormalTask(owner.getId(), resume.getId(), 0);
+        List<ResumeVersion> versions = resumeVersionMapper.selectList(new LambdaQueryWrapper<ResumeVersion>()
+                .eq(ResumeVersion::getUserId, owner.getId())
+                .eq(ResumeVersion::getResumeId, resume.getId()));
+        ResumeVersion source = versions.stream()
+                .filter(version -> "SOURCE".equals(version.getVersionType()))
+                .findFirst()
+                .orElseThrow();
+        ResumeVersion targeted = versions.stream()
+                .filter(version -> "TARGETED".equals(version.getVersionType()))
+                .findFirst()
+                .orElseThrow();
+
+        assertThat(jdbcTemplate.update(
+                "INSERT INTO resume_parse_results (resume_id, parse_status, canonical_source_version_id) VALUES (?, 'SUCCESS', ?)",
+                resume.getId(),
+                source.getId())).isEqualTo(1);
+        assertThatThrownBy(() -> jdbcTemplate.update(
+                "UPDATE resume_parse_results SET canonical_source_version_id = ? WHERE resume_id = ?",
+                targeted.getId(),
+                resume.getId()))
+                .hasMessageContaining("canonical_source_version_id must reference a SOURCE version");
     }
 
     @Test

@@ -92,7 +92,7 @@ class Phase6ExportApiTest {
                         3L,
                         99L,
                         ResumeTemplateId.CLASSIC,
-                        new ExportPreflight(2, false, false, false, List.of()),
+                        new ExportPreflight(2, false, false, false, false, false, List.of()),
                         "signed-preview-receipt"));
 
         mockMvc.perform(get("/api/workspace/42/preview.pdf")
@@ -102,8 +102,8 @@ class Phase6ExportApiTest {
                 .andExpect(content().contentType(MediaType.APPLICATION_PDF))
                 .andExpect(header().string("X-Content-Revision", "3"))
                 .andExpect(header().string("X-Target-Resume-Version", "99"))
-                .andExpect(header().string("X-Template-Version", "1"))
-                .andExpect(header().string("X-Renderer-Version", "typst-resume-renderer/1"))
+                .andExpect(header().string("X-Template-Version", "3"))
+                .andExpect(header().string("X-Renderer-Version", "typst-resume-renderer/3"))
                 .andExpect(header().string("X-Resume-Page-Count", "2"))
                 .andExpect(header().string("X-Resume-Missing-Contact", "false"))
                 .andExpect(header().string("X-Resume-Overflow-Detected", "false"))
@@ -140,8 +140,8 @@ class Phase6ExportApiTest {
                         .id(11L)
                         .optimizationTaskId(42L)
                         .templateId("classic")
-                        .templateVersion("1")
-                        .rendererVersion("typst-resume-renderer/1")
+                        .templateVersion("3")
+                        .rendererVersion("typst-resume-renderer/3")
                         .contentRevision(3L)
                         .mimeType("application/pdf")
                         .fileSize(1234L)
@@ -168,7 +168,7 @@ class Phase6ExportApiTest {
                 .andExpect(jsonPath("$.code").value(200))
                 .andExpect(jsonPath("$.data.id").value(11))
                 .andExpect(jsonPath("$.data.contentRevision").value(3))
-                .andExpect(jsonPath("$.data.templateVersion").value("1"))
+                .andExpect(jsonPath("$.data.templateVersion").value("3"))
                 .andExpect(jsonPath("$.data.status").value("READY"))
                 .andExpect(jsonPath("$.data.pageCount").value(2))
                 .andExpect(jsonPath("$.data.missingContact").value(false))
@@ -210,8 +210,8 @@ class Phase6ExportApiTest {
                         .id(11L)
                         .optimizationTaskId(42L)
                         .templateId("minimal")
-                        .templateVersion("1")
-                        .rendererVersion("typst-resume-renderer/1")
+                        .templateVersion("3")
+                        .rendererVersion("typst-resume-renderer/3")
                         .contentRevision(3L)
                         .mimeType("application/pdf")
                         .fileSize(999L)

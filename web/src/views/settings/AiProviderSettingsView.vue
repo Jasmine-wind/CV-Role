@@ -30,7 +30,9 @@ const form = reactive({
 
 const configured = computed(() => Boolean(settings.value?.configured))
 const active = computed(() => settings.value?.status === 'ACTIVE')
-const canSubmit = computed(() => Boolean(form.baseUrl.trim() && form.apiKey.trim() && form.model.trim()))
+const canSubmit = computed(() =>
+  Boolean(form.baseUrl.trim() && form.apiKey.trim() && form.model.trim()),
+)
 
 const copySettingsToForm = (value: AiProviderCredential) => {
   form.baseUrl = value.baseUrl || ''
@@ -101,7 +103,9 @@ const handleToggle = async () => {
   try {
     settings.value = wasActive ? await disableAiProvider() : await enableAiProvider()
     copySettingsToForm(settings.value)
-    ElMessage.success(wasActive ? '已停用你的 API 密钥，新任务将使用系统提供的 AI' : '已启用你的 API 密钥')
+    ElMessage.success(
+      wasActive ? '已停用你的 API 密钥，新任务将使用系统提供的 AI' : '已启用你的 API 密钥',
+    )
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '更新状态失败')
   } finally {
@@ -143,7 +147,7 @@ onMounted(load)
     <PageHeader
       eyebrow="账户设置"
       title="AI 设置"
-      description="普通岗位分析使用系统提供的 AI，无需任何配置即可完成主流程。只有当你希望使用自己的 API 密钥时，才需要在这里配置。"
+      description="普通岗位分析无需配置。只有使用自己的 API 密钥时，才需要填写这里。"
     />
 
     <SkeletonBlock v-if="loading" title :rows="8" />
@@ -161,7 +165,7 @@ onMounted(load)
         <header class="settings-card-header">
           <div>
             <strong>使用自己的 API 密钥</strong>
-            <p>可选配置。API 密钥只在本次表单请求和短生命周期的测试 / 保存过程中使用，页面不会回显或持久化。</p>
+            <p>可选配置。密钥不会在页面回显；保存后可以停用、替换或删除。</p>
           </div>
           <el-tag v-if="!configured" type="info" effect="light">未配置</el-tag>
           <el-tag v-else :type="active ? 'success' : 'warning'" effect="light">
@@ -184,7 +188,7 @@ onMounted(load)
               placeholder="https://api.example.com/v1"
               autocomplete="url"
             />
-            <small>仅允许 HTTPS、标准域名和 443 端口。</small>
+            <small>连接地址需使用 HTTPS 和标准 443 端口。</small>
           </el-form-item>
 
           <el-form-item label="API Key" required>
@@ -193,7 +197,7 @@ onMounted(load)
               type="password"
               show-password
               autocomplete="new-password"
-              placeholder="输入后用于测试或保存；页面不会持久化"
+              placeholder="输入后用于测试或保存；保存后不会再次显示"
             />
           </el-form-item>
 
@@ -202,7 +206,9 @@ onMounted(load)
           </el-form-item>
 
           <div class="settings-actions">
-            <el-button :loading="testing" :disabled="!canSubmit" @click="handleTest">测试连接</el-button>
+            <el-button :loading="testing" :disabled="!canSubmit" @click="handleTest"
+              >测试连接</el-button
+            >
             <el-button type="primary" :loading="saving" :disabled="!canSubmit" @click="handleSave">
               {{ configured ? '保存并替换' : '保存配置' }}
             </el-button>

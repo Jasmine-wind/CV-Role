@@ -43,6 +43,15 @@ public class ResumeParseResult {
 
     private Integer parseQualityScore;
 
+    private String qualityStatus;
+
+    private String qualityIssues;
+
+    private String unresolvedItems;
+
+    /** 指向当前 canonical SOURCE 版本；不保存第二份简历内容。 */
+    private Long canonicalSourceVersionId;
+
     private LocalDateTime createdAt;
 
     private LocalDateTime updatedAt;

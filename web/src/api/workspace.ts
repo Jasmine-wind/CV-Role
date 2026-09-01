@@ -82,6 +82,9 @@ export const previewWorkspacePdf = (
         missingContact: flag('x-resume-missing-contact'),
         pageLimitExceeded: flag('x-resume-page-limit-exceeded'),
         overflowDetected: flag('x-resume-overflow-detected'),
+        orphanFinalPage: flag('x-resume-orphan-final-page'),
+        readabilityTooSmall: flag('x-resume-readability-too-small'),
+        needsReview: flag('x-resume-needs-review'),
       },
     }
   })

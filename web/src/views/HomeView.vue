@@ -34,24 +34,55 @@ const analysisTask = ref<AsyncTaskVO | null>(null)
 const analysisError = ref<string | null>(null)
 const analysisTimedOut = ref(false)
 const startingAnalysis = ref(false)
-const preparationTaskId = ref<number | null>(null)
-const preparationMessage = ref<string | null>(null)
+const preparationTaskIds = ref<Record<number, number>>({})
+const preparationMessages = ref<Record<number, string>>({})
 const hasJobDirectionInsight = ref(false)
 let analysisPolling: AsyncTaskPollingController | null = null
-let preparationPolling: AsyncTaskPollingController | null = null
+const preparationPolling = new Map<number, AsyncTaskPollingController>()
 
-const selectedResume = computed(() => resumes.value.find((item) => item.id === selectedResumeId.value) ?? null)
+const selectedResume = computed(
+  () => resumes.value.find((item) => item.id === selectedResumeId.value) ?? null,
+)
+const resumeStatusLabel = (resume: ResumeListItem | null) => {
+  if (!resume) return '请选择简历'
+  if (resume.qualityStatus === 'PENDING') return '正在准备'
+  if (resume.qualityStatus === 'NEEDS_REVIEW') return '需要确认'
+  if (resume.parseStatus === 'SUCCESS' && resume.canonicalReady === false) return '需要重新解析'
+  if (resume.parseStatus === 'SUCCESS' && resume.qualityStatus === 'READY') return '已准备好'
+  if (resume.parseStatus === 'FAILED' || resume.qualityStatus === 'FAILED') return '准备失败'
+  return '等待准备'
+}
+const selectedResumeStatus = computed(() => resumeStatusLabel(selectedResume.value))
+const preparationTaskId = computed(() =>
+  selectedResumeId.value == null
+    ? null
+    : (preparationTaskIds.value[selectedResumeId.value] ?? null),
+)
+const preparationMessage = computed(() =>
+  selectedResumeId.value == null
+    ? null
+    : (preparationMessages.value[selectedResumeId.value] ?? null),
+)
+const selectedResumeReady = computed(
+  () =>
+    selectedResume.value?.parseStatus === 'SUCCESS' &&
+    selectedResume.value.qualityStatus === 'READY' &&
+    selectedResume.value.canonicalReady !== false,
+)
 const analysisRunning = computed(() => {
   const status = analysisTask.value?.status
   return Boolean(activeAnalysis.value && (!status || status === 'PENDING' || status === 'RUNNING'))
 })
-const canStart = computed(() => Boolean(
-  selectedResumeId.value
-  && jobDescription.value.trim()
-  && !analysisRunning.value
-  && !startingAnalysis.value
-  && !preparationTaskId.value,
-))
+const canStart = computed(() =>
+  Boolean(
+    selectedResumeId.value &&
+    jobDescription.value.trim() &&
+    selectedResumeReady.value &&
+    !analysisRunning.value &&
+    !startingAnalysis.value &&
+    !preparationTaskId.value,
+  ),
+)
 const currentStage = computed(() => analysisTask.value?.message || '正在保存你的简历和目标岗位')
 
 const loadInsightAvailability = async () => {
@@ -70,7 +101,10 @@ const loadResumes = async (preferredResumeId?: number) => {
     resumes.value = await getResumeList()
     if (preferredResumeId && resumes.value.some((item) => item.id === preferredResumeId)) {
       selectedResumeId.value = preferredResumeId
-    } else if (!selectedResumeId.value || !resumes.value.some((item) => item.id === selectedResumeId.value)) {
+    } else if (
+      !selectedResumeId.value ||
+      !resumes.value.some((item) => item.id === selectedResumeId.value)
+    ) {
       selectedResumeId.value = resumes.value[0]?.id ?? null
     }
   } catch {
@@ -103,39 +137,49 @@ const handleFileChange = (event: Event) => {
   }
 }
 
+const clearPreparationState = (resumeId: number) => {
+  const nextTaskIds = { ...preparationTaskIds.value }
+  delete nextTaskIds[resumeId]
+  preparationTaskIds.value = nextTaskIds
+  const nextMessages = { ...preparationMessages.value }
+  delete nextMessages[resumeId]
+  preparationMessages.value = nextMessages
+  preparationPolling.delete(resumeId)
+}
+
 const startPreparationPolling = (resumeId: number, taskId: number) => {
-  preparationPolling?.stop()
-  preparationTaskId.value = taskId
-  preparationMessage.value = '正在读取简历内容'
-  preparationPolling = startAsyncTaskPolling({
+  preparationPolling.get(resumeId)?.stop()
+  preparationTaskIds.value = { ...preparationTaskIds.value, [resumeId]: taskId }
+  preparationMessages.value = { ...preparationMessages.value, [resumeId]: '正在读取简历内容' }
+  const controller = startAsyncTaskPolling({
     taskId,
     timeoutMs: 5 * 60 * 1000,
     onUpdate: (task) => {
-      preparationMessage.value = task.message || '正在准备简历'
+      preparationMessages.value = {
+        ...preparationMessages.value,
+        [resumeId]: task.message || '正在准备简历',
+      }
     },
     onSuccess: async () => {
-      preparationTaskId.value = null
-      preparationMessage.value = null
+      clearPreparationState(resumeId)
       await loadResumes(resumeId)
       ElMessage.success('简历已准备好，可以开始分析')
     },
     onFailed: async (task) => {
-      preparationTaskId.value = null
-      preparationMessage.value = null
+      clearPreparationState(resumeId)
       await loadResumes(resumeId)
       ElMessage.error(task.errorMessage || '未能读取简历，请前往“我的简历”重试')
     },
     onTimeout: () => {
-      preparationTaskId.value = null
-      preparationMessage.value = null
+      clearPreparationState(resumeId)
       ElMessage.warning('简历仍在后台准备，请稍后再开始分析')
     },
     onError: (error) => {
-      preparationTaskId.value = null
-      preparationMessage.value = null
+      clearPreparationState(resumeId)
       ElMessage.error(error instanceof Error ? error.message : '获取简历状态失败')
     },
   })
+  preparationPolling.set(resumeId, controller)
 }
 
 const handleUpload = async () => {
@@ -292,7 +336,13 @@ const restoreActiveAnalysis = () => {
   }
   try {
     const stored = JSON.parse(raw) as ActiveJobAnalysis
-    if (stored.taskId && stored.optimizationTaskId && stored.sourceResumeVersionId && stored.targetResumeVersionId && stored.jobTargetId) {
+    if (
+      stored.taskId &&
+      stored.optimizationTaskId &&
+      stored.sourceResumeVersionId &&
+      stored.targetResumeVersionId &&
+      stored.jobTargetId
+    ) {
       startAnalysisPolling(stored)
       return
     }
@@ -304,13 +354,27 @@ const restoreActiveAnalysis = () => {
 
 onMounted(async () => {
   await loadResumes()
+  const pendingResumes = resumes.value.filter(
+    (resume) => resume.parseStatus === 'PENDING' || resume.qualityStatus === 'PENDING',
+  )
+  await Promise.all(
+    pendingResumes.map(async (resume) => {
+      try {
+        const task = await requestResumePreparation(resume.id)
+        startPreparationPolling(resume.id, task.taskId)
+      } catch {
+        // The resume page exposes an explicit retry when the background task cannot be resumed.
+      }
+    }),
+  )
   restoreActiveAnalysis()
   void loadInsightAvailability()
 })
 
 onUnmounted(() => {
   analysisPolling?.stop()
-  preparationPolling?.stop()
+  preparationPolling.forEach((controller) => controller.stop())
+  preparationPolling.clear()
 })
 </script>
 
@@ -362,7 +426,6 @@ onUnmounted(() => {
             :value="resume.id"
           >
             <span>{{ resume.originalFilename }}</span>
-            <small>{{ resume.parseStatus === 'SUCCESS' ? '已准备好' : '系统将自动准备' }}</small>
           </el-option>
         </el-select>
 
@@ -370,9 +433,20 @@ onUnmounted(() => {
           <p v-if="!resumes.length">先上传一份真实简历。上传后系统会自动读取内容。</p>
           <label class="home-file-picker">
             <span>{{ selectedFile?.name || '选择简历文件' }}</span>
-            <input ref="fileInput" data-testid="home-resume-upload" type="file" accept=".pdf,.doc,.docx" @change="handleFileChange" />
+            <input
+              ref="fileInput"
+              data-testid="home-resume-upload"
+              type="file"
+              accept=".pdf,.doc,.docx"
+              @change="handleFileChange"
+            />
           </label>
-          <el-button type="primary" :loading="uploading" :disabled="!selectedFile" @click="handleUpload">
+          <el-button
+            type="primary"
+            :loading="uploading"
+            :disabled="!selectedFile"
+            @click="handleUpload"
+          >
             上传简历
           </el-button>
         </div>
@@ -401,7 +475,11 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <div v-if="analysisError && !activeAnalysis" class="home-analysis-state is-error" role="alert">
+      <div
+        v-if="analysisError && !activeAnalysis"
+        class="home-analysis-state is-error"
+        role="alert"
+      >
         <span class="home-state-dot" />
         <div>
           <strong>岗位分析没有开始</strong>
@@ -420,13 +498,20 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <div v-else-if="activeAnalysis" class="home-analysis-state" :class="analysisError ? 'is-error' : 'is-running'" role="status">
+      <div
+        v-else-if="activeAnalysis"
+        class="home-analysis-state"
+        :class="analysisError ? 'is-error' : 'is-running'"
+        role="status"
+      >
         <span class="home-state-dot" />
         <div>
           <strong>{{ analysisError ? '岗位分析没有完成' : '正在分析岗位' }}</strong>
           <p v-if="analysisError">
             {{ analysisError }}
-            <template v-if="!analysisTimedOut">你的简历和目标岗位信息已保存，可以直接重试，无需重新填写。</template>
+            <template v-if="!analysisTimedOut"
+              >你的简历和目标岗位信息已保存，可以直接重试，无需重新填写。</template
+            >
           </p>
           <p v-else>{{ currentStage }}</p>
           <div v-if="analysisError" class="home-state-actions">
@@ -452,13 +537,33 @@ onUnmounted(() => {
       </div>
 
       <footer v-if="resumes.length" class="home-start-actions">
-        <div>
-          <strong>{{ selectedResume?.originalFilename || '请选择简历' }}</strong>
+        <div class="home-selected-resume">
+          <div class="home-selected-resume-heading">
+            <strong>{{ selectedResume?.originalFilename || '请选择简历' }}</strong>
+            <span class="home-ready-state">{{ selectedResumeStatus }}</span>
+          </div>
           <small>系统不会为了匹配岗位编造你的经历。</small>
         </div>
-        <el-button data-testid="home-start-analysis" type="primary" size="large" :loading="startingAnalysis || analysisRunning" :disabled="!canStart" @click="handleStartAnalysis">
-          开始分析
-        </el-button>
+        <div class="home-start-actions-buttons">
+          <el-button
+            v-if="selectedResume?.qualityStatus === 'NEEDS_REVIEW'"
+            plain
+            type="warning"
+            @click="router.push('/resumes')"
+          >
+            先确认简历
+          </el-button>
+          <el-button
+            data-testid="home-start-analysis"
+            type="primary"
+            size="large"
+            :loading="startingAnalysis || analysisRunning"
+            :disabled="!canStart"
+            @click="handleStartAnalysis"
+          >
+            开始分析
+          </el-button>
+        </div>
       </footer>
     </section>
 
@@ -480,7 +585,6 @@ onUnmounted(() => {
           @click="selectedResumeId = resume.id"
         >
           <strong>{{ resume.originalFilename }}</strong>
-          <small>{{ resume.parseStatus === 'SUCCESS' ? '已准备好' : '分析时自动准备' }}</small>
         </button>
       </div>
     </section>
@@ -490,7 +594,9 @@ onUnmounted(() => {
         <h2>岗位方向洞察</h2>
         <p>近期岗位分析已积累出可参考的共同要求；它不会改变当前的单岗位分析结果。</p>
       </div>
-      <el-button type="primary" plain @click="router.push('/job-direction-insights')">查看方向洞察</el-button>
+      <el-button type="primary" plain @click="router.push('/job-direction-insights')"
+        >查看方向洞察</el-button
+      >
     </section>
   </section>
 </template>
@@ -586,6 +692,25 @@ onUnmounted(() => {
 .home-start-actions > div {
   display: grid;
   gap: 4px;
+}
+
+.home-selected-resume-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.home-ready-state {
+  color: var(--app-success);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.home-start-actions-buttons {
+  display: flex !important;
+  align-items: center;
+  gap: 8px;
 }
 
 .home-start-actions small,
@@ -708,8 +833,15 @@ onUnmounted(() => {
 }
 
 @keyframes home-pulse {
-  0%, 100% { opacity: 0.4; transform: scale(0.8); }
-  50% { opacity: 1; transform: scale(1); }
+  0%,
+  100% {
+    opacity: 0.4;
+    transform: scale(0.8);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 @media (max-width: 760px) {

@@ -86,7 +86,7 @@ class JobAnalysisServiceImplTest {
         assertThat(result.getTargetResumeVersionId()).isEqualTo(41L);
         assertThat(result.getJobTargetId()).isEqualTo(30L);
         verify(optimizationTaskService).attachAsyncTask(1L, 50L, 100L);
-        verify(optimizationTaskService).captureResumeSnapshot(1L, 50L, "{\"skills\":[\"Java\"]}");
+        verify(optimizationTaskService).captureResumeSnapshot(1L, 50L, canonicalResumeDocument());
         verify(asyncTaskService).markSuccess(100L, "OPTIMIZATION_TASK", 50L, "Java 后端工程师");
 
         ArgumentCaptor<String> titleCaptor = ArgumentCaptor.forClass(String.class);
@@ -190,7 +190,7 @@ class JobAnalysisServiceImplTest {
 
         verify(resumeService).parse(1L, 10L);
         verify(jobDescriptionParseService).parse(1L, 20L, null, 50L);
-        verify(optimizationTaskService).captureResumeSnapshot(1L, 50L, "{\"skills\":[\"Java\"]}");
+        verify(optimizationTaskService).captureResumeSnapshot(1L, 50L, canonicalResumeDocument());
         verify(evidenceMatchService).analyze(org.mockito.ArgumentMatchers.eq(1L),
                 org.mockito.ArgumentMatchers.eq(50L),
                 any(JobDescriptionVO.class));
@@ -291,7 +291,14 @@ class JobAnalysisServiceImplTest {
                 .resumeId(10L)
                 .parseStatus("SUCCESS")
                 .structuredJson("{\"skills\":[\"Java\"]}")
+                .qualityStatus("READY")
+                .unresolvedItems("[]")
+                .canonicalDocument(canonicalResumeDocument())
                 .build();
+    }
+
+    private String canonicalResumeDocument() {
+        return "{\"schemaVersion\":\"RESUME_DOCUMENT_V1\",\"basics\":{\"name\":\"张三\",\"contacts\":[]},\"sections\":[]}";
     }
 
     private JobDescriptionVO successfulJob() {

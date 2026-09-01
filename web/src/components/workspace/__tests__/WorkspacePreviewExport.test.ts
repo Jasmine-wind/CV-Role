@@ -24,7 +24,6 @@ vi.mock('element-plus', () => ({
     success: messageSuccess,
   },
   ElMessageBox: { confirm: vi.fn().mockResolvedValue(undefined) },
-  // 按需引入会把 El* 组件以局部导入形式注入 SFC，测试中用轻量 stub 替代。
   ElButton: {
     props: ['disabled', 'loading'],
     template: '<button :disabled="disabled"><slot /></button>',
@@ -38,9 +37,6 @@ vi.mock('element-plus', () => ({
   ElRadioButton: {
     props: ['value'],
     template: '<span><slot /></span>',
-  },
-  ElDialog: {
-    template: '<div><slot /></div>',
   },
 }))
 
@@ -73,6 +69,9 @@ const previewResult = (revision = 3) => ({
     missingContact: false,
     pageLimitExceeded: false,
     overflowDetected: false,
+    orphanFinalPage: false,
+    readabilityTooSmall: false,
+    needsReview: false,
   },
 })
 
@@ -91,6 +90,9 @@ const artifact = {
   missingContact: false,
   pageLimitExceeded: false,
   overflowDetected: false,
+  orphanFinalPage: false,
+  readabilityTooSmall: false,
+  documentGateStatus: 'PASS',
   fileName: 'resume.pdf',
   createdAt: '2026-08-21T00:00:00',
 }
@@ -105,12 +107,15 @@ const deferred = <T>() => {
   return { promise, resolve, reject }
 }
 
-const mountComponent = () =>
+const mountComponent = (
+  status: 'dirty' | 'saving' | 'saved' | 'failed' | 'conflict' = 'saved',
+  revision = 3,
+) =>
   mount(WorkspacePreviewExport, {
     props: {
       optimizationTaskId: 42,
-      revision: 3,
-      status: 'saved',
+      revision,
+      status,
       onStale: staleHandler,
     },
   })
@@ -118,10 +123,18 @@ const mountComponent = () =>
 const button = (wrapper: ReturnType<typeof mountComponent>, text: string) =>
   wrapper.findAll('button').find((item) => item.text().includes(text))!
 
+const openHistory = async (wrapper: ReturnType<typeof mountComponent>) => {
+  const history = wrapper.find('details.export-history')
+  ;(history.element as HTMLDetailsElement).open = true
+  await history.trigger('toggle')
+  await flushPromises()
+}
+
 describe('WorkspacePreviewExport', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     staleHandler.mockClear()
+    previewMock.mockResolvedValue(previewResult())
     listMock.mockResolvedValue([])
     downloadMock.mockResolvedValue(pdfBlob)
     deleteMock.mockResolvedValue(undefined)
@@ -132,17 +145,25 @@ describe('WorkspacePreviewExport', () => {
     vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined)
   })
 
-  it('allows export only after a valid preview and submits the signed receipt', async () => {
-    previewMock.mockResolvedValue(previewResult())
+  it('does not render revision zero before the first CAS save', async () => {
+    const wrapper = mountComponent('saved', 0)
+
+    await flushPromises()
+
+    expect(previewMock).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('请先完成一次保存，再生成预览')
+    expect(button(wrapper, '导出 PDF').attributes('disabled')).toBeDefined()
+  })
+
+  it('auto-generates a valid preview and only then enables export with its signed receipt', async () => {
     exportMock.mockResolvedValue(artifact)
     const wrapper = mountComponent()
-    await flushPromises()
 
     expect(button(wrapper, '导出 PDF').attributes('disabled')).toBeDefined()
-    await button(wrapper, '预览 PDF').trigger('click')
     await flushPromises()
 
-    expect(wrapper.text()).toContain('实际 PDF：2 页')
+    expect(wrapper.text()).toContain('可以导出')
+    expect(wrapper.text()).toContain('2 页')
     expect(button(wrapper, '导出 PDF').attributes('disabled')).toBeUndefined()
     await button(wrapper, '导出 PDF').trigger('click')
     await flushPromises()
@@ -155,14 +176,11 @@ describe('WorkspacePreviewExport', () => {
   })
 
   it('reports a post-export download failure separately and offers the artifact download retry', async () => {
-    previewMock.mockResolvedValue(previewResult())
     exportMock.mockResolvedValue(artifact)
     downloadMock.mockRejectedValue(new Error('导出文件暂时无法下载'))
     const wrapper = mountComponent()
     await flushPromises()
 
-    await button(wrapper, '预览 PDF').trigger('click')
-    await flushPromises()
     await button(wrapper, '导出 PDF').trigger('click')
     await flushPromises()
 
@@ -179,40 +197,35 @@ describe('WorkspacePreviewExport', () => {
         missingContact: true,
         pageLimitExceeded: true,
         overflowDetected: true,
+        orphanFinalPage: false,
+        readabilityTooSmall: false,
+        needsReview: false,
       },
     })
     const wrapper = mountComponent()
     await flushPromises()
 
-    await button(wrapper, '预览 PDF').trigger('click')
-    await flushPromises()
-
-    expect(wrapper.text()).toContain('实际 PDF：3 页')
-    expect(wrapper.text()).toContain('缺少联系方式')
+    expect(wrapper.text()).toContain('3 页')
+    expect(wrapper.text()).toContain('缺少可用联系方式')
     expect(wrapper.text()).toContain('超过建议的 2 页')
     expect(wrapper.text()).toContain('文字超出页面边界')
+    expect(button(wrapper, '导出 PDF').attributes('disabled')).toBeDefined()
   })
 
   it('drops a late preview response after revision changes', async () => {
     const pending = deferred<ReturnType<typeof previewResult>>()
     previewMock.mockReturnValue(pending.promise)
     const wrapper = mountComponent()
-    await flushPromises()
-
-    await button(wrapper, '预览 PDF').trigger('click')
     await wrapper.setProps({ revision: 4 })
     pending.resolve(previewResult(3))
     await flushPromises()
 
-    expect(wrapper.text()).not.toContain('实际 PDF')
+    expect(wrapper.text()).not.toContain('可以导出')
     expect(button(wrapper, '导出 PDF').attributes('disabled')).toBeDefined()
   })
 
   it('invalidates preview on template, task, or save-status changes', async () => {
-    previewMock.mockResolvedValue(previewResult())
     const wrapper = mountComponent()
-    await flushPromises()
-    await button(wrapper, '预览 PDF').trigger('click')
     await flushPromises()
     expect(button(wrapper, '导出 PDF').attributes('disabled')).toBeUndefined()
 
@@ -231,9 +244,6 @@ describe('WorkspacePreviewExport', () => {
     const wrapper = mountComponent()
     await flushPromises()
 
-    await button(wrapper, '预览 PDF').trigger('click')
-    await flushPromises()
-
     expect(staleHandler).toHaveBeenCalledTimes(1)
     expect(messageWarning).toHaveBeenCalledWith('预览已失效')
     expect(button(wrapper, '导出 PDF').attributes('disabled')).toBeDefined()
@@ -243,9 +253,6 @@ describe('WorkspacePreviewExport', () => {
     const pending = deferred<ReturnType<typeof previewResult>>()
     previewMock.mockReturnValue(pending.promise)
     const wrapper = mountComponent()
-    await flushPromises()
-
-    await button(wrapper, '预览 PDF').trigger('click')
     await wrapper.setProps({ status: 'dirty' })
     pending.reject(Object.assign(new Error('预览已失效'), { code: 409 }))
     await flushPromises()
@@ -255,12 +262,9 @@ describe('WorkspacePreviewExport', () => {
   })
 
   it('drops a stale export failure after a newer local edit instead of requesting server adoption', async () => {
-    previewMock.mockResolvedValue(previewResult())
     const pending = deferred<typeof artifact>()
     exportMock.mockReturnValue(pending.promise)
     const wrapper = mountComponent()
-    await flushPromises()
-    await button(wrapper, '预览 PDF').trigger('click')
     await flushPromises()
 
     await button(wrapper, '导出 PDF').trigger('click')
@@ -273,12 +277,9 @@ describe('WorkspacePreviewExport', () => {
   })
 
   it('does not auto-download an export that completes after a newer local edit', async () => {
-    previewMock.mockResolvedValue(previewResult())
     const pending = deferred<typeof artifact>()
     exportMock.mockReturnValue(pending.promise)
     const wrapper = mountComponent()
-    await flushPromises()
-    await button(wrapper, '预览 PDF').trigger('click')
     await flushPromises()
 
     await button(wrapper, '导出 PDF').trigger('click')
@@ -290,12 +291,13 @@ describe('WorkspacePreviewExport', () => {
     expect(HTMLAnchorElement.prototype.click).not.toHaveBeenCalled()
   })
 
-  it('renders an artifact-list load failure instead of an empty state', async () => {
+  it('renders an artifact-list load failure inside the collapsed export history', async () => {
     listMock.mockRejectedValue(new Error('读取导出记录失败'))
     const wrapper = mountComponent()
     await flushPromises()
+    await openHistory(wrapper)
 
-    expect(wrapper.text()).toContain('已导出文件加载失败')
+    expect(wrapper.text()).toContain('导出记录加载失败')
     expect(wrapper.text()).toContain('读取导出记录失败')
     expect(wrapper.text()).not.toContain('还没有导出记录。')
   })
@@ -303,9 +305,6 @@ describe('WorkspacePreviewExport', () => {
   it('surfaces non-stale preview errors without enabling export', async () => {
     previewMock.mockRejectedValue(new Error('PDF response invalid'))
     const wrapper = mountComponent()
-    await flushPromises()
-
-    await button(wrapper, '预览 PDF').trigger('click')
     await flushPromises()
 
     expect(messageError).toHaveBeenCalledWith('PDF response invalid')

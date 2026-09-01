@@ -55,6 +55,15 @@ public class ExportArtifactVO {
     @Schema(description = "是否检测到文字 glyph 超出页面 CropBox")
     private final Boolean overflowDetected;
 
+    @Schema(description = "导出时刻的文档质量门结果；历史导出物为空")
+    private final String documentGateStatus;
+
+    @Schema(description = "导出时刻是否检出孤立末页；历史导出物为空")
+    private final Boolean orphanFinalPage;
+
+    @Schema(description = "导出时刻是否低于最低可读字号；历史导出物为空")
+    private final Boolean readabilityTooSmall;
+
     @Schema(description = "建议下载文件名")
     private final String fileName;
 

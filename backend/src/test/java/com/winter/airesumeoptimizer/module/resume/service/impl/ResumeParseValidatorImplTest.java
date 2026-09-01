@@ -216,7 +216,7 @@ class ResumeParseValidatorImplTest {
     }
 
     @Test
-    void validateAndMergeShouldRemoveDuplicateAssignedTextFromOthers() {
+    void validateAndMergeShouldPreserveCrossSectionTextAndRemoveOnlyOthersEchoes() {
         String project = "AI 简历优化系统：负责解析模块";
         ResumeStructuredContentDTO ai = ResumeStructuredContentDTO.builder()
                 .projects(List.of(project))
@@ -226,10 +226,11 @@ class ResumeParseValidatorImplTest {
 
         ResumeStructuredContentDTO result = validator.validateAndMerge(ai, ResumeStructuredContentDTO.builder().build(), List.of());
 
-        assertThat(result.getWorkExperiences()).containsExactly(project);
-        assertThat(result.getProjects()).isEmpty();
+        assertThat(result.getWorkExperiences()).contains(project);
+        assertThat(result.getProjects()).contains(project);
         assertThat(result.getOthers()).containsExactly("开源贡献");
-        assertThat(result.getQualityWarnings()).contains("AI_DUPLICATE_TEXT_REMOVED", "AI_OTHERS_ASSIGNED_TEXT_REMOVED");
+        assertThat(result.getQualityWarnings()).contains("AI_OTHERS_ASSIGNED_TEXT_REMOVED")
+                .doesNotContain("AI_DUPLICATE_TEXT_REMOVED");
     }
 
     @Test
@@ -267,9 +268,9 @@ class ResumeParseValidatorImplTest {
 
         ResumeStructuredContentDTO result = validator.validateAndMerge(ai, rule, List.of());
 
-        assertThat(result.getCampusExperiences()).containsExactly(campusLine);
-        assertThat(result.getProjects()).isEmpty();
-        assertThat(result.getAwards()).isEmpty();
-        assertThat(result.getQualityWarnings()).contains("AI_DUPLICATE_TEXT_REMOVED");
+        assertThat(result.getCampusExperiences()).contains(campusLine);
+        assertThat(result.getProjects()).contains(campusLine);
+        assertThat(result.getAwards()).contains(campusLine);
+        assertThat(result.getQualityWarnings()).doesNotContain("AI_DUPLICATE_TEXT_REMOVED");
     }
 }

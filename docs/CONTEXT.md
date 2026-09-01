@@ -15,8 +15,15 @@
 | Phase 7 | 已完成，Final Gate 已通过 | 唯一 AI Gateway Chat 主链、每用户至多一个加密 BYOK Credential、pinned HTTPS transport、任务级 Selection Snapshot、稳定 failure code、attempt Usage ledger 与最小 Settings UI |
 | Phase 8 | 已完成，独立 Final Gate 已通过 | 视觉与状态体验统一：Landing / 首页 / 分析 / Workspace / Preview / Export / AI 设置信息层级收敛，统一状态与文案，窄屏降级，Element Plus 按需引入消除大 chunk |
 | Phase 9 | 已完成，Final Gate PASS | 只读 Multi-JD Insight、最小 committed-fact Observability、Usage hardening/retention、PostgreSQL/Flyway + MinIO lifecycle + fake Provider + Playwright recovery E2E，以及非生产普通 User Demo 环境 |
+| Product Polish Slice C | 已完成，Final Gate PASS | Typst v3 三模板语义层级、字体/长字段/分页质量回归、Preview title seam、英文/中英混排与真实风格 JD fixtures；未改变 V1 SoT、业务协议或 IA |
 
 Phase 1–8 的冻结语义（Evidence 三态、Rewrite 事实闭包、Preview / Export 只读 seam、Workspace CAS 与 Suggest 会话生命周期）保持不变。Phase 9 已通过独立 Final Gate；Phase 1–9 均正式完成，且未批准或创建 Phase 10。
+
+Phase 9 之后进入 Product Polish，不新建 Phase。Slice A（已完成）冻结了可信交付链：原始简历 → 候选解析 → 确定性验证 → `READY / NEEDS_REVIEW / FAILED` → canonical `RESUME_DOCUMENT_V1` → Workspace → Preview / PDF。候选解析不是事实；无法可靠判断的内容进入未决候选由用户确认，AI 不得为修解析补造事实，无法裁决时 fail closed。
+
+Slice B（已完成，Final Gate PASS）：前端已完成行动优先 Analysis、编辑器优先 Workspace 与 contextual inspector、语义化 Resume 编辑字段、纵向 Suggest / Diff、Workspace 内“编辑 / 预览”模式和 Audit 字段收敛；新增 no-op Suggest 前端防护与相关回归覆盖。独立 Final Gate 已覆盖混合状态、Desktop / Narrow 浏览器和 Phase 1–9 / Slice A 回归，未改变业务 API、数据源、状态机、真实性、CAS、Preview receipt 或 Export gate。
+
+Slice C（已完成，Final Gate PASS）：保持 `RESUME_DOCUMENT_V1` 与显式 section list order；默认 canonical 投影改为 Summary → Experience → Projects → Education → Skills → Other，用户显式编辑后的 section 顺序不由模板静默重排。Typst current templates 升为 v3：Summary / Education / Certificate / Other 使用无 marker 的文本层级，Experience / Project 保留真实 Bullet；长 title/date 使用 gutter 与安全换行，Section heading 与首条内容通过 Typst non-breakable block 关联，长条目与长通用章节内容均可自然续页。A4 页面统一排版节奏，正文目标 10pt、metadata/contact ≥9pt，中英正文左对齐。生产镜像复制 Noto CJK Regular/Bold 静态字体并通过 `APP_RENDER_FONT_PATH` + `--ignore-system-fonts` 固定字体环境；Renderer 为 PDF 写入稳定 title/metadata。PDF inspector 新增末页 glyph 垂直占用比例，低于 20% 与既有末页行数规则共同标记 `ORPHAN_FINAL_PAGE`，正式 Export 继续经原有 PDF Quality Gate 阻断。Preview 继续使用浏览器原生 PDF iframe，依赖 PDF metadata title 消除 blob UUID，未引入 PDF.js。独立 Gate 已完成真实三模板 PDF、通用章节长内容、固定字体、Preview / Export、Desktop / Narrow 浏览器、Fresh PostgreSQL/Flyway、Docker/Compose 与完整回归验证，**Final Gate PASS**。
 
 ## 2. 当前系统与主流程
 
@@ -24,7 +31,7 @@ Phase 1–8 的冻结语义（Evidence 三态、Rewrite 事实闭包、Preview /
 
 Chat AI 调用在 Phase 7 收敛为唯一 seam：业务模块只依赖 `AiGateway` 并显式携带 user/task 上下文与 Selection Snapshot，不接触 API Key、Authorization、Provider URL 或 HTTP 细节；Gateway 负责 selection、SYSTEM / USER 分离、模型 / 配置、安全传输、重试 / 时限、稳定错误映射和 Usage 记录。Embedding 保持 platform-only，只使用系统配置并经同一 pinned transport，不使用 BYOK。用户 BYOK 只通过 Settings 页配置；无 Credential / DISABLED 时新任务使用 System Default，ACTIVE 时使用 BYOK，BYOK 失败绝不静默回退 System Default。
 
-当前前端路由只有 Landing、首页、我的简历、岗位分析结果、优化工作区、AI 设置、登录和注册；一级导航只有首页和我的简历，AI 设置仅从顶栏账号菜单进入，不进入默认用户主流程。岗位库、独立目标岗位管理、旧匹配编排和技术分类式 AI 历史不在默认用户流中。全局壳只承担 navigation / account / 窄屏菜单，页面标题与任务操作由各页面自身承担；Element Plus 按需引入且路由懒加载，窄屏下 sidebar 变为 Drawer、Workspace 单列降级。
+当前前端路由只有 Landing、首页、我的简历、岗位分析结果、优化工作区、AI 设置、登录和注册；一级导航只有首页和我的简历，AI 设置仅从顶栏账号菜单进入，不进入默认用户主流程。岗位库、独立目标岗位管理、旧匹配编排和技术分类式 AI 历史不在默认用户流中。全局壳只承担 navigation / account / 窄屏菜单，页面标题与任务操作由各页面自身承担；Element Plus 按需引入且路由懒加载，窄屏下 sidebar 变为 Drawer。Workspace 当前为编辑器优先的可收起建议侧栏，窄屏使用“编辑简历 / 优化建议”切换；Preview / Export 使用 Workspace 内“编辑 / 预览”模式，不再嵌套 Drawer 与 Dialog。
 
 ```text
 登录
@@ -46,13 +53,14 @@ Preview 与 Export 是同步渲染：只读取服务端已保存的 TARGET `stru
 
 ## 3. 当前领域与数据事实
 
-- `ResumeVersion`：每次新分析创建独立 `SOURCE` 输入快照和由其派生的 `TARGETED` 岗位版本；Workspace 只写 TARGET，不修改上传简历、解析结果、SOURCE 或任务冻结快照。
+- `ResumeVersion`：解析质量通过后，canonical 文档唯一物化为当前无岗位的 SOURCE；每次新分析引用该 SOURCE 并派生独立 `TARGETED` 岗位版本。Workspace 只写 TARGET，不修改上传简历、解析结果、SOURCE 或任务冻结快照。
 - `JobTarget`：保存用户归属、原始 JD、标题和来源；当前仍通过兼容引用复用 `job_descriptions` 的解析能力。
 - `OptimizationTask`：正式业务身份和前端路由身份，保存版本关系、输入快照及 Prompt / Rules / Provider / Model / Template 配置快照；`async_tasks` 只承担执行状态和轮询。
 - 正式证据分析：每个任务最多一条 `evidence_analyses`，子表为 `evidence_requirements` 和 `requirement_evidences`；正式主链路不再向 `ai_job_match_results` 写新结果。
-- Workspace 文档：`RESUME_DOCUMENT_V1` 是唯一规范编辑结构，持久化在 `resume_versions.structured_content`，不存在第二套 Workspace 内容字段。
+- Workspace 文档：`RESUME_DOCUMENT_V1` 是唯一规范编辑结构（Slice A），持久化在 `resume_versions.structured_content`，不存在第二套 Workspace 内容字段；历史 generic V1 内容只读升级。
+- 解析交付质量（Slice A）：`resume_parse_results` 新增 `quality_status`（PENDING / READY / NEEDS_REVIEW / FAILED，SoT）、`quality_issues`、`unresolved_items`（未决候选，审查态数据，不是简历内容）与 `canonical_source_version_id`（仅指向当前 SOURCE）。canonical JSON 只存在于 `resume_versions.structured_content`；`structured_json` 仍是候选解析产物，不能进入新任务快照。解析成功不等于可安全投递；非 `READY` 或没有 canonical SOURCE 的简历禁止创建新分析任务，历史任务不受影响。
 - 内容并发：`resume_versions.content_revision` 是服务端乐观并发版本；保存和恢复都必须携带 `expectedRevision` 并通过单条条件更新递增。冲突保留本地草稿，不允许无条件覆盖。
-- 导出物：`export_artifacts` 记录成功生成的 PDF 派生文件及实际 preflight（用户 / 任务 / TARGET / revision / 模板与渲染器版本 / storage metadata / 页数 / 联系方式 / 页数告警 / 越界告警）。READY 可下载；DELETE_PENDING 不可下载但保留重试依据。任务与 TARGET 的关系由复合外键直接约束。
+- 导出物：`export_artifacts` 记录成功生成的 PDF 派生文件及实际 preflight（用户 / 任务 / TARGET / revision / 模板与渲染器版本 / storage metadata / 页数 / 联系方式 / 页数告警 / 越界 / 孤立末页 / 可读性告警）。READY 可下载；DELETE_PENDING 不可下载但保留重试依据。任务与 TARGET 的关系由复合外键直接约束。
 - Multi-JD Insight：没有表、cache 或 Capability Source of Truth；只读聚合当前用户近 180 天的 `SUCCESS` Task、冻结输入、SOURCE Version 与正式 Evidence。cohort 必须同时匹配 `resumeId + SHA-256(resume_input_snapshot)`；相同规范化冻结 JD 只取最新成功 Task，最多 20 个、至少 8 个才显示。
 - Insight Requirement：仅对单一、字面技术锚点做小型固定注册表分组（否则精确规范化文本）；每个 JD 取最保守三态，结果保留 Task / Requirement / Evidence 追溯，绝不推断用户现实能力或重算 TARGET 编辑。
 - Observability：`ProductObservabilityService` 只查询已提交且仍保留的业务表；没有 `product_events`、用户指标页或长期识别性聚合。不可由现有事实可靠得出的 Workspace entry、Preview success、Suggestion apply 指标继续不记录。
@@ -66,6 +74,7 @@ Preview 与 Export 是同步渲染：只读取服务端已保存的 TARGET `stru
 - V21：只增加 `content_revision BIGINT NOT NULL DEFAULT 0`，不增加第二个内容字段。
 - V22：加法式建立 `export_artifacts`，补充 task ownership 与 task→TARGET 复合唯一索引，持久化 preflight 和 READY / DELETE_PENDING 生命周期；不修改 V1 数据。
 - V23：加法式建立 `ai_provider_credentials`、OptimizationTask AI Selection Snapshot 与 `ai_usage_records`；Credential / Task / Usage 使用复合用户归属外键，旧 Task 回填为 SYSTEM_DEFAULT，部署 Secret 不迁入数据库。
+- V24（Slice A）：加法式为 `resume_parse_results` 增加质量状态、当前 canonical SOURCE 指针和审查 sidecar（存量行默认 `READY`，但无 canonical SOURCE 的新任务必须重新解析），为 `export_artifacts` 增加导出时刻的文档质量门、孤立末页和可读性标记（历史行为可空）；不改写历史内容。
 
 ## 4. 必须保持的设计约束
 
@@ -87,8 +96,10 @@ Preview 与 Export 是同步渲染：只读取服务端已保存的 TARGET `stru
 
 ### Workspace 与 Phase 5
 
+- Workspace 编辑的文档格式为 `RESUME_DOCUMENT_V1`（Slice A）：联系方式携带显式类型（电话 / 邮箱等，不再靠自由 label 猜测），条目按章节语义携带公司 / 职位 / 学校 / 学历 / 专业 / 起止时间原文，技能为一等技能组；自由 `heading/meta` 仅作历史只读兼容。Slice A 之前保存的 generic V1 目标内容在读取时按确定性规则升级为 V1 语义结构，保存仍写 V1；升级失败显式报错引导重新解析，不降级产出。
+
 - `optimizationTaskId` 是 Workspace 唯一入口；服务端负责解析 Task → SOURCE / TARGET / JobTarget / Resume / User 完整链路，前端不能指定可写 ResumeVersion。
-- TARGET 是唯一可编辑版本；SOURCE、`resume_input_snapshot` 和 Evidence 始终只读。TARGET 编辑后不实时重算分析，左栏明确展示分析时的 SOURCE Evidence。
+- TARGET 是唯一可编辑版本；SOURCE、`resume_input_snapshot` 和 Evidence 始终只读。TARGET 编辑后不实时重算分析，Workspace 通过可收起的 contextual inspector 展示分析时的 SOURCE Evidence。
 - Undo / Redo 只属于当前页面会话；刷新后只恢复最后成功保存的服务端内容；localStorage / sessionStorage 不是正式简历内容恢复源。
 - AI Suggest 只处理用户明确选中的单个 Bullet。平台策略进入 SYSTEM，简历、JD、Evidence 和本次要求进入标记为不可信的 USER 数据区；Prompt 使用单遍模板替换。
 - Suggestion 只存在于当前前端会话，服务端只读生成且没有服务端 Apply。Suggest / Reject / Regenerate 不修改 TARGET 或 revision。
@@ -101,12 +112,13 @@ Preview 与 Export 是同步渲染：只读取服务端已保存的 TARGET `stru
 - Structured Resume JSON（TARGET `structured_content`）是唯一简历业务 Source of Truth；Preview / Export 只能经 `optimizationTaskId` 读取服务端已保存 revision，禁止 HTML 内容源、第二套简历数据、PDF 反解析、模板存业务数据与前端指定可渲染版本。
 - 渲染是独立 seam：确定性映射 → 版本化内置模板 → Typst 同步编译 → PDF；用户内容全部转义为 Typst 字符串字面量，渲染进程通过 `--root` 限制文件读取，内置模板不引用外部包且包目录隔离；用户内容经转义无法触发导入。当前没有 OS 级进程网络沙箱，不得把空包目录表述为网络隔离；模板只负责展示，不承担业务判断。
 - Preview 与 Export 共享同一 Renderer、模板版本、编译器与字体环境。服务端签名 receipt 绑定 user / task / TARGET / revision / template+version / renderer / PDF checksum；无 Preview、过期 receipt、revision / 模板 / 任务 / 用户变化或重编译 checksum 不同均拒绝 Export。
-- 导出前统一检查实际 PDF 页数、通信联系方式、两页建议上限和 glyph 是否超出 CropBox；compile / PDF parse 失败阻断，其余问题明确告警且不自动改写。删除采用持久化 DELETE_PENDING → 对象删除 → 元数据删除，失败可重试；Resume / JobDescription 父删除先完成该流程再级联。
+- 导出检查分两层（Slice A/Slice C）。Document Quality Gate：内容质量状态非 `READY`、存在系统兜底章节、重复章节或缺少可用电话 / 邮箱时阻断正式导出（预览仍可用作审查）。PDF Quality Gate：编译 / PDF parse 失败、文字越界、不可读字号、孤立末页（页数 ≥2 且末页非空行 <3），或末页 glyph 垂直占用比例低于 20% 时阻断；页数超过两页建议仍只告警。两页简历合法，孤立/稀疏第二页不合法。删除采用持久化 DELETE_PENDING → 对象删除 → 元数据删除，失败可重试；Resume / JobDescription 父删除先完成该流程再级联。
+- 模板升级新增版本而不原位修改：Slice A 的 v2 与更早 v1 保留供历史导出物解释；Slice C current renderer 消费 V1 语义模型并按章节类型分支（三模板均为 v3），渲染器版本为 `typst-resume-renderer/3`。
 - 未 Apply 的 AI Suggest 仅存在于前端会话，不进入 Preview / PDF / ExportArtifact；Phase 6 不新增 Suggestion History、Change Event 或 AI 持久化链路。
 
 ## 5. 尚未实现
 
-- 缺少事实时向用户询问并记录真实补充 / 确认。
+- 缺少事实时向用户询问并记录真实补充 / 确认；Slice A 已实现解析层最小确认流（未决候选的接受 / 编辑 / 删除），更完整的事实补充仍属后续。
 - 用户 Profile / Rules 与平台策略的完整分层；Phase 5 只有平台默认策略和本次自定义要求。
 - Markdown / JSON 迁移导出仍属后续 P1；不属于 Phase 6。
 - 用户数据导出 / 全量删除和最近优化列表。
@@ -136,6 +148,7 @@ Phase 1–9 已正式完成；后续能力仍须依 `PLAN.md` 和新的产品决
 - Snapshot-hash cohort 会在材料变化后拆分样本，字面锚点策略也会保守地少聚合；这是避免混合不同材料或错误语义合并的既定取舍。
 - Demo 仅允许 `demo` profile 与 `APP_DEMO_ENABLED=true` 的独立数据库/存储环境；当前没有用户全量删除入口，Phase 9 不应被表述为已完成账号生命周期。
 - 本机使用 Java 25 时需要显式开启 annotation processing 才能生成 Lombok 代码；CI 的标准运行环境是 Java 21。
+- Slice A 的确定性验证与覆盖判定是有意的保守规则：联系方式格式、章节结构、跨章节重复、类型错位、短行碎片与未表示行进入未决候选；它不追求完美解析，只保证可确定则接受、不确定则确认、明显错误则阻断。覆盖判定使用整行包含、明确标签后的全量事实 token、联系方式短标签残差与结构标题白名单；不以 70% 比例掩盖遗漏。
 
 ## 7. 文档与事实优先级
 

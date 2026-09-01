@@ -23,6 +23,8 @@ import com.winter.airesumeoptimizer.module.embedding.mapper.ResumeEmbeddingMappe
 import com.winter.airesumeoptimizer.module.export.service.ExportArtifactCleanupService;
 import com.winter.airesumeoptimizer.module.job.entity.JobMatchResult;
 import com.winter.airesumeoptimizer.module.job.mapper.JobMatchResultMapper;
+import com.winter.airesumeoptimizer.module.optimization.entity.ResumeVersion;
+import com.winter.airesumeoptimizer.module.optimization.mapper.ResumeVersionMapper;
 import com.winter.airesumeoptimizer.module.resume.entity.Resume;
 import com.winter.airesumeoptimizer.module.resume.entity.ResumeParseResult;
 import com.winter.airesumeoptimizer.module.resume.mapper.ResumeMapper;
@@ -43,11 +45,14 @@ import com.winter.airesumeoptimizer.module.resume.dto.ResumeTextCleanResultDTO;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeTextQualityResultDTO;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeTextSectionDTO;
 import com.winter.airesumeoptimizer.module.resume.dto.SourceSectionConfidence;
+import com.winter.airesumeoptimizer.module.resume.enums.ResumeQualityStatus;
 import com.winter.airesumeoptimizer.module.resume.service.ResumeAiSectionClassifier;
 import com.winter.airesumeoptimizer.module.resume.service.ResumeAiStructuredParser;
 import com.winter.airesumeoptimizer.module.resume.service.ResumeBlockBuilder;
 import com.winter.airesumeoptimizer.module.resume.service.ResumeBlockReorderService;
+import com.winter.airesumeoptimizer.module.resume.service.ResumeCanonicalDocumentService;
 import com.winter.airesumeoptimizer.module.resume.service.ResumeDisplayModelService;
+import com.winter.airesumeoptimizer.module.resume.service.ResumeDocumentQualityValidator;
 import com.winter.airesumeoptimizer.module.resume.service.ResumeLineIndexer;
 import com.winter.airesumeoptimizer.module.resume.service.ResumeParseQualityCheckService;
 import com.winter.airesumeoptimizer.module.resume.service.ResumePointerPostProcessor;
@@ -116,6 +121,7 @@ public class ResumeServiceImpl implements ResumeService {
 
     private final ResumeMapper resumeMapper;
     private final ResumeParseResultMapper resumeParseResultMapper;
+    private final ResumeVersionMapper resumeVersionMapper;
     private final ResumeAiAnalysisMapper resumeAiAnalysisMapper;
     private final JobMatchResultMapper jobMatchResultMapper;
     private final AiJobMatchResultMapper aiJobMatchResultMapper;
@@ -136,6 +142,8 @@ public class ResumeServiceImpl implements ResumeService {
     private final ResumeDisplayModelService resumeDisplayModelService;
     private final ResumeLineIndexer resumeLineIndexer;
     private final ResumePointerPostProcessor resumePointerPostProcessor;
+    private final ResumeCanonicalDocumentService resumeCanonicalDocumentService;
+    private final ResumeDocumentQualityValidator resumeDocumentQualityValidator;
     private final ResumeParseProperties resumeParseProperties;
     private final ObjectMapper objectMapper;
     private final long maxFileSize;
@@ -144,6 +152,7 @@ public class ResumeServiceImpl implements ResumeService {
     public ResumeServiceImpl(
             ResumeMapper resumeMapper,
             ResumeParseResultMapper resumeParseResultMapper,
+            ResumeVersionMapper resumeVersionMapper,
             ResumeAiAnalysisMapper resumeAiAnalysisMapper,
             JobMatchResultMapper jobMatchResultMapper,
             AiJobMatchResultMapper aiJobMatchResultMapper,
@@ -164,12 +173,15 @@ public class ResumeServiceImpl implements ResumeService {
             ResumeDisplayModelService resumeDisplayModelService,
             ResumeLineIndexer resumeLineIndexer,
             ResumePointerPostProcessor resumePointerPostProcessor,
+            ResumeCanonicalDocumentService resumeCanonicalDocumentService,
+            ResumeDocumentQualityValidator resumeDocumentQualityValidator,
             ResumeParseProperties resumeParseProperties,
             ObjectMapper objectMapper,
             @Value("${app.resume.upload.max-file-size-bytes:10485760}") long maxFileSize,
             @Value("${app.resume.parse.ai-structured-parse-enabled:false}") boolean defaultAiStructuredParseEnabled) {
         this.resumeMapper = resumeMapper;
         this.resumeParseResultMapper = resumeParseResultMapper;
+        this.resumeVersionMapper = resumeVersionMapper;
         this.resumeAiAnalysisMapper = resumeAiAnalysisMapper;
         this.jobMatchResultMapper = jobMatchResultMapper;
         this.aiJobMatchResultMapper = aiJobMatchResultMapper;
@@ -190,6 +202,8 @@ public class ResumeServiceImpl implements ResumeService {
         this.resumeDisplayModelService = resumeDisplayModelService;
         this.resumeLineIndexer = resumeLineIndexer;
         this.resumePointerPostProcessor = resumePointerPostProcessor;
+        this.resumeCanonicalDocumentService = resumeCanonicalDocumentService;
+        this.resumeDocumentQualityValidator = resumeDocumentQualityValidator;
         this.resumeParseProperties = resumeParseProperties;
         this.objectMapper = objectMapper;
         this.maxFileSize = maxFileSize;
@@ -305,6 +319,11 @@ public class ResumeServiceImpl implements ResumeService {
                 userId,
                 resume.getId(),
                 resume.getFileType());
+        // Slice A：（重新）解析开始时交付质量回到 PENDING；
+        // 新结论产生前禁止用旧结论创建新分析任务，解析完成后由确定性验证裁决终态。
+        resumeParseResultMapper.update(null, new LambdaUpdateWrapper<ResumeParseResult>()
+                .eq(ResumeParseResult::getResumeId, resume.getId())
+                .set(ResumeParseResult::getQualityStatus, ResumeQualityStatus.QUALITY_PENDING));
 
         String extractedText = null;
         ResumeTextQualityResultDTO qualityResult = null;
@@ -319,6 +338,7 @@ public class ResumeServiceImpl implements ResumeService {
             qualityResult = resumeTextQualityCheckService.check(extractedText, resume.getFileType());
             if (qualityResult.failed()) {
                 ResumeParseResult parseResult = saveParseResult(
+                        userId,
                         resume.getId(),
                         PARSE_STATUS_FAILED,
                         extractedText,
@@ -327,7 +347,8 @@ public class ResumeServiceImpl implements ResumeService {
                         null,
                         qualityResult.getMessage(),
                         qualityResult,
-                        null);
+                        null,
+                        CanonicalQualitySnapshot.failed());
                 log.warn("Resume parse stopped by text quality: userId={}, resumeId={}, qualityStatus={}, issues={}",
                         userId,
                         resume.getId(),
@@ -408,8 +429,14 @@ public class ResumeServiceImpl implements ResumeService {
             mergeStructuredQualityWarnings(structuredContent, structuredParseResult.getQualityWarnings(), parseQualityResult.getWarnings());
             applyDisplayModels(userId, resume.getId(), parseMode, structuredContent, selection);
             String structuredJson = objectMapper.writeValueAsString(structuredContent);
+            // Slice A：候选解析 → canonical 交付文档 + 未决候选项，由确定性验证裁决质量状态。
+            CanonicalQualitySnapshot canonicalSnapshot = buildCanonicalSnapshot(structuredContent);
             String parseStatus = parseQualityResult.failed() ? PARSE_STATUS_FAILED : PARSE_STATUS_SUCCESS;
+            if (parseQualityResult.failed()) {
+                canonicalSnapshot = CanonicalQualitySnapshot.failed();
+            }
             ResumeParseResult parseResult = saveParseResult(
+                    userId,
                     resume.getId(),
                     parseStatus,
                     extractedText,
@@ -418,8 +445,9 @@ public class ResumeServiceImpl implements ResumeService {
                     structuredJson,
                     parseQualityResult.failed() ? parseQualityResult.getMessage() : null,
                     qualityResult,
-                    parseQualityResult);
-            log.info("Resume parse finished: userId={}, resumeId={}, parseStatus={}, extractedTextLength={}, cleanedTextLength={}, sectionCount={}, textQualityStatus={}, parseQualityStatus={}, parseQualityWarnings={}",
+                    parseQualityResult,
+                    canonicalSnapshot);
+            log.info("Resume parse finished: userId={}, resumeId={}, parseStatus={}, extractedTextLength={}, cleanedTextLength={}, sectionCount={}, textQualityStatus={}, parseQualityStatus={}, parseQualityWarnings={}, qualityStatus={}",
                     userId,
                     resume.getId(),
                     parseStatus,
@@ -428,10 +456,12 @@ public class ResumeServiceImpl implements ResumeService {
                     cleanResult.getSections() == null ? 0 : cleanResult.getSections().size(),
                     qualityResult.getStatus(),
                     parseQualityResult.getStatus(),
-                    parseQualityResult.getWarnings());
+                    parseQualityResult.getWarnings(),
+                    canonicalSnapshot.qualityStatus());
             return toParseResultVO(parseResult);
         } catch (JsonProcessingException exception) {
             ResumeParseResult parseResult = saveParseResult(
+                    userId,
                     resume.getId(),
                     PARSE_STATUS_FAILED,
                     extractedText,
@@ -440,7 +470,8 @@ public class ResumeServiceImpl implements ResumeService {
                     null,
                     "结构化解析结果序列化失败",
                     qualityResult,
-                    parseQualityResult);
+                    parseQualityResult,
+                    CanonicalQualitySnapshot.failed());
             log.warn("Resume parse failed: userId={}, resumeId={}, reason={}",
                     userId,
                     resume.getId(),
@@ -453,6 +484,7 @@ public class ResumeServiceImpl implements ResumeService {
             }
             String errorMessage = normalizeErrorMessage(exception);
             ResumeParseResult parseResult = saveParseResult(
+                    userId,
                     resume.getId(),
                     PARSE_STATUS_FAILED,
                     extractedText,
@@ -461,7 +493,8 @@ public class ResumeServiceImpl implements ResumeService {
                     null,
                     errorMessage,
                     qualityResult,
-                    parseQualityResult);
+                    parseQualityResult,
+                    CanonicalQualitySnapshot.failed());
             log.warn("Resume parse failed: userId={}, resumeId={}, reason={}",
                     userId,
                     resume.getId(),
@@ -550,6 +583,7 @@ public class ResumeServiceImpl implements ResumeService {
     }
 
     private ResumeParseResult saveParseResult(
+            Long userId,
             Long resumeId,
             String parseStatus,
             String extractedText,
@@ -558,7 +592,8 @@ public class ResumeServiceImpl implements ResumeService {
             String structuredJson,
             String errorMessage,
             ResumeTextQualityResultDTO qualityResult,
-            ResumeParseQualityResultDTO parseQualityResult) {
+            ResumeParseQualityResultDTO parseQualityResult,
+            CanonicalQualitySnapshot canonicalSnapshot) {
         LocalDateTime now = LocalDateTime.now();
         ResumeParseResult parseResult = resumeParseResultMapper.selectOne(new LambdaQueryWrapper<ResumeParseResult>()
                 .eq(ResumeParseResult::getResumeId, resumeId));
@@ -582,6 +617,14 @@ public class ResumeServiceImpl implements ResumeService {
         parseResult.setParseQualityWarnings(serializeParseQualityWarnings(parseQualityResult));
         parseResult.setParseQualityMessage(truncateErrorMessage(parseQualityResult == null ? null : parseQualityResult.getMessage()));
         parseResult.setParseQualityScore(parseQualityResult == null ? null : parseQualityResult.getScore());
+        CanonicalQualitySnapshot snapshot = canonicalSnapshot == null
+                ? CanonicalQualitySnapshot.failed()
+                : canonicalSnapshot;
+        parseResult.setQualityStatus(snapshot.qualityStatus());
+        parseResult.setQualityIssues(snapshot.qualityIssuesJson());
+        parseResult.setUnresolvedItems(snapshot.unresolvedItemsJson());
+        parseResult.setCanonicalSourceVersionId(
+                persistCanonicalSourceVersion(userId, resumeId, snapshot, now));
         parseResult.setUpdatedAt(now);
 
         if (parseResult.getId() == null) {
@@ -608,6 +651,10 @@ public class ResumeServiceImpl implements ResumeService {
                 .set(ResumeParseResult::getParseQualityWarnings, parseResult.getParseQualityWarnings())
                 .set(ResumeParseResult::getParseQualityMessage, parseResult.getParseQualityMessage())
                 .set(ResumeParseResult::getParseQualityScore, parseResult.getParseQualityScore())
+                .set(ResumeParseResult::getQualityStatus, parseResult.getQualityStatus())
+                .set(ResumeParseResult::getQualityIssues, parseResult.getQualityIssues())
+                .set(ResumeParseResult::getUnresolvedItems, parseResult.getUnresolvedItems())
+                .set(ResumeParseResult::getCanonicalSourceVersionId, parseResult.getCanonicalSourceVersionId())
                 .set(ResumeParseResult::getUpdatedAt, parseResult.getUpdatedAt()));
     }
 
@@ -713,6 +760,30 @@ public class ResumeServiceImpl implements ResumeService {
         }
     }
 
+    private Long persistCanonicalSourceVersion(
+            Long userId, Long resumeId, CanonicalQualitySnapshot snapshot, LocalDateTime now) {
+        if (snapshot == null
+                || ResumeQualityStatus.QUALITY_FAILED.equals(snapshot.qualityStatus())
+                || snapshot.canonicalDocumentJson() == null
+                || snapshot.canonicalDocumentJson().isBlank()) {
+            return null;
+        }
+        ResumeVersion source = new ResumeVersion();
+        source.setUserId(userId);
+        source.setResumeId(resumeId);
+        source.setVersionType("SOURCE");
+        source.setSourceType("PARSED_UPLOAD");
+        source.setContentStatus("READY");
+        source.setStructuredContent(snapshot.canonicalDocumentJson());
+        source.setContentRevision(0L);
+        source.setCreatedAt(now);
+        source.setUpdatedAt(now);
+        if (resumeVersionMapper.insert(source) != 1 || source.getId() == null) {
+            throw new BusinessException(500, "简历 canonical 内容保存失败");
+        }
+        return source.getId();
+    }
+
     private ResumeListVO toListVO(Resume resume, ResumeParseResult parseResult) {
         return ResumeListVO.builder()
                 .id(resume.getId())
@@ -721,6 +792,8 @@ public class ResumeServiceImpl implements ResumeService {
                 .fileSize(resume.getFileSize())
                 .uploadStatus(resume.getUploadStatus())
                 .parseStatus(parseResult == null ? "PENDING" : parseResult.getParseStatus())
+                .qualityStatus(parseResult == null ? null : parseResult.getQualityStatus())
+                .canonicalReady(parseResult != null && parseResult.getCanonicalSourceVersionId() != null)
                 .parseErrorMessage(parseResult == null ? null : parseResult.getErrorMessage())
                 .createdAt(resume.getCreatedAt())
                 .build();
@@ -754,8 +827,26 @@ public class ResumeServiceImpl implements ResumeService {
                 .parseQualityWarnings(parseResult.getParseQualityWarnings())
                 .parseQualityMessage(parseResult.getParseQualityMessage())
                 .parseQualityScore(parseResult.getParseQualityScore())
+                .qualityStatus(parseResult.getQualityStatus())
+                .qualityIssues(parseResult.getQualityIssues())
+                .unresolvedItems(parseResult.getUnresolvedItems())
+                .canonicalDocument(readCanonicalDocument(parseResult))
                 .updatedAt(parseResult.getUpdatedAt())
                 .build();
+    }
+
+    private String readCanonicalDocument(ResumeParseResult parseResult) {
+        Long sourceVersionId = parseResult == null ? null : parseResult.getCanonicalSourceVersionId();
+        if (sourceVersionId == null) {
+            return null;
+        }
+        ResumeVersion source = resumeVersionMapper.selectOne(new LambdaQueryWrapper<ResumeVersion>()
+                .eq(ResumeVersion::getId, sourceVersionId)
+                .eq(ResumeVersion::getResumeId, parseResult.getResumeId())
+                .eq(ResumeVersion::getVersionType, "SOURCE")
+                .isNull(ResumeVersion::getSourceVersionId)
+                .isNull(ResumeVersion::getJobTargetId));
+        return source == null ? null : source.getStructuredContent();
     }
 
     private String serializeQualityIssues(ResumeTextQualityResultDTO qualityResult) {
@@ -1221,6 +1312,41 @@ public class ResumeServiceImpl implements ResumeService {
 
     private long elapsedMs(long startedAt) {
         return java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
+    }
+
+    /** 解析完成时的 canonical 交付结果；文档随后唯一物化到 SOURCE structured_content。 */
+    private record CanonicalQualitySnapshot(
+            String qualityStatus,
+            String qualityIssuesJson,
+            String unresolvedItemsJson,
+            String canonicalDocumentJson) {
+
+        static CanonicalQualitySnapshot failed() {
+            return new CanonicalQualitySnapshot(ResumeQualityStatus.QUALITY_FAILED, null, null, null);
+        }
+    }
+
+    private CanonicalQualitySnapshot buildCanonicalSnapshot(ResumeStructuredContentDTO structuredContent) {
+        // 没有原始文本就无法证明任何候选字段来自用户材料；宁可失败，也不把 AI/旧字段当事实。
+        if (structuredContent == null
+                || structuredContent.getRawText() == null
+                || structuredContent.getRawText().isBlank()) {
+            return CanonicalQualitySnapshot.failed();
+        }
+        ResumeCanonicalDocumentService.BuildResult buildResult =
+                resumeCanonicalDocumentService.build(structuredContent);
+        ResumeDocumentQualityValidator.ValidationResult validation =
+                resumeDocumentQualityValidator.validate(buildResult.document(), buildResult.unresolvedItems());
+        try {
+            return new CanonicalQualitySnapshot(
+                    validation.qualityStatus(),
+                    objectMapper.writeValueAsString(validation.issues()),
+                    objectMapper.writeValueAsString(buildResult.unresolvedItems()),
+                    objectMapper.writeValueAsString(buildResult.document()));
+        } catch (JsonProcessingException exception) {
+            log.warn("Canonical document snapshot serialize failed, fail closed to NEEDS_REVIEW");
+            return CanonicalQualitySnapshot.failed();
+        }
     }
 
     private String serializeParseQualityWarnings(ResumeParseQualityResultDTO parseQualityResult) {

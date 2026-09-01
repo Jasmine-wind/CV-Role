@@ -5,6 +5,10 @@ export interface ResumeListItem {
   fileSize: number
   uploadStatus: string
   parseStatus: 'PENDING' | 'PROCESSING' | 'SUCCESS' | 'FAILED' | string
+  /** Slice A 交付质量状态：READY / NEEDS_REVIEW / FAILED / PENDING。 */
+  qualityStatus: 'READY' | 'NEEDS_REVIEW' | 'FAILED' | 'PENDING' | string | null
+  /** Whether the current parse has a materialized canonical SOURCE version. */
+  canonicalReady?: boolean
   parseErrorMessage: string | null
   createdAt: string
 }

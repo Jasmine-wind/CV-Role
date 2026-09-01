@@ -74,14 +74,14 @@ public class ResumeStructureParseServiceImpl implements ResumeStructureParseServ
     static {
         SECTION_ALIASES.put("BASIC_INFO", List.of("个人信息", "基本信息", "联系方式", "个人资料", "Profile", "Personal Info"));
         SECTION_ALIASES.put("EDUCATION", List.of("教育经历", "教育背景", "学习经历", "学历背景", "Education", "Educational Background"));
-        SECTION_ALIASES.put("SKILLS", List.of("专业技能", "技术能力", "技术能力描述", "技能关键词", "技能清单", "技术栈", "核心技能", "核心能力", "个人技能", "IT技能", "IT 技能", "Technique", "Skills", "Technical Skills", "Core Competencies"));
+        SECTION_ALIASES.put("SKILLS", List.of("技能", "专业技能", "技术能力", "技术能力描述", "技能关键词", "技能清单", "技术栈", "核心技能", "核心能力", "个人技能", "IT技能", "IT 技能", "Technique", "Skills", "Technical Skills", "Core Competencies"));
         SECTION_ALIASES.put("WORK_EXPERIENCES", List.of("工作经历", "工作经验", "职业经历", "任职经历", "任职公司", "从业经历", "Work Experience", "Professional Experience", "Employment History", "Experience"));
         SECTION_ALIASES.put("INTERNSHIPS", List.of("实习经历", "实习经验", "Internship", "Internship Experience"));
         SECTION_ALIASES.put("PROJECTS", List.of("项目经历", "项目经验", "项目介绍", "项目实践", "项目作品", "项目名称", "参加项目描述", "实习/项目经历", "实习 / 项目经历", "科研项目", "研究项目", "Projects", "Project Experience"));
         SECTION_ALIASES.put("CAMPUS_EXPERIENCES", List.of("在校经历", "校园经历", "校园实践", "社会实践", "社团经历", "学生工作", "Campus Experience", "Activities"));
         SECTION_ALIASES.put("AWARDS", List.of("获奖经历", "荣誉奖项", "奖项荣誉", "荣誉奖励", "获奖情况", "竞赛获奖", "Awards", "Honors"));
         SECTION_ALIASES.put("CERTIFICATES", List.of("证书", "资格证书", "专业证书", "认证", "Certificates", "Certifications"));
-        SECTION_ALIASES.put("SUMMARY", List.of("自我评价", "个人总结", "个人优势", "自我介绍", "个人评价", "职业总结", "About me", "Summary", "Self Evaluation"));
+        SECTION_ALIASES.put("SUMMARY", List.of("自我评价", "个人总结", "个人概述", "个人优势", "自我介绍", "个人评价", "职业总结", "About me", "Summary", "Self Evaluation"));
         SECTION_ALIASES.put("OTHERS", List.of("其他", "其他说明", "补充信息", "其他信息", "Additional Information", "Others"));
 
         putSkill("Java", "Java");
@@ -172,7 +172,7 @@ public class ResumeStructureParseServiceImpl implements ResumeStructureParseServ
         String age = extractAge(lines);
         String degree = extractHighestEducation(lines, normalizedText);
         String school = extractSchool(lines);
-        String location = extractLocation(lines);
+        String location = extractLocation(lines, name);
         String university = school;
         String major = extractMajor(lines);
         String graduationDate = extractGraduationDate(lines);
@@ -180,6 +180,9 @@ public class ResumeStructureParseServiceImpl implements ResumeStructureParseServ
         String languageAbility = extractLanguageAbility(lines);
         String ranking = extractRanking(lines);
         String jobIntention = extractJobIntention(lines);
+        if (jobIntention == null) {
+            jobIntention = extractHeaderJobIntention(lines, name);
+        }
         String workYears = extractWorkYears(normalizedText);
         String resumeType = resolveResumeType(normalizedText, safeSections, jobIntention, workYears);
 
@@ -263,8 +266,8 @@ public class ResumeStructureParseServiceImpl implements ResumeStructureParseServ
     }
 
     private List<String> splitLines(String rawText) {
-        Set<String> seen = new LinkedHashSet<>();
         List<String> lines = new ArrayList<>();
+        String previousNormalizedLine = null;
         boolean beforeFirstHeading = true;
         for (String rawLine : rawText.lines().toList()) {
             String line = normalizeLine(rawLine);
@@ -273,9 +276,12 @@ public class ResumeStructureParseServiceImpl implements ResumeStructureParseServ
             }
             List<String> expandedLines = expandTopMixedHeaderLine(line, beforeFirstHeading);
             for (String expandedLine : expandedLines) {
-                if (seen.add(normalizeForDedupe(expandedLine))) {
+                String normalized = normalizeForDedupe(expandedLine);
+                // 只折叠相邻重复抽取，保留合法的跨章节重复事实。
+                if (!normalized.equals(previousNormalizedLine)) {
                     lines.add(expandedLine);
                 }
+                previousNormalizedLine = normalized;
             }
             if (matchHeading(line) != null) {
                 beforeFirstHeading = false;
@@ -293,29 +299,17 @@ public class ResumeStructureParseServiceImpl implements ResumeStructureParseServ
         }
         List<String> result = new ArrayList<>();
         String remaining = line.strip();
-        Matcher emailMatcher = EMAIL_PATTERN.matcher(remaining);
-        Matcher phoneMatcher = PHONE_PATTERN.matcher(remaining);
-        Matcher githubMatcher = GITHUB_PATTERN.matcher(remaining);
-        if (emailMatcher.find()) {
-            result.add(emailMatcher.group());
-            remaining = removeSpan(remaining, emailMatcher.start(), emailMatcher.end());
-            addHeaderTrailingSkill(result, remaining);
-            return result;
-        }
-        if (phoneMatcher.find()) {
-            result.add(phoneMatcher.group().strip());
-            remaining = removeSpan(remaining, phoneMatcher.start(), phoneMatcher.end());
-            addHeaderTrailingSkill(result, remaining);
-            return result;
-        }
-        if (githubMatcher.find()) {
-            result.add("GitHub: " + githubMatcher.group().strip());
-            remaining = removeSpan(remaining, githubMatcher.start(), githubMatcher.end());
-            addHeaderTrailingSkill(result, remaining);
+        // 依次抽出邮箱/电话/GitHub，各自成行；抽出后剩余内容（姓名等）必须保留，
+        // 不允许在只抽到一种联系方式时丢弃其余头部内容。
+        remaining = extractContactMatches(result, EMAIL_PATTERN, remaining, null);
+        remaining = extractContactMatches(result, PHONE_PATTERN, remaining, null);
+        remaining = extractContactMatches(result, GITHUB_PATTERN, remaining, "GitHub: ");
+        if (!result.isEmpty()) {
+            addHeaderTrailingContent(result, remaining);
             return result;
         }
         if (remaining.matches("^-+\\s+.*")) {
-            addHeaderTrailingSkill(result, remaining);
+            addHeaderTrailingContent(result, remaining.replaceFirst("^-+\\s+", ""));
             return result.isEmpty() ? List.of(line) : result;
         }
         String skill = trailingHeaderSkill(remaining);
@@ -326,6 +320,33 @@ public class ResumeStructureParseServiceImpl implements ResumeStructureParseServ
             }
         }
         return List.of(line);
+    }
+
+    /** 把模式命中的所有片段抽成独立行，返回剩余文本（未命中部分原样保留）。 */
+    private String extractContactMatches(List<String> result, Pattern pattern, String text, String prefix) {
+        Matcher matcher = pattern.matcher(text);
+        StringBuilder kept = new StringBuilder();
+        int lastEnd = 0;
+        while (matcher.find()) {
+            kept.append(text, lastEnd, matcher.start()).append(' ');
+            result.add((prefix == null ? "" : prefix) + matcher.group().strip());
+            lastEnd = matcher.end();
+        }
+        if (lastEnd == 0) {
+            return text;
+        }
+        kept.append(text.substring(lastEnd));
+        return kept.toString().replaceAll("\\s+", " ").strip();
+    }
+
+    /** 头部混合行抽出联系方式后的剩余内容不允许静默丢弃；命中技能词表则归一，否则整段保留。 */
+    private void addHeaderTrailingContent(List<String> result, String value) {
+        String cleaned = value == null ? "" : value.replaceFirst("^[-:：|·\\s]+", "").strip();
+        if (cleaned.isEmpty()) {
+            return;
+        }
+        String skill = trailingHeaderSkill(cleaned);
+        result.add(skill != null ? skill : cleaned);
     }
 
     private void addHeaderTrailingSkill(List<String> result, String value) {
@@ -453,12 +474,79 @@ public class ResumeStructureParseServiceImpl implements ResumeStructureParseServ
                 .orElse(null);
     }
 
-    private String extractLocation(List<String> lines) {
+    private String extractLocation(List<String> lines, String name) {
         String labeled = findFirstGroup(lines, LOCATION_PATTERN, "location");
         if (labeled != null) {
             return labeled;
         }
-        return findFirstGroup(lines, SCHOOL_LOCATION_PATTERN, "location");
+        String fromSchool = findFirstGroup(lines, SCHOOL_LOCATION_PATTERN, "location");
+        return fromSchool == null ? extractHeaderLocation(lines, name) : fromSchool;
+    }
+
+    /** 头部联系行中的城市是通信元数据的一部分，抽取后仍按 LOCATION 类型保留。 */
+    private String extractHeaderLocation(List<String> lines, String name) {
+        for (String line : headerLines(lines)) {
+            String residual = headerResidual(line);
+            if (residual != null
+                    && !residual.equals(name)
+                    && residual.matches("[\\u4e00-\\u9fa5]{2,12}")) {
+                return residual;
+            }
+        }
+        return null;
+    }
+
+    /** 无标签的头部职位标题只作为 jobIntention 候选，不从正文经历推断。 */
+    private String extractHeaderJobIntention(List<String> lines, String name) {
+        for (String line : headerLines(lines)) {
+            String candidate = line == null ? "" : line.strip();
+            if (candidate.isBlank()
+                    || (name != null && name.equals(candidate))
+                    || EMAIL_PATTERN.matcher(candidate).find()
+                    || PHONE_PATTERN.matcher(candidate).find()
+                    || GITHUB_PATTERN.matcher(candidate).find()
+                    || LINKEDIN_PATTERN.matcher(candidate).find()
+                    || candidate.matches("[\\u4e00-\\u9fa5]{2,12}")
+                    || candidate.length() > 40) {
+                continue;
+            }
+            if (candidate.matches(".*(?:工程师|开发|经理|总监|专员|设计师|顾问|运营|产品|测试|架构师|研究员).*")
+                    && !candidate.matches(".*[，,。；;].*")) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    private List<String> headerLines(List<String> lines) {
+        List<String> result = new ArrayList<>();
+        for (String line : lines == null ? List.<String>of() : lines) {
+            if (matchHeading(line) != null) {
+                break;
+            }
+            result.add(line);
+        }
+        return result;
+    }
+
+    private String headerResidual(String line) {
+        if (line == null || line.isBlank()) {
+            return null;
+        }
+        boolean hasContactToken = EMAIL_PATTERN.matcher(line).find()
+                || PHONE_PATTERN.matcher(line).find()
+                || GITHUB_PATTERN.matcher(line).find()
+                || LINKEDIN_PATTERN.matcher(line).find();
+        boolean hasHeaderSeparator = line.matches(".*[|·、,，;；/].*");
+        if (!hasContactToken && !hasHeaderSeparator) {
+            return null;
+        }
+        String residual = EMAIL_PATTERN.matcher(line).replaceAll(" ");
+        residual = PHONE_PATTERN.matcher(residual).replaceAll(" ");
+        residual = GITHUB_PATTERN.matcher(residual).replaceAll(" ");
+        residual = LINKEDIN_PATTERN.matcher(residual).replaceAll(" ");
+        residual = residual.replaceAll("[|·、,，;；/\\s]+", " ").strip();
+        return residual.isBlank() ? null : residual;
     }
 
     private String extractJobIntention(List<String> lines) {
@@ -835,6 +923,7 @@ public class ResumeStructureParseServiceImpl implements ResumeStructureParseServ
         }
 
         return lines.stream()
+                .map(this::stripContactTokens)
                 .map(this::cleanName)
                 .filter(this::isValidNameCandidate)
                 .map(name -> new NameCandidate(name, scoreNameCandidate(name)))
@@ -843,6 +932,18 @@ public class ResumeStructureParseServiceImpl implements ResumeStructureParseServ
                 .map(NameCandidate::name)
                 .findFirst()
                 .orElse(null);
+    }
+
+    /**
+     * 头部混合行（“姓名 电话 邮箱”）中，先剥离电话/邮箱再参与姓名候选评分，
+     * 避免姓名因与联系方式粘连而被丢弃。
+     */
+    private String stripContactTokens(String line) {
+        if (line == null) {
+            return null;
+        }
+        String withoutEmail = EMAIL_PATTERN.matcher(line).replaceAll(" ");
+        return PHONE_PATTERN.matcher(withoutEmail).replaceAll(" ");
     }
 
     private boolean isValidNameCandidate(String line) {
@@ -988,9 +1089,22 @@ public class ResumeStructureParseServiceImpl implements ResumeStructureParseServ
     }
 
     private boolean shouldKeepAsProjectContent(String currentType, HeadingMatch headingMatch, String line) {
-        return "PROJECTS".equals(currentType)
-                && "SKILLS".equals(headingMatch.sectionType())
-                && normalizeHeading(line).startsWith("技术栈");
+        if (!"PROJECTS".equals(currentType)) {
+            return false;
+        }
+        String normalizedLine = normalizeHeading(line);
+        if ("SKILLS".equals(headingMatch.sectionType())) {
+            return normalizedLine.startsWith("技术栈");
+        }
+        // 项目字段标签（尤其“项目名称”）也是 SECTION_ALIASES 中的兼容标题，
+        // 但在已有项目章节内必须保留为字段行，不能把一个项目拆成多个 raw section。
+        return "PROJECTS".equals(headingMatch.sectionType())
+                && (normalizedLine.startsWith("项目名称")
+                || normalizedLine.startsWith("项目名")
+                || normalizedLine.startsWith("项目描述")
+                || normalizedLine.startsWith("项目简介")
+                || normalizedLine.startsWith("项目介绍")
+                || normalizedLine.startsWith("系统简介"));
     }
 
     private String removeHeadingPrefix(String line, String heading) {
@@ -1036,6 +1150,13 @@ public class ResumeStructureParseServiceImpl implements ResumeStructureParseServ
                 .forEach(assignedLines::add);
     }
 
+    private boolean isLikelyHeaderJobTitle(String line) {
+        String candidate = line == null ? "" : line.strip();
+        return candidate.length() <= 40
+                && candidate.matches(".*(?:工程师|开发|经理|总监|专员|设计师|顾问|运营|产品|测试|架构师|研究员).*")
+                && !candidate.matches(".*[，,。；;].*");
+    }
+
     private boolean isPersonalInfoLine(String line) {
         return EMAIL_PATTERN.matcher(line).find()
                 || PHONE_PATTERN.matcher(line).find()
@@ -1047,6 +1168,8 @@ public class ResumeStructureParseServiceImpl implements ResumeStructureParseServ
                 || LANGUAGE_PATTERN.matcher(line).find()
                 || AGE_PATTERN.matcher(line).find()
                 || LOCATION_PATTERN.matcher(line).find()
+                || extractHeaderLocation(List.of(line), null) != null
+                || isLikelyHeaderJobTitle(line)
                 || isValidNameCandidate(line);
     }
 
@@ -1111,7 +1234,29 @@ public class ResumeStructureParseServiceImpl implements ResumeStructureParseServ
         if (summaryLines.isEmpty()) {
             return null;
         }
-        return String.join("；", summaryLines);
+        StringBuilder summary = new StringBuilder();
+        for (String line : summaryLines) {
+            if (summary.length() > 0 && shouldMergeWrappedLine(summary, line)) {
+                summary.append(line.strip());
+            } else {
+                if (summary.length() > 0) {
+                    summary.append('；');
+                }
+                summary.append(line.strip());
+            }
+        }
+        return summary.toString();
+    }
+
+    private boolean shouldMergeWrappedLine(StringBuilder previous, String current) {
+        if (previous == null || previous.length() == 0 || current == null || current.isBlank()) {
+            return false;
+        }
+        String previousText = previous.toString().strip();
+        String first = current.strip().substring(0, 1);
+        return (!previousText.matches(".*[。！？!?；;]$")
+                && "性均动至了和与的等到".contains(first))
+                || (previousText.length() >= 40 && current.strip().length() <= 20);
     }
 
     private List<String> extractOthers(List<ResumeTextSectionDTO> sections, Set<String> assignedLines) {

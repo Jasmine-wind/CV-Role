@@ -78,9 +78,8 @@ public class ResumePointerPostProcessorImpl implements ResumePointerPostProcesso
         List<ResumeIndexedLineDTO> matched = candidates.stream()
                 .filter(line -> matchesEvidence(line, evidence))
                 .toList();
-        if (matched.isEmpty() && rawSectionId != null) {
-            matched = candidates;
-        }
+        // 证据无法匹配时不附引用：回退整个章节会把无关行的引用错位到条目上，
+        // 宁可缺少 sourceRef 也不能指向错误行。
         if (matched.isEmpty()) {
             return null;
         }

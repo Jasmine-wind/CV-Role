@@ -414,7 +414,7 @@ class BulletRewriteServiceImplTest {
                                 .title("工作经历")
                                 .entries(List.of(ResumeDocumentEntryDTO.builder()
                                         .id("e-1")
-                                        .heading("某公司")
+                                        .organization("某公司")
                                         .bullets(List.of(ResumeDocumentBulletDTO.builder()
                                                 .id(BULLET_ID)
                                                 .text(bulletText)

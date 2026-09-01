@@ -332,10 +332,15 @@ final class ResumeStructuredResultAssembler {
             ResumeStructuredContentDTO content,
             List<ResumeExperienceDTO> experiences,
             List<ResumeRawSectionDTO> rawSections) {
-        List<ResumeProjectDTO> projects = new ArrayList<>();
-        projects.addAll(extractProjectsFromRawSections(rawSections));
+        List<ResumeProjectDTO> projects = new ArrayList<>(extractProjectsFromRawSections(rawSections));
         List<String> projectLines = unique(content.getProjects());
-        projects.addAll(ProjectSourceTextExtractor.extractFromLines(projectLines, findSourceSectionId(rawSections, "PROJECTS")));
+        // The raw section is the source-backed boundary. The legacy flat list is a lossy
+        // compatibility projection and can reorder project names away from their dated
+        // headers; only use it when no raw project candidate was recovered.
+        if (projects.isEmpty()) {
+            projects.addAll(ProjectSourceTextExtractor.extractFromLines(
+                    projectLines, findSourceSectionId(rawSections, "PROJECTS")));
+        }
         if (!projects.isEmpty()) {
             return ProjectSourceTextExtractor.expandProjects(projects);
         }
@@ -626,9 +631,10 @@ final class ResumeStructuredResultAssembler {
             String cleaned = removeProjectFieldLabels(value);
             for (String part : cleaned.split("[；;]\\s*|(?<=。)")) {
                 String item = part.strip();
-                if (!hasText(item) || isProjectFieldLabel(item) || !isResponsibilityLine(item)) {
+                if (!hasText(item) || isProjectFieldLabel(item)) {
                     continue;
                 }
+                // 保留责任描述中的结果/量化尾句，不因缺少“负责/实现”等谓语而丢失事实。
                 result.add(item);
             }
         }
@@ -898,9 +904,9 @@ final class ResumeStructuredResultAssembler {
         if (!hasText(line)) {
             return null;
         }
-        Matcher matcher = DATE_RANGE_PATTERN.matcher(line);
-        String cleaned = matcher.find() ? line.substring(matcher.end()).strip() : line.strip();
-        String[] parts = cleaned.split("\\s+");
+        // 组织名可能出现在日期区间之前或之后（“公司 2022.07 - 至今 职位”与“2022.07 - 至今 公司”都存在），
+        // 因此扫描整行 token 而不是只看日期后段。
+        String[] parts = line.strip().split("\\s+");
         for (String part : parts) {
             if (part.matches(".*(?:公司|集团|学校|学院|大学|中心|协会|社团|实验室).*")) {
                 return part;

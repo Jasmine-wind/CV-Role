@@ -7,7 +7,9 @@ import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.ArgumentMatchers.nullable;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
@@ -33,6 +35,7 @@ import com.winter.airesumeoptimizer.module.resume.config.ResumeParseProperties;
 import com.winter.airesumeoptimizer.module.resume.entity.Resume;
 import com.winter.airesumeoptimizer.module.resume.mapper.ResumeMapper;
 import com.winter.airesumeoptimizer.module.resume.mapper.ResumeParseResultMapper;
+import com.winter.airesumeoptimizer.module.optimization.mapper.ResumeVersionMapper;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeBlockDTO;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeParseOptionsDTO;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeParseQualityResultDTO;
@@ -45,7 +48,9 @@ import com.winter.airesumeoptimizer.module.resume.service.ResumeAiSectionClassif
 import com.winter.airesumeoptimizer.module.resume.service.ResumeAiStructuredParser;
 import com.winter.airesumeoptimizer.module.resume.service.ResumeBlockBuilder;
 import com.winter.airesumeoptimizer.module.resume.service.ResumeBlockReorderService;
+import com.winter.airesumeoptimizer.module.resume.service.ResumeCanonicalDocumentService;
 import com.winter.airesumeoptimizer.module.resume.service.ResumeDisplayModelService;
+import com.winter.airesumeoptimizer.module.resume.service.ResumeDocumentQualityValidator;
 import com.winter.airesumeoptimizer.module.resume.service.ResumeLineIndexer;
 import com.winter.airesumeoptimizer.module.resume.service.ResumeParseQualityCheckService;
 import com.winter.airesumeoptimizer.module.resume.service.ResumePointerPostProcessor;
@@ -67,8 +72,22 @@ import org.springframework.mock.web.MockMultipartFile;
 
 class ResumeServiceImplTest {
 
+    static {
+        // 纯单元测试没有 MyBatis 上下文，手动初始化 Lambda 列解析需要的表信息缓存。
+        com.baomidou.mybatisplus.core.MybatisConfiguration configuration =
+                new com.baomidou.mybatisplus.core.MybatisConfiguration();
+        com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(
+                new org.apache.ibatis.builder.MapperBuilderAssistant(configuration, ""), Resume.class);
+        com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(
+                new org.apache.ibatis.builder.MapperBuilderAssistant(configuration, ""), ResumeParseResult.class);
+        com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(
+                new org.apache.ibatis.builder.MapperBuilderAssistant(configuration, ""),
+                com.winter.airesumeoptimizer.module.optimization.entity.ResumeVersion.class);
+    }
+
     private final ResumeMapper resumeMapper = mock(ResumeMapper.class);
     private final ResumeParseResultMapper resumeParseResultMapper = mock(ResumeParseResultMapper.class);
+    private final ResumeVersionMapper resumeVersionMapper = mock(ResumeVersionMapper.class);
     private final ResumeAiAnalysisMapper resumeAiAnalysisMapper = mock(ResumeAiAnalysisMapper.class);
     private final JobMatchResultMapper jobMatchResultMapper = mock(JobMatchResultMapper.class);
     private final AiJobMatchResultMapper aiJobMatchResultMapper = mock(AiJobMatchResultMapper.class);
@@ -89,10 +108,15 @@ class ResumeServiceImplTest {
     private final ResumeDisplayModelService resumeDisplayModelService = mock(ResumeDisplayModelService.class);
     private final ResumeLineIndexer resumeLineIndexer = mock(ResumeLineIndexer.class);
     private final ResumePointerPostProcessor resumePointerPostProcessor = mock(ResumePointerPostProcessor.class);
+    private final ResumeCanonicalDocumentService resumeCanonicalDocumentService =
+            new ResumeCanonicalDocumentServiceImpl(new ObjectMapper());
+    private final ResumeDocumentQualityValidator resumeDocumentQualityValidator =
+            new ResumeDocumentQualityValidatorImpl();
     private final ResumeParseProperties resumeParseProperties = new ResumeParseProperties();
     private final ResumeServiceImpl service = new ResumeServiceImpl(
             resumeMapper,
             resumeParseResultMapper,
+            resumeVersionMapper,
             resumeAiAnalysisMapper,
             jobMatchResultMapper,
             aiJobMatchResultMapper,
@@ -113,6 +137,8 @@ class ResumeServiceImplTest {
             resumeDisplayModelService,
             resumeLineIndexer,
             resumePointerPostProcessor,
+            resumeCanonicalDocumentService,
+            resumeDocumentQualityValidator,
             resumeParseProperties,
             new ObjectMapper(),
             10 * 1024 * 1024,
@@ -210,6 +236,7 @@ class ResumeServiceImplTest {
         ResumeServiceImpl limitedService = new ResumeServiceImpl(
                 resumeMapper,
                 resumeParseResultMapper,
+                resumeVersionMapper,
                 resumeAiAnalysisMapper,
                 jobMatchResultMapper,
                 aiJobMatchResultMapper,
@@ -230,6 +257,8 @@ class ResumeServiceImplTest {
                 resumeDisplayModelService,
                 resumeLineIndexer,
                 resumePointerPostProcessor,
+                resumeCanonicalDocumentService,
+                resumeDocumentQualityValidator,
                 resumeParseProperties,
                 new ObjectMapper(),
                 5,
@@ -470,6 +499,40 @@ class ResumeServiceImplTest {
         assertThat(result.getTextQualityIssues()).contains("EMPTY_TEXT", "SCANNED_PDF");
         assertThat(result.getErrorMessage()).contains("扫描版图片 PDF");
         verify(resumeStructureParseService, never()).parse(anyString());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void parseShouldResetDeliveryQualityToPendingOnReparse() {
+        // Slice A：（重新）解析开始时交付质量回到 PENDING，新结论产生前不得用旧结论创建分析任务。
+        Resume resume = new Resume();
+        resume.setId(100L);
+        resume.setUserId(1L);
+        resume.setFileType("PDF");
+        resume.setObjectKey("resumes/1/demo.pdf");
+
+        when(resumeMapper.selectOne(any(Wrapper.class))).thenReturn(resume);
+        when(resumeTextExtractionService.extractText("resumes/1/demo.pdf", "PDF")).thenReturn("");
+        when(resumeTextQualityCheckService.check("", "PDF")).thenReturn(ResumeTextQualityResultDTO.builder()
+                .status("FAILED")
+                .issues(List.of("EMPTY_TEXT"))
+                .message("未能从文件中提取到有效文本")
+                .build());
+        ResumeParseResult existing = new ResumeParseResult();
+        existing.setId(200L);
+        existing.setResumeId(100L);
+        existing.setQualityStatus("READY");
+        when(resumeParseResultMapper.selectOne(any(Wrapper.class))).thenReturn(existing);
+
+        service.parse(1L, 100L);
+
+        ArgumentCaptor<Wrapper<ResumeParseResult>> updateCaptor = ArgumentCaptor.forClass(Wrapper.class);
+        verify(resumeParseResultMapper, atLeastOnce()).update(isNull(), updateCaptor.capture());
+        boolean pendingReset = updateCaptor.getAllValues().stream()
+                .filter(wrapper -> wrapper instanceof com.baomidou.mybatisplus.core.conditions.AbstractWrapper<?, ?, ?>)
+                .map(wrapper -> (com.baomidou.mybatisplus.core.conditions.AbstractWrapper<?, ?, ?>) wrapper)
+                .anyMatch(wrapper -> wrapper.getParamNameValuePairs().containsValue("PENDING"));
+        assertThat(pendingReset).isTrue();
     }
 
     @Test

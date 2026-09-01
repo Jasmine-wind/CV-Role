@@ -73,13 +73,11 @@ public class ResumeTextExtractionServiceImpl implements ResumeTextExtractionServ
     private String extractDocxText(InputStream inputStream) throws IOException {
         try (XWPFDocument document = new XWPFDocument(inputStream);
                 XWPFWordExtractor extractor = new XWPFWordExtractor(document)) {
-            List<String> textParts = collectDocxTextBlocks(document).stream()
-                    .map(ExtractedTextBlock::text)
-                    .toList();
-            if (textParts.isEmpty()) {
-                textParts = List.of(extractor.getText());
+            List<ExtractedTextBlock> textBlocks = collectDocxTextBlocks(document);
+            if (textBlocks.isEmpty()) {
+                return normalizeExtractedText(extractor.getText());
             }
-            return normalizeExtractedText(String.join("\n", textParts));
+            return normalizeExtractedText(textBlocks);
         }
     }
 
@@ -150,16 +148,69 @@ public class ResumeTextExtractionServiceImpl implements ResumeTextExtractionServ
         return fileType.trim().toUpperCase(Locale.ROOT);
     }
 
+    /**
+     * 只合并相邻的完全重复行；不能按全文去重，因为同一句经历可能合法地出现在不同章节。
+     * DOCX 文本框中的重复抽取通常相邻，足以处理该噪声，同时保留跨章节事实。
+     */
     private String normalizeExtractedText(String text) {
         if (text == null || text.isBlank()) {
             return "";
         }
-        Set<String> seen = new LinkedHashSet<>();
-        List<String> lines = text.lines()
-                .map(String::strip)
-                .filter(line -> !line.isBlank())
-                .filter(line -> seen.add(line.replaceAll("\\s+", " ").toLowerCase(Locale.ROOT)))
-                .toList();
+        List<String> lines = new ArrayList<>();
+        String previousKey = null;
+        for (String rawLine : text.lines().toList()) {
+            String line = rawLine.strip();
+            if (line.isBlank()) {
+                continue;
+            }
+            String key = line.replaceAll("\\s+", " ").toLowerCase(Locale.ROOT);
+            if (!key.equals(previousKey)) {
+                lines.add(line);
+            }
+            previousKey = key;
+        }
+        return String.join("\n", lines).strip();
+    }
+
+    private String normalizeExtractedText(List<ExtractedTextBlock> blocks) {
+        if (blocks == null || blocks.isEmpty()) {
+            return "";
+        }
+        List<String> lines = new ArrayList<>();
+        Set<String> explicitTextBoxLines = new LinkedHashSet<>();
+        for (ExtractedTextBlock block : blocks) {
+            if (block != null && "textbox".equals(block.sourceType()) && block.text() != null) {
+                block.text().lines()
+                        .map(String::strip)
+                        .filter(line -> !line.isBlank())
+                        .map(line -> line.replaceAll("\\s+", " ").toLowerCase(Locale.ROOT))
+                        .forEach(explicitTextBoxLines::add);
+            }
+        }
+        String previousKey = null;
+        String previousSourceType = null;
+        for (ExtractedTextBlock block : blocks) {
+            if (block == null || block.text() == null || block.text().isBlank()) {
+                continue;
+            }
+            for (String rawLine : block.text().lines().toList()) {
+                String line = rawLine.strip();
+                if (line.isBlank()) {
+                    continue;
+                }
+                String key = line.replaceAll("\\s+", " ").toLowerCase(Locale.ROOT);
+                // XWPF 可能同时把文本框作为段落和 textbox 返回；显式 textbox 是更准确的来源。
+                if (!"textbox".equals(block.sourceType()) && explicitTextBoxLines.contains(key)) {
+                    continue;
+                }
+                // 仅去除同一来源类型的相邻重复（尤其是重复文本框）；段落/表格内容不做全局去重。
+                if (!key.equals(previousKey) || !java.util.Objects.equals(block.sourceType(), previousSourceType)) {
+                    lines.add(line);
+                }
+                previousKey = key;
+                previousSourceType = block.sourceType();
+            }
+        }
         return String.join("\n", lines).strip();
     }
 

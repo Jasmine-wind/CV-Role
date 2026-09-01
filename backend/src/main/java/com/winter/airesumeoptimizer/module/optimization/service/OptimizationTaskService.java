@@ -46,6 +46,10 @@ public interface OptimizationTaskService {
 
     void attachAsyncTask(Long userId, Long optimizationTaskId, Long asyncTaskId);
 
+    /**
+     * Compatibility backfill for pre-Slice-A tasks. New tasks freeze their confirmed SOURCE at creation;
+     * this method must never replace an already-populated SOURCE.
+     */
     void captureResumeSnapshot(Long userId, Long optimizationTaskId, String structuredContent);
 
     void markRunning(Long userId, Long optimizationTaskId);
@@ -71,7 +75,27 @@ public interface OptimizationTaskService {
             Long jobTargetId,
             Long sourceResumeVersionId,
             Long targetResumeVersionId,
-            AiSelectionSnapshot aiSelection) {
+            AiSelectionSnapshot aiSelection,
+            String frozenResumeSnapshot) {
+
+        public ExecutionContext(
+                Long optimizationTaskId,
+                Long resumeId,
+                Long jobDescriptionId,
+                Long jobTargetId,
+                Long sourceResumeVersionId,
+                Long targetResumeVersionId,
+                AiSelectionSnapshot aiSelection) {
+            this(
+                    optimizationTaskId,
+                    resumeId,
+                    jobDescriptionId,
+                    jobTargetId,
+                    sourceResumeVersionId,
+                    targetResumeVersionId,
+                    aiSelection,
+                    null);
+        }
 
         public ExecutionContext(
                 Long optimizationTaskId,
@@ -87,6 +111,7 @@ public interface OptimizationTaskService {
                     jobTargetId,
                     sourceResumeVersionId,
                     targetResumeVersionId,
+                    null,
                     null);
         }
     }

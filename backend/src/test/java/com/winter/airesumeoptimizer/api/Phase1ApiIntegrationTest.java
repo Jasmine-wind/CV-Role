@@ -173,6 +173,9 @@ class Phase1ApiIntegrationTest {
     private ResumeIntakeService resumeIntakeService;
 
     @MockitoBean
+    private com.winter.airesumeoptimizer.module.resume.service.ResumeReviewService resumeReviewService;
+
+    @MockitoBean
     private ResumeAnalysisService resumeAnalysisService;
 
     @MockitoBean

@@ -74,6 +74,9 @@ export interface ExportPreflight {
   missingContact: boolean
   pageLimitExceeded: boolean
   overflowDetected: boolean
+  orphanFinalPage: boolean
+  readabilityTooSmall: boolean
+  needsReview: boolean
 }
 
 export interface WorkspacePreviewPdf {
@@ -108,6 +111,9 @@ export interface ExportArtifact {
   missingContact: boolean
   pageLimitExceeded: boolean
   overflowDetected: boolean
+  orphanFinalPage: boolean | null
+  readabilityTooSmall: boolean | null
+  documentGateStatus: 'PASS' | 'BLOCK' | null
   fileName: string
   createdAt: string
 }

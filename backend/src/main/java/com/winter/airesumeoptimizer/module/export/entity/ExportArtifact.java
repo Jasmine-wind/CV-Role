@@ -51,5 +51,14 @@ public class ExportArtifact {
 
     private Boolean overflowDetected;
 
+    /** Slice A 导出时刻的 Document Quality Gate 结果；历史行为 NULL。 */
+    private String documentGateStatus;
+
+    /** Slice A 导出时刻是否检出孤立末页；历史行为 NULL。 */
+    private Boolean orphanFinalPage;
+
+    /** Slice A 导出时刻是否低于最低可读字号；历史行为 NULL。 */
+    private Boolean readabilityTooSmall;
+
     private LocalDateTime createdAt;
 }

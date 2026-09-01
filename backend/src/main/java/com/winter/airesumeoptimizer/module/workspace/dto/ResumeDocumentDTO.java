@@ -16,6 +16,7 @@ import lombok.Setter;
 @Schema(description = "结构化简历文档，岗位版本编辑与后续渲染的唯一业务数据源")
 public class ResumeDocumentDTO {
 
+    /** RESUME_DOCUMENT_V1 remains the canonical business document schema. */
     public static final String SCHEMA_VERSION = "RESUME_DOCUMENT_V1";
 
     @Schema(description = "文档结构版本", example = "RESUME_DOCUMENT_V1")

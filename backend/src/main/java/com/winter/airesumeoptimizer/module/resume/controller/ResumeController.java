@@ -2,12 +2,15 @@ package com.winter.airesumeoptimizer.module.resume.controller;
 
 import com.winter.airesumeoptimizer.common.result.Result;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeParseOptionsDTO;
+import com.winter.airesumeoptimizer.module.resume.dto.ResumeReviewResolveRequestDTO;
 import com.winter.airesumeoptimizer.module.resume.service.ResumeAsyncTaskService;
 import com.winter.airesumeoptimizer.module.resume.service.ResumeIntakeService;
+import com.winter.airesumeoptimizer.module.resume.service.ResumeReviewService;
 import com.winter.airesumeoptimizer.module.resume.service.ResumeService;
 import com.winter.airesumeoptimizer.module.resume.vo.ResumeDetailVO;
 import com.winter.airesumeoptimizer.module.resume.vo.ResumeListVO;
 import com.winter.airesumeoptimizer.module.resume.vo.ResumeParseResultVO;
+import com.winter.airesumeoptimizer.module.resume.vo.ResumeReviewVO;
 import com.winter.airesumeoptimizer.module.resume.vo.ResumeUploadVO;
 import com.winter.airesumeoptimizer.module.task.vo.AsyncTaskVO;
 import com.winter.airesumeoptimizer.security.AuthenticatedUser;
@@ -15,6 +18,7 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.constraints.Positive;
+import jakarta.validation.Valid;
 import java.util.List;
 import org.springframework.http.MediaType;
 import org.springframework.security.core.Authentication;
@@ -39,14 +43,17 @@ public class ResumeController {
     private final ResumeService resumeService;
     private final ResumeAsyncTaskService resumeAsyncTaskService;
     private final ResumeIntakeService resumeIntakeService;
+    private final ResumeReviewService resumeReviewService;
 
     public ResumeController(
             ResumeService resumeService,
             ResumeAsyncTaskService resumeAsyncTaskService,
-            ResumeIntakeService resumeIntakeService) {
+            ResumeIntakeService resumeIntakeService,
+            ResumeReviewService resumeReviewService) {
         this.resumeService = resumeService;
         this.resumeAsyncTaskService = resumeAsyncTaskService;
         this.resumeIntakeService = resumeIntakeService;
+        this.resumeReviewService = resumeReviewService;
     }
 
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -113,6 +120,26 @@ public class ResumeController {
             Authentication authentication) {
         AuthenticatedUser authenticatedUser = (AuthenticatedUser) authentication.getPrincipal();
         return Result.success(resumeService.getParseResult(authenticatedUser.getUserId(), id));
+    }
+
+    @GetMapping("/{id}/review")
+    @Operation(summary = "查询解析确认视图", description = "查询待确认候选项与 canonical 交付文档")
+    public Result<ResumeReviewVO> review(
+            @PathVariable @Positive(message = "简历 ID 必须大于 0") Long id,
+            Authentication authentication) {
+        AuthenticatedUser authenticatedUser = (AuthenticatedUser) authentication.getPrincipal();
+        return Result.success(resumeReviewService.getReview(authenticatedUser.getUserId(), id));
+    }
+
+    @PostMapping("/{id}/review/resolve")
+    @Operation(summary = "处理待确认候选项", description = "接受（可编辑、可指定归属章节）或删除候选项")
+    public Result<ResumeReviewVO> resolveReview(
+            @PathVariable @Positive(message = "简历 ID 必须大于 0") Long id,
+            @Valid @RequestBody ResumeReviewResolveRequestDTO request,
+            Authentication authentication) {
+        AuthenticatedUser authenticatedUser = (AuthenticatedUser) authentication.getPrincipal();
+        return Result.success("已处理待确认项",
+                resumeReviewService.resolve(authenticatedUser.getUserId(), id, request));
     }
 
     @DeleteMapping("/{id}")

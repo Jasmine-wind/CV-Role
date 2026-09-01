@@ -5,11 +5,20 @@ import PageHeader from '@/components/common/PageHeader.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import ErrorState from '@/components/common/ErrorState.vue'
 import SkeletonBlock from '@/components/common/SkeletonBlock.vue'
-import { deleteResume, getResumeList, requestResumePreparation, uploadResume } from '@/api/resume'
+import {
+  deleteResume,
+  getResumeList,
+  getResumeReview,
+  requestResumePreparation,
+  resolveResumeReview,
+  uploadResume,
+} from '@/api/resume'
+import type { ResumeReviewResolveRequest, ResumeReviewUnresolvedItem } from '@/api/resume'
 import { startAsyncTaskPolling } from '@/utils/asyncTaskPolling'
 import type { AsyncTaskPollingController } from '@/utils/asyncTaskPolling'
 import type { AsyncTaskVO } from '@/types/task'
 import type { ResumeListItem } from '@/types/resume'
+import type { ResumeDocument, ResumeDocumentBullet } from '@/types/resume-document'
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024
 const ACCEPTED_EXTENSIONS = ['pdf', 'doc', 'docx']
@@ -39,8 +48,6 @@ const formatFileSize = (size: number) => {
   return `${Math.max(size / 1024, 0.1).toFixed(1)} KB`
 }
 
-const formatDate = (value: string) => value.replace('T', ' ').slice(0, 16)
-
 const statusFor = (resume: ResumeListItem) => {
   const task = activeTasks.value[resume.id]
   if (task?.status === 'PENDING' || task?.status === 'RUNNING') {
@@ -50,6 +57,30 @@ const statusFor = (resume: ResumeListItem) => {
     }
   }
   if (resume.parseStatus === 'SUCCESS') {
+    if (resume.qualityStatus === 'PENDING') {
+      return {
+        label: '正在准备简历',
+        tone: 'warning' as const,
+      }
+    }
+    if (resume.canonicalReady === false) {
+      return {
+        label: '需要重新解析',
+        tone: 'warning' as const,
+      }
+    }
+    if (resume.qualityStatus === 'NEEDS_REVIEW') {
+      return {
+        label: '需要确认',
+        tone: 'warning' as const,
+      }
+    }
+    if (resume.qualityStatus === 'FAILED') {
+      return {
+        label: '无法使用',
+        tone: 'danger' as const,
+      }
+    }
     return {
       label: '已准备好',
       tone: 'success' as const,
@@ -65,6 +96,206 @@ const statusFor = (resume: ResumeListItem) => {
     label: '等待准备',
     tone: 'info' as const,
   }
+}
+
+/** Slice A 确认面板：只展示 canonical 层候选内容，不暴露解析内部结构。 */
+interface ReviewDraftContact {
+  type?: string
+  label?: string | null
+  value?: string
+}
+
+interface ReviewDraftFragment {
+  text?: string
+}
+
+interface ReviewDraftEntry {
+  kind?: string
+  organization?: string | null
+  role?: string | null
+  school?: string | null
+  degree?: string | null
+  major?: string | null
+  startDate?: string | null
+  endDate?: string | null
+  group?: string | null
+  skillItems?: string[] | null
+  bullets: ResumeDocumentBullet[]
+}
+
+interface ReviewItemState {
+  item: ResumeReviewUnresolvedItem
+  contact: ReviewDraftContact
+  entry: ReviewDraftEntry
+  text: string
+}
+
+const reviewResumeId = ref<number | null>(null)
+const reviewLoading = ref(false)
+const reviewQualityStatus = ref<string | null>(null)
+const reviewName = ref('')
+const reviewNameMissing = ref(false)
+const reviewItems = ref<ReviewItemState[]>([])
+const resolvingItemId = ref<string | null>(null)
+
+const CONTACT_TYPE_OPTIONS = [
+  { value: 'PHONE', label: '电话' },
+  { value: 'EMAIL', label: '邮箱' },
+  { value: 'WECHAT', label: '微信' },
+  { value: 'QQ', label: 'QQ' },
+  { value: 'LINKEDIN', label: 'LinkedIn' },
+  { value: 'GITHUB', label: 'GitHub' },
+  { value: 'WEBSITE', label: '个人网站' },
+  { value: 'LOCATION', label: '所在地' },
+  { value: 'OTHER', label: '其他' },
+]
+const REQUIRED_CONTACT_TYPE_OPTIONS = CONTACT_TYPE_OPTIONS.filter(
+  (option) => option.value === 'PHONE' || option.value === 'EMAIL',
+)
+
+const parseDraft = <T,>(draft: string): T => {
+  try {
+    return JSON.parse(draft) as T
+  } catch {
+    return {} as T
+  }
+}
+
+const entryDraftSummary = (draft: string) => {
+  const entry = parseDraft<ReviewDraftEntry>(draft)
+  const title = entry.organization || entry.school || entry.group || '待确认条目'
+  const details = [
+    entry.role,
+    entry.degree,
+    entry.major,
+    [entry.startDate, entry.endDate].filter(Boolean).join(' - '),
+    entry.skillItems?.filter(Boolean).join('、'),
+  ].filter((value): value is string => Boolean(value && value.trim()))
+  const bullets = (entry.bullets ?? [])
+    .map((bullet) => bullet.text?.trim())
+    .filter((value): value is string => Boolean(value))
+  return { title, details, bullets }
+}
+
+const updateReviewState = (review: Awaited<ReturnType<typeof getResumeReview>>) => {
+  reviewQualityStatus.value = review.qualityStatus
+  const document = parseDraft<Partial<ResumeDocument>>(review.canonicalDocument ?? '{}')
+  reviewName.value = document.basics?.name?.trim() ?? ''
+  reviewNameMissing.value = !reviewName.value
+  const items = review.unresolvedItems
+    ? (JSON.parse(review.unresolvedItems) as ResumeReviewUnresolvedItem[])
+    : []
+  reviewItems.value = items.map((item) => {
+    const contact = parseDraft<ReviewDraftContact>(item.canonicalDraft)
+    const entry = parseDraft<ReviewDraftEntry>(item.canonicalDraft)
+    const fragment = parseDraft<ReviewDraftFragment>(item.canonicalDraft)
+    entry.bullets = Array.isArray(entry.bullets)
+      ? entry.bullets.map((bullet, index) => ({
+          id: bullet.id || `review-${item.id}-${index}`,
+          text: bullet.text ?? '',
+        }))
+      : []
+    return {
+      item,
+      contact: {
+        type: contact.type ?? 'OTHER',
+        label: contact.label ?? null,
+        value: contact.value ?? '',
+      },
+      entry,
+      text: fragment.text ?? '',
+    }
+  })
+}
+
+const openReview = async (resumeId: number) => {
+  reviewResumeId.value = resumeId
+  reviewLoading.value = true
+  reviewItems.value = []
+  try {
+    const review = await getResumeReview(resumeId)
+    updateReviewState(review)
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '获取待确认内容失败')
+    reviewResumeId.value = null
+  } finally {
+    reviewLoading.value = false
+  }
+}
+
+const closeReview = () => {
+  reviewResumeId.value = null
+  reviewItems.value = []
+  reviewQualityStatus.value = null
+  reviewName.value = ''
+  reviewNameMissing.value = false
+}
+
+const applyReview = async (resumeId: number, payload: ResumeReviewResolveRequest) => {
+  resolvingItemId.value = payload.itemId
+  try {
+    const review = await resolveResumeReview(resumeId, {
+      ...payload,
+      ...(reviewName.value.trim() ? { name: reviewName.value.trim() } : {}),
+    })
+    updateReviewState(review)
+    if (review.qualityStatus === 'READY' && reviewItems.value.length === 0) {
+      ElMessage.success('确认完成，简历已可用于岗位分析')
+      closeReview()
+      await loadResumes()
+    }
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '确认操作失败')
+  } finally {
+    resolvingItemId.value = null
+  }
+}
+
+const editableEntryPayload = (entry: ReviewDraftEntry): ResumeReviewResolveRequest['entry'] => {
+  const fields = { ...entry }
+  delete fields.kind
+  return fields
+}
+
+const acceptReviewItem = (resumeId: number, state: ReviewItemState) => {
+  if (state.item.kind === 'CONTACT_CANDIDATE' || state.item.kind === 'REQUIRED_CONTACT_CANDIDATE') {
+    void applyReview(resumeId, {
+      itemId: state.item.id,
+      action: 'ACCEPT',
+      contactType: state.contact.type,
+      contactValue: state.contact.value,
+    })
+    return
+  }
+  if (state.item.kind === 'NAME_CANDIDATE') {
+    void applyReview(resumeId, {
+      itemId: state.item.id,
+      action: 'ACCEPT',
+      name: state.text,
+    })
+    return
+  }
+  if (state.item.kind === 'TEXT_FRAGMENT') {
+    void applyReview(resumeId, {
+      itemId: state.item.id,
+      action: 'ACCEPT',
+      text: state.text,
+    })
+    return
+  }
+  if (state.item.kind === 'ENTRY_CANDIDATE') {
+    void applyReview(resumeId, {
+      itemId: state.item.id,
+      action: 'ACCEPT',
+      entry: editableEntryPayload(state.entry),
+    })
+    return
+  }
+  void applyReview(resumeId, { itemId: state.item.id, action: 'ACCEPT' })
+}
+
+const deleteReviewItem = (resumeId: number, state: ReviewItemState) => {
+  void applyReview(resumeId, { itemId: state.item.id, action: 'DELETE' })
 }
 
 const loadResumes = async () => {
@@ -208,11 +439,15 @@ const handleUpload = async () => {
 
 const handleDelete = async (resume: ResumeListItem) => {
   try {
-    await ElMessageBox.confirm(`确认删除「${resume.originalFilename}」吗？相关分析结果也会删除。`, '删除简历', {
-      confirmButtonText: '删除',
-      cancelButtonText: '取消',
-      type: 'warning',
-    })
+    await ElMessageBox.confirm(
+      `确认删除「${resume.originalFilename}」吗？相关分析结果也会删除。`,
+      '删除简历',
+      {
+        confirmButtonText: '删除',
+        cancelButtonText: '取消',
+        type: 'warning',
+      },
+    )
   } catch {
     return
   }
@@ -233,7 +468,9 @@ const handleDelete = async (resume: ResumeListItem) => {
 
 onMounted(async () => {
   await loadResumes()
-  for (const resume of resumes.value.filter((item) => item.parseStatus === 'PENDING')) {
+  for (const resume of resumes.value.filter(
+    (item) => item.parseStatus === 'PENDING' || item.qualityStatus === 'PENDING',
+  )) {
     void prepareResume(resume, true)
   }
 })
@@ -258,14 +495,14 @@ onUnmounted(() => {
       </div>
       <label class="resume-file-picker">
         <span>{{ selectedFile ? '重新选择' : '选择文件' }}</span>
-        <input
-          ref="fileInput"
-          type="file"
-          accept=".pdf,.doc,.docx"
-          @change="handleFileChange"
-        />
+        <input ref="fileInput" type="file" accept=".pdf,.doc,.docx" @change="handleFileChange" />
       </label>
-      <el-button type="primary" :loading="uploading" :disabled="!selectedFile" @click="handleUpload">
+      <el-button
+        type="primary"
+        :loading="uploading"
+        :disabled="!selectedFile"
+        @click="handleUpload"
+      >
         上传
       </el-button>
     </section>
@@ -294,31 +531,174 @@ onUnmounted(() => {
           <span>{{ resume.fileType }}</span>
           <div>
             <strong>{{ resume.originalFilename }}</strong>
-            <small>{{ formatFileSize(resume.fileSize) }} · {{ formatDate(resume.createdAt) }}</small>
+            <small>上传后自动准备内容</small>
           </div>
         </div>
         <el-tag :type="statusFor(resume).tone" effect="light">{{ statusFor(resume).label }}</el-tag>
         <p v-if="resume.parseStatus === 'FAILED'" class="resume-simple-error">
           {{ resume.parseErrorMessage || '未能读取这份简历，请重试。' }}
         </p>
+        <p v-if="resume.qualityStatus === 'NEEDS_REVIEW'" class="resume-simple-error">
+          部分内容无法自动确认，需要你核对后才能用于岗位分析与导出。
+        </p>
+        <p v-if="resume.canonicalReady === false" class="resume-simple-error">
+          这份简历来自旧版本解析，需重新准备后才能开始新的岗位分析。
+        </p>
         <div class="resume-simple-actions">
           <el-button
-            v-if="resume.parseStatus !== 'SUCCESS' && !activeTasks[resume.id]"
+            v-if="resume.qualityStatus === 'NEEDS_REVIEW'"
+            type="warning"
+            plain
+            @click="reviewResumeId === resume.id ? closeReview() : openReview(resume.id)"
+          >
+            {{ reviewResumeId === resume.id ? '收起确认' : '去确认' }}
+          </el-button>
+          <el-button
+            v-if="
+              (resume.parseStatus !== 'SUCCESS' ||
+                resume.qualityStatus === 'FAILED' ||
+                resume.canonicalReady === false) &&
+              !activeTasks[resume.id]
+            "
             plain
             @click="prepareResume(resume)"
           >
             重试
           </el-button>
-          <el-button
-            type="danger"
-            text
-            :loading="deletingId === resume.id"
-            :disabled="Boolean(activeTasks[resume.id])"
-            @click="handleDelete(resume)"
-          >
-            删除
-          </el-button>
+          <details class="resume-item-more">
+            <summary>更多</summary>
+            <div class="resume-item-more-menu">
+              <el-button
+                type="danger"
+                text
+                :loading="deletingId === resume.id"
+                :disabled="Boolean(activeTasks[resume.id])"
+                @click="handleDelete(resume)"
+              >
+                删除简历
+              </el-button>
+            </div>
+          </details>
         </div>
+
+        <section v-if="reviewResumeId === resume.id" class="resume-review-panel">
+          <p v-if="reviewLoading">正在读取待确认内容…</p>
+          <template v-else>
+            <div v-if="reviewNameMissing" class="resume-review-name">
+              <label>
+                <span>姓名（请确认）</span>
+                <input v-model="reviewName" placeholder="请输入姓名" />
+              </label>
+            </div>
+            <p v-if="reviewItems.length === 0 && reviewQualityStatus === 'READY'">
+              已全部确认完成。
+            </p>
+            <p v-else-if="reviewItems.length === 0" class="resume-review-reason">
+              当前没有可直接确认的候选内容，请重新准备一份排版更清晰的简历后再试。
+            </p>
+            <article v-for="state in reviewItems" :key="state.item.id" class="resume-review-item">
+              <p class="resume-review-reason">{{ state.item.reason || '请确认以下内容' }}</p>
+              <div
+                v-if="
+                  state.item.kind === 'CONTACT_CANDIDATE' ||
+                  state.item.kind === 'REQUIRED_CONTACT_CANDIDATE'
+                "
+                class="resume-review-row"
+              >
+                <select v-model="state.contact.type" aria-label="联系方式类型">
+                  <option
+                    v-for="option in state.item.kind === 'REQUIRED_CONTACT_CANDIDATE'
+                      ? REQUIRED_CONTACT_TYPE_OPTIONS
+                      : CONTACT_TYPE_OPTIONS"
+                    :key="option.value"
+                    :value="option.value"
+                  >
+                    {{ option.label }}
+                  </option>
+                </select>
+                <input v-model="state.contact.value" placeholder="联系方式内容" />
+              </div>
+              <div v-else-if="state.item.kind === 'NAME_CANDIDATE'" class="resume-review-row">
+                <input v-model="state.text" aria-label="确认姓名" placeholder="姓名" />
+              </div>
+              <div v-else-if="state.item.kind === 'TEXT_FRAGMENT'" class="resume-review-row">
+                <textarea v-model="state.text" rows="2" placeholder="内容"></textarea>
+              </div>
+              <div
+                v-else-if="state.item.kind === 'ENTRY_CANDIDATE'"
+                class="resume-review-entry-form"
+              >
+                <input
+                  v-if="state.entry.kind === 'EDUCATION'"
+                  v-model="state.entry.school"
+                  placeholder="学校名（必填）"
+                />
+                <input
+                  v-else
+                  v-model="state.entry.organization"
+                  placeholder="公司或项目名（必填）"
+                />
+                <input v-model="state.entry.role" placeholder="职位或角色（可选）" />
+                <input
+                  v-if="state.entry.kind === 'EDUCATION'"
+                  v-model="state.entry.degree"
+                  placeholder="学历（可选）"
+                />
+                <input
+                  v-if="state.entry.kind === 'EDUCATION'"
+                  v-model="state.entry.major"
+                  placeholder="专业（可选）"
+                />
+                <div class="resume-review-date-row">
+                  <input v-model="state.entry.startDate" placeholder="开始时间（可选）" />
+                  <input v-model="state.entry.endDate" placeholder="结束时间（可选）" />
+                </div>
+                <textarea
+                  v-for="(bullet, index) in state.entry.bullets"
+                  :key="`${state.item.id}-bullet-${index}`"
+                  v-model="bullet.text"
+                  rows="2"
+                  placeholder="内容"
+                ></textarea>
+              </div>
+              <div v-else class="resume-review-entry-preview">
+                <strong>{{ entryDraftSummary(state.item.canonicalDraft).title }}</strong>
+                <span v-if="entryDraftSummary(state.item.canonicalDraft).details.length">
+                  {{ entryDraftSummary(state.item.canonicalDraft).details.join(' · ') }}
+                </span>
+                <p
+                  v-for="bullet in entryDraftSummary(state.item.canonicalDraft).bullets"
+                  :key="bullet"
+                >
+                  {{ bullet }}
+                </p>
+              </div>
+              <div class="resume-review-actions">
+                <el-button
+                  size="small"
+                  type="primary"
+                  :loading="resolvingItemId === state.item.id"
+                  @click="acceptReviewItem(resume.id, state)"
+                >
+                  接受
+                </el-button>
+                <el-button
+                  v-if="
+                    state.item.kind !== 'REQUIRED_CONTACT_CANDIDATE' &&
+                    state.item.kind !== 'NAME_CANDIDATE'
+                  "
+                  size="small"
+                  type="danger"
+                  plain
+                  :loading="resolvingItemId === state.item.id"
+                  @click="deleteReviewItem(resume.id, state)"
+                >
+                  删除
+                </el-button>
+              </div>
+            </article>
+          </template>
+        </section>
       </article>
     </section>
 
@@ -455,6 +835,128 @@ onUnmounted(() => {
 .resume-simple-actions {
   display: flex;
   align-items: center;
+  gap: 8px;
+}
+
+.resume-item-more {
+  position: relative;
+}
+
+.resume-item-more summary {
+  list-style: none;
+  padding: 7px 10px;
+  border-radius: var(--app-radius-md);
+  color: var(--app-text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.resume-item-more summary::-webkit-details-marker {
+  display: none;
+}
+
+.resume-item-more summary:hover,
+.resume-item-more summary:focus-visible {
+  color: var(--app-text);
+  background: var(--app-bg-soft);
+}
+
+.resume-item-more-menu {
+  position: absolute;
+  z-index: 4;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 120px;
+  padding: 4px;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-md);
+  background: var(--app-surface);
+  box-shadow: var(--app-shadow-soft);
+}
+
+.resume-item-more-menu .el-button {
+  width: 100%;
+  justify-content: flex-start;
+}
+
+.resume-review-panel {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 12px;
+  border-top: 1px dashed var(--app-border);
+  padding-top: 14px;
+}
+
+.resume-review-item {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-md);
+  padding: 12px;
+}
+
+.resume-review-reason {
+  margin: 0;
+  color: var(--app-text-secondary);
+  font-size: 13px;
+}
+
+.resume-review-name,
+.resume-review-entry-form {
+  display: grid;
+  gap: 8px;
+}
+
+.resume-review-name label {
+  display: grid;
+  gap: 6px;
+  color: var(--app-text-secondary);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.resume-review-row,
+.resume-review-date-row {
+  display: grid;
+  gap: 8px;
+}
+
+.resume-review-date-row {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.resume-review-name input,
+.resume-review-row input,
+.resume-review-row textarea,
+.resume-review-row select,
+.resume-review-entry-form input,
+.resume-review-entry-form textarea {
+  border: 1px solid var(--app-border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font: inherit;
+}
+
+.resume-review-entry-preview {
+  display: grid;
+  gap: 4px;
+  color: var(--app-text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.resume-review-entry-preview strong {
+  color: var(--app-text);
+}
+
+.resume-review-entry-preview p {
+  margin: 0;
+}
+
+.resume-review-actions {
+  display: flex;
+  gap: 8px;
 }
 
 @media (max-width: 760px) {

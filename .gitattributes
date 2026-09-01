@@ -1,2 +1,3 @@
-# Browser E2E fixtures are binary documents.
+# Test and browser E2E fixtures are binary documents.
+backend/src/test/resources/resumes/*.pdf binary
 web/e2e/fixtures/*.pdf binary

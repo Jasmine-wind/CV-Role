@@ -46,7 +46,7 @@ scripts/  生产运维脚本
 - `analysis`：诊断、优化建议、局部改写和聚合报告；旧 AI 匹配仍在其中，公开写入口已停用，仅服务历史兼容读取，不再是主链路正式结果。
 - `optimization`：`ResumeVersion`、`JobTarget`、`OptimizationTask`，负责版本派生、输入与配置快照、任务归属和正式结果入口。
 - `workspace`：Phase 4 优化工作区与 Phase 5 单 Bullet AI Suggest；以 `optimizationTaskId` 为唯一入口解析任务版本链，提供 TARGET 岗位版本的结构化简历文档读取、基于 `content_revision` 乐观并发的条件保存与恢复优化前版本，以及只读生成、事实闭包校验和会话内显式采纳。
-- `export`：Phase 6 PDF Preview / Export；只读取至少完成一次 CAS Save 的 TARGET `RESUME_DOCUMENT_V1`，生成带实际 preflight 和签名 receipt 的 PDF Preview；Export 验证 receipt 完整绑定后创建私有 `ExportArtifact`，并维护 READY / DELETE_PENDING 可重试生命周期。
+- `export`：Phase 6 PDF Preview / Export；只读取至少完成一次 CAS Save 的 TARGET `RESUME_DOCUMENT_V1`（Slice A 为其增加语义字段，历史 generic 形态只读升级），生成带实际 preflight 和签名 receipt 的 PDF Preview；Export 验证 receipt 完整绑定并通过文档 / PDF 两层质量门后创建私有 `ExportArtifact`，并维护 READY / DELETE_PENDING 可重试生命周期。
 - `evidence`：Phase 3 正式 Evidence Matching 与 Gap Analysis；岗位要求、简历证据与匹配结论的正式 Source of Truth。
 - `embedding`：文本分块、向量生成、相似度与 RAG 上下文；当前不进入正式证据匹配主链路。
 - `history`：旧历史聚合与 AI 结果回看。
@@ -56,7 +56,7 @@ scripts/  生产运维脚本
 - `ai/usage`：Provider attempt ledger、独立事务写入和 90 天 retention；不是产品漏斗 Source of Truth。
 - `demo`：只在明确 `demo` profile + property 下创建合成普通 User 数据，不参与生产域模型或授权。
 
-前端按 `api/`、`components/`、`layout/`、`router/`、`stores/`、`types/`、`utils/`、`views/` 分层。页面包含 Landing、首页、我的简历、按正式优化任务访问的岗位分析结果、按正式优化任务访问的优化工作区、达到样本门槛后从首页进入的岗位方向洞察、AI 设置、登录和注册；一级导航仍只有首页和我的简历，AI 设置与洞察都不进入首次使用步骤。全局壳只承担 navigation / account / 窄屏菜单（窄屏 sidebar 为 Drawer），页面标题与任务操作由各页面自身承担。Preview / Export 以工作区抽屉形式集成，仅保存成功状态可用。Element Plus 由 unplugin-vue-components 按需解析，路由懒加载；视觉变量集中在 `styles/tokens.scss`（近白背景、弱边框、少阴影、克制圆角、单一主色），状态色只用于真实反馈。
+前端按 `api/`、`components/`、`layout/`、`router/`、`stores/`、`types/`、`utils/`、`views/` 分层。页面包含 Landing、首页、我的简历、按正式优化任务访问的岗位分析结果、按正式优化任务访问的优化工作区、达到样本门槛后从首页进入的岗位方向洞察、AI 设置、登录和注册；一级导航仍只有首页和我的简历，AI 设置与洞察都不进入首次使用步骤。全局壳只承担 navigation / account / 窄屏菜单（窄屏 sidebar 为 Drawer），页面标题与任务操作由各页面自身承担。Preview / Export 以 Workspace 内的“编辑 / 预览”模式集成，Preview 使用完整文档阅读区域，仅保存成功状态可用；Workspace contextual inspector 只展示当前岗位要求上下文，完整分析仍留在 Analysis 页面。Element Plus 由 unplugin-vue-components 按需解析，路由懒加载；视觉变量集中在 `styles/tokens.scss`（近白背景、弱边框、少阴影、克制圆角、单一主色），状态色只用于真实反馈。
 
 ## 3. 当前主链路
 
@@ -73,9 +73,9 @@ scripts/  生产运维脚本
 → 保存成功后可在 Preview / Export 中选择内置模板，同步渲染服务端已保存内容得到 PDF；导出成功后生成带归属与生命周期记录的导出物
 ```
 
-`ResumeIntakeService`、`JobAnalysisService` 与 `OptimizationTaskService` 是默认用户流的深模块 seam：前者负责上传与准备，第二个负责后台分析编排，第三个负责正式业务身份、版本关系和快照。调用方不需要编排 Parse、Embedding、Prompt 或供应商步骤。`WorkspaceContentService` 是 Phase 4 的编辑 seam：只接受 optimizationTaskId，内部解析并校验 Task → SOURCE / TARGET / JobTarget / Resume / User 完整版本链，把冻结解析快照确定性转换为 RESUME_DOCUMENT_V1 编辑文档，并以单条条件 UPDATE 实现 expectedRevision 乐观并发；Workspace 不回写 SOURCE、resume_input_snapshot 或证据分析。Phase 3 已建立正式 Evidence / Gap 模型：正式分析结果是每个任务一条 `evidence_analyses` 及其 `evidence_requirements` / `requirement_evidences` 行，每条岗位要求只按当前冻结材料的支持强度判定为足够支持（MATCHED）、存在相关但不完整证据（PARTIAL_EVIDENCE）或未找到支持证据（NO_EVIDENCE）。具体匹配实现位于 `EvidenceMatchingStrategy` interface 之后（当前为单次 AI 结构化输出 + Requirement / quote / ResumeVersion 代码校核），后续可在不改动编排的情况下替换。该模型不判断用户现实世界中的完整能力，也不保留 EXPRESSION_GAP 兼容语义。
+`ResumeIntakeService`、`JobAnalysisService` 与 `OptimizationTaskService` 是默认用户流的深模块 seam：前者负责上传与准备，第二个负责后台分析编排，第三个负责正式业务身份、版本关系和快照。调用方不需要编排 Parse、Embedding、Prompt 或供应商步骤。`WorkspaceContentService` 是 Phase 4 的编辑 seam：只接受 optimizationTaskId，内部解析并校验 Task → SOURCE / TARGET / JobTarget / Resume / User 完整版本链，把候选解析经确定性验证与未决候选裁决后唯一物化为 `resume_versions.structured_content` 中的 RESUME_DOCUMENT_V1 SOURCE；解析表只保存当前 SOURCE 指针和审查 sidecar。任务引用该冻结 SOURCE 并把 canonical 文档写入 task 的 SOURCE/TARGET 快照，以单条条件 UPDATE 实现 expectedRevision 乐观并发；Workspace 不回写当前解析结果、任务输入快照或证据分析。Phase 3 已建立正式 Evidence / Gap 模型：正式分析结果是每个任务一条 `evidence_analyses` 及其 `evidence_requirements` / `requirement_evidences` 行，每条岗位要求只按当前冻结材料的支持强度判定为足够支持（MATCHED）、存在相关但不完整证据（PARTIAL_EVIDENCE）或未找到支持证据（NO_EVIDENCE）。具体匹配实现位于 `EvidenceMatchingStrategy` interface 之后（当前为单次 AI 结构化输出 + Requirement / quote / ResumeVersion 代码校核），后续可在不改动编排的情况下替换。该模型不判断用户现实世界中的完整能力，也不保留 EXPRESSION_GAP 兼容语义。
 
-`ResumePdfRenderer` 是 Phase 6 的渲染 seam：把结构化简历文档确定性映射为转义后的 Typst 数据文件，在隔离临时目录中用内置版本化模板（classic / modern / minimal 各 v1）同步编译为 PDF；固定创建时间戳使相同输入逐字节确定，PDFBox 随后解析真实页数并检查文字 glyph 是否超出页面 CropBox。渲染进程以 `--root` 限制文件读取，内置模板不引用外部包且用户内容无法触发 Typst 语法；当前没有 OS 级网络沙箱，该防御深度限制记录为残余风险。
+`ResumePdfRenderer` 是 Phase 6 的渲染 seam：把结构化简历文档确定性映射为转义后的 Typst 数据文件，在隔离临时目录中用内置版本化模板（classic / modern / minimal 当前各 v3，v2/v1 保留供历史导出物解释；按章节类型分支）同步编译为 PDF；固定创建时间戳与文档 metadata 使相同输入逐字节确定，PDFBox 随后解析真实页数、字号、末页 glyph 占用并检查文字是否超出页面 CropBox。渲染进程以 `--root` 限制文件读取，内置模板不引用外部包且用户内容无法触发 Typst 语法；生产镜像通过 `APP_RENDER_FONT_PATH` 指向只含审核过的静态 Noto CJK Regular/Bold 字体目录，并让 Typst 忽略宿主机字体，避免 Thin/variable fallback；当前没有 OS 级网络沙箱，该防御深度限制记录为残余风险。
 
 `WorkspaceExportService` 只调用 `WorkspaceContentService.getPersistedContentForRender`，因此 revision 0 的 snapshot 投影不能渲染。Preview receipt 由服务端短期签名并绑定 user / task / TARGET / revision / template+version / renderer / PDF checksum；Export 重新校验并重编译比对。`ExportArtifactCleanupService` 用独立小事务持久化 DELETE_PENDING，再删除对象和元数据；对象或元数据删除失败时记录仍可重试。Resume 与 JobDescription 是当前仅有的真实父删除入口，均在级联前调用该 seam。
 
@@ -89,7 +89,7 @@ scripts/  生产运维脚本
 - 文件访问经过后端鉴权；MinIO bucket 不作为公开下载入口。
 - 业务数据库结构只由 `db/migration/` 下的 Flyway 迁移维护。
 - 异步任务是真实状态机，不伪造进度百分比。
-- Phase 6 仅以已 CAS 持久化的 TARGET `RESUME_DOCUMENT_V1` 渲染，不使用 HTML、SOURCE、任务快照或证据分析，不反解析 PDF。revision 0 仍用于 Phase 4 初始化，但必须先原样 CAS Save 才能 Preview。模板是内置只读资源且不保存业务数据；未引入后台渲染任务。
+- Phase 6 仅以已 CAS 持久化的 TARGET `RESUME_DOCUMENT_V1` 渲染（Slice A 之前的 generic V1 内容读取时只读升级），不使用 HTML、原始解析候选、任务输入快照或证据分析，不反解析 PDF。revision 0 仍用于 Phase 4 初始化，但必须先原样 CAS Save 才能 Preview。模板是内置只读资源且不保存业务数据；未引入后台渲染任务。
 - Phase 9 Insight 在读取时按 `(userId, resumeId, SHA-256(resume_input_snapshot))` 建立兼容 cohort；近 180 天、去重后的最新 Task、最多 20 个不同 JD、至少 8 个样本。技术锚点只表示“岗位要求包含该字面词”，否则要求文本精确分组；输出只展示三态分布和原始追溯。
 - Phase 9 Observability 从既有业务表和 `ai_usage_records` 查询已提交事实。Usage 每次真实 dispatch 都独立记录，ledger 写入失败不改变业务结果；它不得被用作逻辑漏斗分母。Prompt、输入、输出、URL、Key 和成本不进入 ledger 或日志。
 - `demo` profile 使用确定性 in-process Provider，而生产 profile 仍只装配 pinned OpenAI-compatible Adapter；Demo 环境禁用 BYOK，采用普通 JWT/ownership/Storage/Typst 路径。

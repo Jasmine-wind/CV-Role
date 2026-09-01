@@ -3,9 +3,11 @@ package com.winter.airesumeoptimizer.module.export.service.impl;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -25,6 +27,7 @@ import com.winter.airesumeoptimizer.module.export.entity.ExportArtifact;
 import com.winter.airesumeoptimizer.module.export.mapper.ExportArtifactMapper;
 import com.winter.airesumeoptimizer.module.export.service.ArtifactDownload;
 import com.winter.airesumeoptimizer.module.export.service.ExportArtifactCleanupService;
+import com.winter.airesumeoptimizer.module.export.service.ExportDocumentGate;
 import com.winter.airesumeoptimizer.module.export.service.ExportPreflight;
 import com.winter.airesumeoptimizer.module.export.service.ExportPreflightChecker;
 import com.winter.airesumeoptimizer.module.export.service.PreviewReceiptClaims;
@@ -77,6 +80,8 @@ class WorkspaceExportServiceImplTest {
     @Mock
     private ExportPreflightChecker preflightChecker;
     @Mock
+    private ExportDocumentGate exportDocumentGate;
+    @Mock
     private PreviewReceiptService previewReceiptService;
     @Mock
     private ExportArtifactCleanupService exportArtifactCleanupService;
@@ -89,8 +94,12 @@ class WorkspaceExportServiceImplTest {
     void setUp() {
         service = new WorkspaceExportServiceImpl(
                 workspaceContentService, resumePdfRenderer, fileStorageService,
-                exportArtifactMapper, optimizationTaskMapper, preflightChecker, previewReceiptService,
-                exportArtifactCleanupService, transactionTemplate);
+                exportArtifactMapper, optimizationTaskMapper, preflightChecker, exportDocumentGate,
+                previewReceiptService, exportArtifactCleanupService, transactionTemplate);
+        // 默认放行文档质量门；阻断场景在用例内覆盖打桩。
+        lenient().when(exportDocumentGate.check(any(), any(), any()))
+                .thenReturn(new ExportDocumentGate.GateResult(
+                        ExportDocumentGate.STATUS_PASS, null, "READY", false));
     }
 
     private WorkspaceContentVO savedContent() {
@@ -118,18 +127,19 @@ class WorkspaceExportServiceImplTest {
     }
 
     private ExportPreflight preflight() {
-        return new ExportPreflight(2, false, false, false, List.of());
+        return new ExportPreflight(2, false, false, false, false, false, List.of());
     }
 
     private PreviewReceiptClaims receiptClaims(String templateId) {
         return new PreviewReceiptClaims(
                 USER_ID, TASK_ID, TARGET_VERSION_ID, REVISION,
-                templateId, "1", ResumePdfRenderer.RENDERER_VERSION, sha256(PDF));
+                templateId, ResumeTemplateId.fromValue(templateId).getTemplateVersion(),
+                ResumePdfRenderer.RENDERER_VERSION, sha256(PDF));
     }
 
     private void givenValidReceipt(String templateId) {
         when(previewReceiptService.verify(PREVIEW_RECEIPT)).thenReturn(receiptClaims(templateId));
-        when(preflightChecker.check(any(), any())).thenReturn(preflight());
+        when(preflightChecker.check(any(), any(), anyBoolean())).thenReturn(preflight());
     }
 
     private String sha256(byte[] content) {
@@ -156,7 +166,7 @@ class WorkspaceExportServiceImplTest {
         when(resumePdfRenderer.render(any(ResumeDocumentDTO.class), any(ResumeTemplateId.class)))
                 .thenReturn(renderResult());
         givenTaskWithTargetVersion();
-        when(preflightChecker.check(any(), any())).thenReturn(preflight());
+        when(preflightChecker.check(any(), any(), anyBoolean())).thenReturn(preflight());
         when(previewReceiptService.issue(any())).thenReturn(PREVIEW_RECEIPT);
 
         RenderedPdf rendered = service.preview(USER_ID, TASK_ID, "classic", REVISION);
@@ -185,6 +195,131 @@ class WorkspaceExportServiceImplTest {
                 .isInstanceOfSatisfying(BusinessException.class,
                         exception -> assertThat(exception.getCode()).isEqualTo(400));
         verify(workspaceContentService, never()).getPersistedContentForRender(anyLong(), anyLong());
+    }
+
+    @Test
+    void previewAllowsNeedsReviewContentAndSurfacesReviewFlag() {
+        // 待确认内容仍允许预览（审查工具），但 preflight 携带待确认标志；正式导出的阻断在 export 路径。
+        when(workspaceContentService.getPersistedContentForRender(USER_ID, TASK_ID)).thenReturn(savedContent());
+        when(resumePdfRenderer.render(any(ResumeDocumentDTO.class), any(ResumeTemplateId.class)))
+                .thenReturn(renderResult());
+        givenTaskWithTargetVersion();
+        when(exportDocumentGate.check(any(), any(), any()))
+                .thenReturn(new ExportDocumentGate.GateResult(
+                        ExportDocumentGate.STATUS_BLOCK,
+                        ExportDocumentGate.CODE_DOCUMENT_NOT_CONFIRMED,
+                        "NEEDS_REVIEW",
+                        true));
+        ExportPreflight reviewPreflight = new ExportPreflight(2, false, false, false, false, true, List.of());
+        when(preflightChecker.check(any(), any(), anyBoolean())).thenReturn(reviewPreflight);
+        when(previewReceiptService.issue(any())).thenReturn(PREVIEW_RECEIPT);
+
+        RenderedPdf rendered = service.preview(USER_ID, TASK_ID, "classic", REVISION);
+
+        assertThat(rendered.preflight().needsReview()).isTrue();
+        assertThat(rendered.previewReceipt()).isEqualTo(PREVIEW_RECEIPT);
+    }
+
+    @Test
+    void previewRejectsUnrenderableQualityBeforeRender() {
+        when(workspaceContentService.getPersistedContentForRender(USER_ID, TASK_ID)).thenReturn(savedContent());
+        givenTaskWithTargetVersion();
+        when(exportDocumentGate.check(any(), any(), any()))
+                .thenReturn(new ExportDocumentGate.GateResult(
+                        ExportDocumentGate.STATUS_BLOCK,
+                        ExportDocumentGate.CODE_RESUME_QUALITY_FAILED,
+                        "FAILED",
+                        false));
+
+        assertThatThrownBy(() -> service.preview(USER_ID, TASK_ID, "classic", REVISION))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        exception -> {
+                            assertThat(exception.getCode()).isEqualTo(409);
+                            assertThat(exception.getMessage()).contains("RESUME_QUALITY_FAILED");
+                        });
+        verify(resumePdfRenderer, never()).render(any(), any());
+    }
+
+    @Test
+    void exportRejectsWhenDocumentQualityGateBlocks() {
+        when(workspaceContentService.getPersistedContentForRender(USER_ID, TASK_ID)).thenReturn(savedContent());
+        givenTaskWithTargetVersion();
+        when(exportDocumentGate.check(any(), any(), any()))
+                .thenReturn(new ExportDocumentGate.GateResult(
+                        ExportDocumentGate.STATUS_BLOCK,
+                        ExportDocumentGate.CODE_DOCUMENT_NOT_CONFIRMED,
+                        "NEEDS_REVIEW",
+                        true));
+
+        WorkspaceExportRequestDTO request = new WorkspaceExportRequestDTO();
+        request.setTemplateId("classic");
+        request.setExpectedRevision(REVISION);
+        request.setPreviewReceipt(PREVIEW_RECEIPT);
+
+        assertThatThrownBy(() -> service.export(USER_ID, TASK_ID, request))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        exception -> {
+                            assertThat(exception.getCode()).isEqualTo(409);
+                            assertThat(exception.getMessage()).contains("DOCUMENT_NOT_CONFIRMED");
+                        });
+        verify(resumePdfRenderer, never()).render(any(), any());
+        verify(fileStorageService, never()).store(any());
+    }
+
+    @Test
+    void exportRejectsWhenPdfGateDetectsOverflowOrOrphanFinalPage() {
+        when(workspaceContentService.getPersistedContentForRender(USER_ID, TASK_ID)).thenReturn(savedContent());
+        givenTaskWithTargetVersion();
+        when(resumePdfRenderer.render(any(), any())).thenReturn(renderResult());
+
+        WorkspaceExportRequestDTO request = new WorkspaceExportRequestDTO();
+        request.setTemplateId("classic");
+        request.setExpectedRevision(REVISION);
+        request.setPreviewReceipt(PREVIEW_RECEIPT);
+
+        // 文字越界：正式导出阻断。
+        when(previewReceiptService.verify(PREVIEW_RECEIPT)).thenReturn(receiptClaims("classic"));
+        when(preflightChecker.check(any(), any(), anyBoolean()))
+                .thenReturn(new ExportPreflight(2, false, false, true, false, false, List.of()));
+        assertThatThrownBy(() -> service.export(USER_ID, TASK_ID, request))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        exception -> {
+                            assertThat(exception.getCode()).isEqualTo(409);
+                            assertThat(exception.getMessage()).contains("CONTENT_OUT_OF_PAGE_BOUNDS");
+                        });
+
+        // 孤立末页（页数 ≥2 且末页非空行 <3）：正式导出阻断。
+        when(preflightChecker.check(any(), any(), anyBoolean()))
+                .thenReturn(new ExportPreflight(2, false, false, false, true, false, List.of()));
+        assertThatThrownBy(() -> service.export(USER_ID, TASK_ID, request))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        exception -> {
+                            assertThat(exception.getCode()).isEqualTo(409);
+                            assertThat(exception.getMessage()).contains("ORPHAN_FINAL_PAGE");
+                        });
+        verify(fileStorageService, never()).store(any());
+    }
+
+    @Test
+    void exportRejectsUnreadableFontBeforeStorage() {
+        when(workspaceContentService.getPersistedContentForRender(USER_ID, TASK_ID)).thenReturn(savedContent());
+        givenTaskWithTargetVersion();
+        when(resumePdfRenderer.render(any(ResumeDocumentDTO.class), any(ResumeTemplateId.class)))
+                .thenReturn(renderResult());
+        when(previewReceiptService.verify(PREVIEW_RECEIPT)).thenReturn(receiptClaims("classic"));
+        when(preflightChecker.check(any(), any(), anyBoolean()))
+                .thenReturn(new ExportPreflight(1, false, false, false, false, true, false,
+                        List.of("READABILITY_TOO_SMALL")));
+
+        WorkspaceExportRequestDTO request = new WorkspaceExportRequestDTO();
+        request.setTemplateId("classic");
+        request.setExpectedRevision(REVISION);
+        request.setPreviewReceipt(PREVIEW_RECEIPT);
+
+        assertThatThrownBy(() -> service.export(USER_ID, TASK_ID, request))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        exception -> assertThat(exception.getMessage()).contains("READABILITY_TOO_SMALL"));
+        verify(fileStorageService, never()).store(any());
     }
 
     @Test
@@ -264,7 +399,7 @@ class WorkspaceExportServiceImplTest {
                 new PreviewReceiptClaims(USER_ID, TASK_ID, 100L, REVISION,
                         "classic", "1", ResumePdfRenderer.RENDERER_VERSION, sha256(PDF)),
                 new PreviewReceiptClaims(USER_ID, TASK_ID, TARGET_VERSION_ID, REVISION,
-                        "classic", "2", ResumePdfRenderer.RENDERER_VERSION, sha256(PDF)),
+                        "classic", "4", ResumePdfRenderer.RENDERER_VERSION, sha256(PDF)),
                 new PreviewReceiptClaims(USER_ID, TASK_ID, TARGET_VERSION_ID, REVISION,
                         "classic", "1", "another-renderer", sha256(PDF)));
 
@@ -284,7 +419,8 @@ class WorkspaceExportServiceImplTest {
         givenTaskWithTargetVersion();
         PreviewReceiptClaims differentChecksum = new PreviewReceiptClaims(
                 USER_ID, TASK_ID, TARGET_VERSION_ID, REVISION,
-                "classic", "1", ResumePdfRenderer.RENDERER_VERSION, "0".repeat(64));
+                "classic", ResumeTemplateId.CLASSIC.getTemplateVersion(),
+                ResumePdfRenderer.RENDERER_VERSION, "0".repeat(64));
         when(previewReceiptService.verify(PREVIEW_RECEIPT)).thenReturn(differentChecksum);
         when(resumePdfRenderer.render(any(), any())).thenReturn(renderResult());
         WorkspaceExportRequestDTO request = new WorkspaceExportRequestDTO();
@@ -323,7 +459,7 @@ class WorkspaceExportServiceImplTest {
         assertThat(stored.getTargetResumeVersionId()).isEqualTo(TARGET_VERSION_ID);
         assertThat(stored.getContentRevision()).isEqualTo(REVISION);
         assertThat(stored.getTemplateId()).isEqualTo("modern");
-        assertThat(stored.getTemplateVersion()).isEqualTo("1");
+        assertThat(stored.getTemplateVersion()).isEqualTo("3");
         assertThat(stored.getRendererVersion()).isEqualTo(ResumePdfRenderer.RENDERER_VERSION);
         assertThat(stored.getFileSize()).isEqualTo((long) PDF.length);
         assertThat(stored.getStatus()).isEqualTo("READY");

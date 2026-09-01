@@ -15,6 +15,7 @@ import com.winter.airesumeoptimizer.module.job.vo.JobDescriptionVO;
 import com.winter.airesumeoptimizer.module.optimization.service.OptimizationTaskService;
 import com.winter.airesumeoptimizer.module.optimization.service.OptimizationTaskService.ExecutionContext;
 import com.winter.airesumeoptimizer.module.optimization.vo.OptimizationTaskVO;
+import com.winter.airesumeoptimizer.module.resume.enums.ResumeQualityStatus;
 import com.winter.airesumeoptimizer.module.resume.service.ResumeService;
 import com.winter.airesumeoptimizer.module.resume.vo.ResumeParseResultVO;
 import com.winter.airesumeoptimizer.module.task.enums.AsyncTaskErrorCode;
@@ -190,22 +191,27 @@ public class JobAnalysisServiceImpl implements JobAnalysisService {
             optimizationTaskService.markRunning(userId, context.optimizationTaskId());
             asyncTaskService.markRunning(asyncTaskId, "正在读取岗位要求");
             asyncTaskService.updateStage(asyncTaskId, "正在准备简历内容");
-            ResumeParseResultVO resumeParseResult = context.aiSelection() == null
-                    ? ensureResumeReadyLegacy(userId, context.resumeId())
-                    : ensureResumeReady(userId, context.resumeId(), context.aiSelection());
-            if (!STATUS_SUCCESS.equals(resumeParseResult.getParseStatus())) {
-                failTask(
-                        asyncTaskId,
+            if (context.frozenResumeSnapshot() == null || context.frozenResumeSnapshot().isBlank()) {
+                ResumeParseResultVO resumeParseResult = context.aiSelection() == null
+                        ? ensureResumeReadyLegacy(userId, context.resumeId())
+                        : ensureResumeReady(userId, context.resumeId(), context.aiSelection());
+                if (!isConfirmedResume(resumeParseResult)) {
+                    failTask(
+                            asyncTaskId,
+                            userId,
+                            context.optimizationTaskId(),
+                            AsyncTaskErrorCode.FILE_PARSE_FAILED,
+                            resumeFailureMessage(resumeParseResult));
+                    return;
+                }
+                // Evidence / SOURCE / TARGET 只接收已经过质量门的 canonical 文档；
+                // structured_json 仍是候选解析产物，不能进入正式任务快照。
+                optimizationTaskService.captureResumeSnapshot(
                         userId,
                         context.optimizationTaskId(),
-                        AsyncTaskErrorCode.FILE_PARSE_FAILED,
-                        firstPresent(resumeParseResult.getErrorMessage(), "未能读取简历内容"));
-                return;
+                        resumeParseResult.getCanonicalDocument());
             }
-            optimizationTaskService.captureResumeSnapshot(
-                    userId,
-                    context.optimizationTaskId(),
-                    resumeParseResult.getStructuredJson());
+            // Retry 使用任务既有冻结快照；即使当前 Resume 之后重新解析，也不回写历史 Task。
 
             asyncTaskService.updateStage(asyncTaskId, "正在理解岗位要求");
             JobDescriptionVO parsedJob = jobDescriptionParseService.parse(
@@ -327,7 +333,8 @@ public class JobAnalysisServiceImpl implements JobAnalysisService {
     private ResumeParseResultVO ensureResumeReadyLegacy(Long userId, Long resumeId) {
         try {
             ResumeParseResultVO existing = resumeService.getParseResult(userId, resumeId);
-            if (STATUS_SUCCESS.equals(existing.getParseStatus())) {
+            if (isConfirmedResume(existing)
+                    || ResumeQualityStatus.QUALITY_NEEDS_REVIEW.equals(existing.getQualityStatus())) {
                 return existing;
             }
         } catch (BusinessException exception) {
@@ -344,7 +351,8 @@ public class JobAnalysisServiceImpl implements JobAnalysisService {
             AiSelectionSnapshot selection) {
         try {
             ResumeParseResultVO existing = resumeService.getParseResult(userId, resumeId);
-            if (STATUS_SUCCESS.equals(existing.getParseStatus())) {
+            if (isConfirmedResume(existing)
+                    || ResumeQualityStatus.QUALITY_NEEDS_REVIEW.equals(existing.getQualityStatus())) {
                 return existing;
             }
         } catch (BusinessException exception) {
@@ -353,6 +361,21 @@ public class JobAnalysisServiceImpl implements JobAnalysisService {
             }
         }
         return resumeService.parseWithSelection(userId, resumeId, selection);
+    }
+
+    private boolean isConfirmedResume(ResumeParseResultVO result) {
+        return result != null
+                && STATUS_SUCCESS.equals(result.getParseStatus())
+                && ResumeQualityStatus.QUALITY_READY.equals(result.getQualityStatus())
+                && result.getCanonicalDocument() != null
+                && !result.getCanonicalDocument().isBlank();
+    }
+
+    private String resumeFailureMessage(ResumeParseResultVO result) {
+        if (result != null && ResumeQualityStatus.QUALITY_NEEDS_REVIEW.equals(result.getQualityStatus())) {
+            return "简历内容存在待确认项，请先完成确认";
+        }
+        return firstPresent(result == null ? null : result.getErrorMessage(), "未能读取简历内容");
     }
 
     private void validateResumeId(Long resumeId) {

@@ -3,6 +3,7 @@ package com.winter.airesumeoptimizer.module.optimization.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.winter.airesumeoptimizer.common.exception.BusinessException;
 import com.winter.airesumeoptimizer.common.logging.LogSanitizer;
@@ -25,7 +26,11 @@ import com.winter.airesumeoptimizer.module.optimization.mapper.ResumeVersionMapp
 import com.winter.airesumeoptimizer.module.optimization.service.OptimizationTaskService;
 import com.winter.airesumeoptimizer.module.optimization.vo.OptimizationTaskVO;
 import com.winter.airesumeoptimizer.module.resume.entity.Resume;
+import com.winter.airesumeoptimizer.module.resume.entity.ResumeParseResult;
+import com.winter.airesumeoptimizer.module.resume.enums.ResumeQualityStatus;
 import com.winter.airesumeoptimizer.module.resume.mapper.ResumeMapper;
+import com.winter.airesumeoptimizer.module.resume.mapper.ResumeParseResultMapper;
+import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentDTO;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
@@ -43,7 +48,6 @@ public class OptimizationTaskServiceImpl implements OptimizationTaskService {
     private static final String CONTENT_READY = "READY";
     private static final String VERSION_SOURCE = "SOURCE";
     private static final String VERSION_TARGETED = "TARGETED";
-    private static final String SOURCE_PARSED_UPLOAD = "PARSED_UPLOAD";
     private static final String SOURCE_JOB_DERIVATION = "JOB_DERIVATION";
     private static final String SOURCE_USER_INPUT = "USER_INPUT";
     private static final String DEFAULT_RULES_SNAPSHOT = "{}";
@@ -52,6 +56,7 @@ public class OptimizationTaskServiceImpl implements OptimizationTaskService {
     private static final int ERROR_MESSAGE_MAX_LENGTH = 1000;
 
     private final ResumeMapper resumeMapper;
+    private final ResumeParseResultMapper resumeParseResultMapper;
     private final JobDescriptionService jobDescriptionService;
     private final JobDescriptionMapper jobDescriptionMapper;
     private final JobTargetMapper jobTargetMapper;
@@ -62,6 +67,7 @@ public class OptimizationTaskServiceImpl implements OptimizationTaskService {
 
     public OptimizationTaskServiceImpl(
             ResumeMapper resumeMapper,
+            ResumeParseResultMapper resumeParseResultMapper,
             JobDescriptionService jobDescriptionService,
             JobDescriptionMapper jobDescriptionMapper,
             JobTargetMapper jobTargetMapper,
@@ -70,6 +76,7 @@ public class OptimizationTaskServiceImpl implements OptimizationTaskService {
             AiJobMatchResultMapper aiJobMatchResultMapper,
             ObjectMapper objectMapper) {
         this.resumeMapper = resumeMapper;
+        this.resumeParseResultMapper = resumeParseResultMapper;
         this.jobDescriptionService = jobDescriptionService;
         this.jobDescriptionMapper = jobDescriptionMapper;
         this.jobTargetMapper = jobTargetMapper;
@@ -100,6 +107,8 @@ public class OptimizationTaskServiceImpl implements OptimizationTaskService {
             String rawJobDescription,
             AiSelectionSnapshot selection) {
         getOwnedResume(userId, resumeId);
+        // 在保存兼容 JobDescription 之前先过简历交付质量门，避免 NEEDS_REVIEW 产生孤立 JD 行。
+        requireConfirmedParseResult(userId, resumeId);
         JobDescriptionSubmitDTO submitRequest = new JobDescriptionSubmitDTO();
         submitRequest.setTitle(jobTitle);
         submitRequest.setRawText(rawJobDescription);
@@ -196,7 +205,8 @@ public class OptimizationTaskServiceImpl implements OptimizationTaskService {
                 jobTarget.getId(),
                 sourceVersion.getId(),
                 targetVersion.getId(),
-                toAiSelection(task));
+                toAiSelection(task),
+                task.getResumeInputSnapshot());
     }
 
     @Override
@@ -239,12 +249,24 @@ public class OptimizationTaskServiceImpl implements OptimizationTaskService {
     @Override
     @Transactional
     public void captureResumeSnapshot(Long userId, Long optimizationTaskId, String structuredContent) {
-        if (structuredContent == null || structuredContent.isBlank()) {
-            throw new BusinessException(400, "简历结构化内容不能为空");
+        if (structuredContent == null || structuredContent.isBlank()
+                || !isCanonicalDocument(structuredContent)) {
+            throw new BusinessException(400, "简历 canonical 内容格式不正确");
         }
         OptimizationTask task = getOwnedTask(userId, optimizationTaskId);
         if (task.getResumeInputSnapshot() != null && !task.getResumeInputSnapshot().isBlank()) {
             return;
+        }
+        ResumeVersion source = getOwnedVersion(userId, task.getSourceResumeVersionId());
+        String frozenContent = source.getStructuredContent();
+        boolean sourceAlreadyFrozen = frozenContent != null && !frozenContent.isBlank();
+        if (sourceAlreadyFrozen) {
+            // SOURCE is shared historical truth. A late parse result must never replace it;
+            // a mismatch means the task lost its original freeze boundary and must fail closed.
+            if (!frozenContent.equals(structuredContent)) {
+                throw new BusinessException(409, "优化任务的简历 SOURCE 已变化，不能覆盖冻结快照");
+            }
+            structuredContent = frozenContent;
         }
         LocalDateTime now = LocalDateTime.now();
         int claimed = optimizationTaskMapper.update(null, new UpdateWrapper<OptimizationTask>()
@@ -260,7 +282,9 @@ public class OptimizationTaskServiceImpl implements OptimizationTaskService {
             }
             throw new BusinessException(409, "简历输入快照正在保存，请稍后重试");
         }
-        updateOwnedVersion(userId, task.getSourceResumeVersionId(), structuredContent, now);
+        if (!sourceAlreadyFrozen) {
+            populatePendingSourceVersion(userId, source.getId(), structuredContent, now);
+        }
         updateOwnedVersion(userId, task.getTargetResumeVersionId(), structuredContent, now);
     }
 
@@ -368,17 +392,17 @@ public class OptimizationTaskServiceImpl implements OptimizationTaskService {
             JobDescription legacyJob,
             AiSelectionSnapshot selection) {
         Resume resume = getOwnedResume(userId, resumeId);
+        ResumeVersion sourceVersion = requireConfirmedParseResult(userId, resume.getId());
         if (legacyJob.getRawText() == null || legacyJob.getRawText().isBlank()) {
             throw new BusinessException(400, "目标岗位 JD 原文不能为空");
         }
 
         LocalDateTime now = LocalDateTime.now();
         JobTarget jobTarget = findOrCreateJobTarget(userId, legacyJob, now);
-        ResumeVersion sourceVersion = createSourceVersion(userId, resume.getId(), now);
         ResumeVersion targetVersion = createTargetVersion(
                 userId,
                 resume.getId(),
-                sourceVersion.getId(),
+                sourceVersion,
                 jobTarget.getId(),
                 now);
 
@@ -388,6 +412,9 @@ public class OptimizationTaskServiceImpl implements OptimizationTaskService {
         task.setTargetResumeVersionId(targetVersion.getId());
         task.setJobTargetId(jobTarget.getId());
         task.setStatus(STATUS_PENDING);
+        // The confirmed SOURCE is already the task's immutable input; freeze its exact bytes
+        // before async dispatch so a later reparse cannot change this task's evidence basis.
+        task.setResumeInputSnapshot(sourceVersion.getStructuredContent());
         task.setJobInputSnapshot(legacyJob.getRawText());
         task.setPromptSnapshot(DEFAULT_PROMPT_SNAPSHOT);
         task.setRulesSnapshot(DEFAULT_RULES_SNAPSHOT);
@@ -397,6 +424,70 @@ public class OptimizationTaskServiceImpl implements OptimizationTaskService {
         task.setUpdatedAt(now);
         insertTask(task);
         return toVO(task, sourceVersion, jobTarget, resume);
+    }
+
+    /**
+     * Slice A 质量门：未确认的解析结果不得携带进入分析链。
+     * NEEDS_REVIEW / FAILED / 尚未完成解析都直接拒绝创建，不做静默降级。
+     */
+    private ResumeVersion requireConfirmedParseResult(Long userId, Long resumeId) {
+        ResumeParseResult parseResult = resumeParseResultMapper.selectOne(
+                new LambdaQueryWrapper<ResumeParseResult>()
+                        .eq(ResumeParseResult::getResumeId, resumeId));
+        String qualityStatus = parseResult == null ? null : parseResult.getQualityStatus();
+        if (parseResult == null
+                || !STATUS_SUCCESS.equals(parseResult.getParseStatus())
+                || qualityStatus == null
+                || ResumeQualityStatus.QUALITY_PENDING.equals(qualityStatus)) {
+            throw new BusinessException(409, "简历尚未解析完成，请先完成解析");
+        }
+        if (ResumeQualityStatus.QUALITY_NEEDS_REVIEW.equals(qualityStatus)) {
+            throw new BusinessException(409, "RESUME_NEEDS_REVIEW：简历内容存在待确认项，确认后才能开始分析");
+        }
+        if (ResumeQualityStatus.QUALITY_FAILED.equals(qualityStatus)) {
+            throw new BusinessException(409, "简历解析失败，请重新解析后再开始分析");
+        }
+        if (!ResumeQualityStatus.QUALITY_READY.equals(qualityStatus)
+                || !hasNoUnresolvedItems(parseResult.getUnresolvedItems())
+                || parseResult.getCanonicalSourceVersionId() == null) {
+            // 存量解析行没有 canonical SOURCE 时必须重解析，不能把候选 structured_json 当正式事实。
+            throw new BusinessException(409, "简历交付内容尚未确认，请重新解析后再开始分析");
+        }
+        ResumeVersion source = getOwnedVersion(userId, parseResult.getCanonicalSourceVersionId());
+        if (!VERSION_SOURCE.equals(source.getVersionType())
+                || source.getSourceVersionId() != null
+                || source.getJobTargetId() != null
+                || !CONTENT_READY.equals(source.getContentStatus())
+                || !isCanonicalDocument(source.getStructuredContent())) {
+            throw new BusinessException(409, "简历交付内容尚未确认，请重新解析后再开始分析");
+        }
+        return source;
+    }
+
+    private boolean isCanonicalDocument(String value) {
+        if (value == null || value.isBlank()) {
+            return false;
+        }
+        try {
+            JsonNode root = objectMapper.readTree(value);
+            return root != null
+                    && root.isObject()
+                    && ResumeDocumentDTO.SCHEMA_VERSION.equals(root.path("schemaVersion").asText());
+        } catch (JsonProcessingException exception) {
+            return false;
+        }
+    }
+
+    private boolean hasNoUnresolvedItems(String value) {
+        if (value == null || value.isBlank()) {
+            return false;
+        }
+        try {
+            JsonNode root = objectMapper.readTree(value);
+            return root != null && root.isArray() && root.isEmpty();
+        } catch (JsonProcessingException exception) {
+            return false;
+        }
     }
 
     private JobTarget findOrCreateJobTarget(Long userId, JobDescription legacyJob, LocalDateTime now) {
@@ -424,33 +515,22 @@ public class OptimizationTaskServiceImpl implements OptimizationTaskService {
         return jobTarget;
     }
 
-    private ResumeVersion createSourceVersion(Long userId, Long resumeId, LocalDateTime now) {
-        ResumeVersion version = new ResumeVersion();
-        version.setUserId(userId);
-        version.setResumeId(resumeId);
-        version.setVersionType(VERSION_SOURCE);
-        version.setSourceType(SOURCE_PARSED_UPLOAD);
-        version.setContentStatus(CONTENT_PENDING);
-        version.setCreatedAt(now);
-        version.setUpdatedAt(now);
-        insertVersion(version);
-        return version;
-    }
-
     private ResumeVersion createTargetVersion(
             Long userId,
             Long resumeId,
-            Long sourceVersionId,
+            ResumeVersion sourceVersion,
             Long jobTargetId,
             LocalDateTime now) {
         ResumeVersion version = new ResumeVersion();
         version.setUserId(userId);
         version.setResumeId(resumeId);
-        version.setSourceVersionId(sourceVersionId);
+        version.setSourceVersionId(sourceVersion.getId());
         version.setJobTargetId(jobTargetId);
         version.setVersionType(VERSION_TARGETED);
         version.setSourceType(SOURCE_JOB_DERIVATION);
-        version.setContentStatus(CONTENT_PENDING);
+        version.setContentStatus(CONTENT_READY);
+        version.setStructuredContent(sourceVersion.getStructuredContent());
+        version.setContentRevision(0L);
         version.setCreatedAt(now);
         version.setUpdatedAt(now);
         insertVersion(version);
@@ -549,6 +629,29 @@ public class OptimizationTaskServiceImpl implements OptimizationTaskService {
                 .set("updated_at", now));
         if (rows != 1) {
             throw new BusinessException(404, "简历版本不存在");
+        }
+    }
+
+    /** 仅兼容旧的、尚未捕获内容的任务；已冻结 SOURCE 永远走只读路径。 */
+    private void populatePendingSourceVersion(Long userId, Long versionId, String structuredContent, LocalDateTime now) {
+        int rows = resumeVersionMapper.update(null, new UpdateWrapper<ResumeVersion>()
+                .eq("id", versionId)
+                .eq("user_id", userId)
+                .eq("version_type", VERSION_SOURCE)
+                .eq("content_status", CONTENT_PENDING)
+                .isNull("structured_content")
+                .set("content_status", CONTENT_READY)
+                .set("structured_content", structuredContent)
+                .set("content_revision", 0L)
+                .set("updated_at", now));
+        if (rows != 1) {
+            ResumeVersion current = getOwnedVersion(userId, versionId);
+            if (current.getStructuredContent() == null || current.getStructuredContent().isBlank()) {
+                throw new BusinessException(409, "简历 SOURCE 正在保存，请稍后重试");
+            }
+            if (!structuredContent.equals(current.getStructuredContent())) {
+                throw new BusinessException(409, "优化任务的简历 SOURCE 已变化，不能覆盖冻结快照");
+            }
         }
     }
 

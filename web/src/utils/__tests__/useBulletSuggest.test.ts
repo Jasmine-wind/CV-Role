@@ -34,8 +34,16 @@ const document = (text: string): ResumeDocument => ({
       entries: [
         {
           id: 'e-1',
-          heading: '某公司',
-          meta: null,
+          organization: '某公司',
+          role: null,
+          school: null,
+          degree: null,
+          major: null,
+          startDate: null,
+          endDate: null,
+          location: null,
+          group: null,
+          skillItems: null,
           bullets: [{ id: 'b-1', text }],
         },
       ],
@@ -74,7 +82,8 @@ const readyResult = (request: BulletSuggestionRequest): BulletSuggestionResult =
 
 const setup = () => {
   const editor = useWorkspaceEditor(10)
-  const suggestMock = vi.fn<(taskId: number, request: BulletSuggestionRequest) => Promise<BulletSuggestionResult>>()
+  const suggestMock =
+    vi.fn<(taskId: number, request: BulletSuggestionRequest) => Promise<BulletSuggestionResult>>()
   const suggest = useBulletSuggest(10, editor, {
     api: { suggest: suggestMock },
     hashText: async (text) => `hash:${text}`,
@@ -114,13 +123,16 @@ describe('useBulletSuggest', () => {
     await settle()
 
     expect(suggest.phase.value).toBe('ready')
-    expect(suggestMock).toHaveBeenCalledWith(10, expect.objectContaining({
-      bulletId: 'b-1',
-      baseRevision: 0,
-      originalText: ORIGINAL,
-      originalTextHash: `hash:${ORIGINAL}`,
-      intent: 'JOB_TARGETED',
-    }))
+    expect(suggestMock).toHaveBeenCalledWith(
+      10,
+      expect.objectContaining({
+        bulletId: 'b-1',
+        baseRevision: 0,
+        originalText: ORIGINAL,
+        originalTextHash: `hash:${ORIGINAL}`,
+        intent: 'JOB_TARGETED',
+      }),
+    )
 
     // Apply 前没有任何保存：Suggest 不写服务端。
     expect(saveContentMock).not.toHaveBeenCalled()
@@ -136,24 +148,80 @@ describe('useBulletSuggest', () => {
     // Apply 后进入既有 dirty → Auto Save → CAS。
     await vi.advanceTimersByTimeAsync(800)
     await settle()
-    expect(saveContentMock).toHaveBeenCalledWith(10, expect.objectContaining({
-      expectedRevision: 0,
-      document: expect.objectContaining({
-        sections: expect.arrayContaining([
-          expect.objectContaining({
-            entries: expect.arrayContaining([
-              expect.objectContaining({
-                bullets: [{ id: 'b-1', text: SUGGESTED }],
-              }),
-            ]),
-          }),
-        ]),
+    expect(saveContentMock).toHaveBeenCalledWith(
+      10,
+      expect.objectContaining({
+        expectedRevision: 0,
+        document: expect.objectContaining({
+          sections: expect.arrayContaining([
+            expect.objectContaining({
+              entries: expect.arrayContaining([
+                expect.objectContaining({
+                  bullets: [{ id: 'b-1', text: SUGGESTED }],
+                }),
+              ]),
+            }),
+          ]),
+        }),
       }),
-    }))
+    )
 
     // Apply 形成正常 Undo 节点。
     editor.undo()
     expect(editor.draft.value?.sections[0].entries[0].bullets[0].text).toBe(ORIGINAL)
+  })
+
+  it('discards a no-op suggestion without exposing apply or changing the draft', async () => {
+    const { editor, suggest, suggestMock } = setup()
+    await editor.load()
+    suggestMock.mockImplementation(async (_taskId, request) => ({
+      ...readyResult(request),
+      originalText: `  ${ORIGINAL}\n`,
+      suggestedText: `\t${ORIGINAL}  `,
+    }))
+
+    suggest.suggest('b-1', 'SIMPLIFY')
+    await settle()
+
+    expect(suggest.phase.value).toBe('idle')
+    expect(suggest.candidate.value).toBeNull()
+    expect(editor.draft.value?.sections[0].entries[0].bullets[0].text).toBe(ORIGINAL)
+    expect(editor.canUndo.value).toBe(false)
+    expect(saveContentMock).not.toHaveBeenCalled()
+  })
+
+  it('keeps punctuation and meaningful text changes as real suggestions', async () => {
+    const { editor, suggest, suggestMock } = setup()
+    await editor.load()
+    suggestMock.mockImplementation(async (_taskId, request) => ({
+      ...readyResult(request),
+      suggestedText: '负责订单 服务开发。',
+    }))
+
+    suggest.suggest('b-1', 'SIMPLIFY')
+    await settle()
+
+    expect(suggest.phase.value).toBe('ready')
+    expect(suggest.candidate.value?.suggestedText).toBe('负责订单 服务开发。')
+    expect(editor.draft.value?.sections[0].entries[0].bullets[0].text).toBe(ORIGINAL)
+  })
+
+  it('fails closed when the suggestion response is bound to another bullet or revision', async () => {
+    const { editor, suggest, suggestMock } = setup()
+    await editor.load()
+    suggestMock.mockImplementation(async (_taskId, request) => ({
+      ...readyResult(request),
+      bulletId: 'another-bullet',
+    }))
+
+    suggest.suggest('b-1', 'SIMPLIFY')
+    await settle()
+
+    expect(suggest.phase.value).toBe('error')
+    expect(suggest.errorMessage.value).toBe('建议响应与当前内容不一致，已丢弃，请重试')
+    expect(suggest.candidate.value).toBeNull()
+    expect(editor.draft.value?.sections[0].entries[0].bullets[0].text).toBe(ORIGINAL)
+    expect(saveContentMock).not.toHaveBeenCalled()
   })
 
   it('rejects apply after the bullet was manually edited during generation', async () => {
@@ -178,8 +246,9 @@ describe('useBulletSuggest', () => {
     expect(suggest.candidateValid.value).toBe(false)
     expect(suggest.candidateStale.value).toBe(true)
     expect(suggest.apply()).toBe(false)
-    expect(editor.draft.value?.sections[0].entries[0].bullets[0].text)
-      .toBe(`${ORIGINAL}（人工修改）`)
+    expect(editor.draft.value?.sections[0].entries[0].bullets[0].text).toBe(
+      `${ORIGINAL}（人工修改）`,
+    )
   })
 
   it('marks candidate stale after undo or redo', async () => {
@@ -383,10 +452,13 @@ describe('useBulletSuggest', () => {
     suggest.submitCustom('b-1', '更突出后端职责')
     await settle()
 
-    expect(suggestMock).toHaveBeenCalledWith(10, expect.objectContaining({
-      intent: 'CUSTOM',
-      userInstruction: '更突出后端职责',
-    }))
+    expect(suggestMock).toHaveBeenCalledWith(
+      10,
+      expect.objectContaining({
+        intent: 'CUSTOM',
+        userInstruction: '更突出后端职责',
+      }),
+    )
     expect(suggest.phase.value).toBe('ready')
   })
 

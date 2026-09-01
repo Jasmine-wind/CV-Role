@@ -8,9 +8,9 @@ import java.util.Arrays;
  */
 public enum ResumeTemplateId {
 
-    CLASSIC("classic", "1", "typst/classic/v1/main.typ"),
-    MODERN("modern", "1", "typst/modern/v1/main.typ"),
-    MINIMAL("minimal", "1", "typst/minimal/v1/main.typ");
+    CLASSIC("classic", "3", "typst/classic/v3/main.typ"),
+    MODERN("modern", "3", "typst/modern/v3/main.typ"),
+    MINIMAL("minimal", "3", "typst/minimal/v3/main.typ");
 
     private final String templateId;
     private final String templateVersion;

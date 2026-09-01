@@ -1,0 +1,13 @@
+Backend Platform Engineer
+
+About the role
+- Build and evolve reliable backend services for a multi-region commerce platform.
+- Own service design, implementation, observability, incident response, and operational follow-up.
+- Work with Java or Kotlin, Spring Boot, PostgreSQL, Redis, and Kafka in an event-driven architecture.
+- Improve API latency, data correctness, deployment safety, and developer experience.
+
+What you bring
+- 3+ years of backend engineering experience with Java or Kotlin.
+- Strong PostgreSQL and distributed-systems fundamentals; practical Kafka experience.
+- Experience with reliability engineering, metrics/tracing, on-call, and post-incident learning.
+- Clear written communication and a bias toward small, testable improvements.

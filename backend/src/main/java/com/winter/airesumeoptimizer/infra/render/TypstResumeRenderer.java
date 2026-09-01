@@ -1,23 +1,32 @@
 package com.winter.airesumeoptimizer.infra.render;
 
 import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentDTO;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Calendar;
 import java.util.Comparator;
+import java.util.List;
+import java.util.TimeZone;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
+import org.apache.pdfbox.Loader;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.pdmodel.PDDocumentInformation;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Component;
 
 /**
  * Typst CLI 同步渲染实现。
  *
- * <p>隔离措施：每次渲染使用独立临时目录并以 --root 限制文件访问；包解析目录被指向
- * 空目录，禁止任意包加载与网络访问；固定 creation timestamp 保证同一输入逐字节确定。
+ * <p>隔离措施：每次渲染使用独立临时目录并以 --root 限制文件访问；内置模板的包解析目录
+ * 指向空目录，禁止外部包依赖；固定 creation timestamp 与 PDF metadata 保证同一输入逐字节确定。
  * 用户内容只存在于转义后的数据文件，模板为内置只读资源，二者都不会读取外部文件。
  */
 @Slf4j
@@ -54,7 +63,7 @@ public class TypstResumeRenderer implements ResumePdfRenderer {
             workDir = Files.createTempDirectory("resume-render-");
             Files.writeString(workDir.resolve(DATA_FILENAME), dataSource, StandardCharsets.UTF_8);
             Files.writeString(workDir.resolve(ENTRY_FILENAME), templateSource, StandardCharsets.UTF_8);
-            // 空的包目录：typst 找不到任何包，彻底禁止包加载与网络下载。
+            // 空的包目录：内置模板找不到任何外部包；这不是 OS 级网络沙箱。
             Files.createDirectories(workDir.resolve(".packages"));
             Files.createDirectories(workDir.resolve(".package-cache"));
 
@@ -65,11 +74,39 @@ public class TypstResumeRenderer implements ResumePdfRenderer {
                 throw new ResumeRenderException("简历 PDF 生成失败");
             }
             byte[] pdf = Files.readAllBytes(outputPath);
+            pdf = applyStableDocumentMetadata(pdf, document);
             return new ResumePdfRenderResult(pdf, layoutInspector.inspect(pdf));
         } catch (IOException exception) {
             throw new ResumeRenderException("简历渲染失败，请稍后重试", exception);
         } finally {
             deleteQuietly(workDir);
+        }
+    }
+
+    /**
+     * 给浏览器原生 viewer 一个稳定的人类可读文档标题，并固定 PDFBox 写入的日期。
+     * 这不会改变页面内容或 Preview receipt 绑定，只避免 blob URL 成为唯一可见标题。
+     */
+    private byte[] applyStableDocumentMetadata(byte[] pdf, ResumeDocumentDTO document) {
+        try (PDDocument pdfDocument = Loader.loadPDF(pdf)) {
+            PDDocumentInformation info = pdfDocument.getDocumentInformation();
+            String name = document == null || document.getBasics() == null
+                    ? null : document.getBasics().getName();
+            String title = name == null || name.isBlank() ? "简历预览" : name.strip() + " · 简历";
+            info.setTitle(title);
+            info.setAuthor("CV-Role");
+            info.setCreator("CV-Role Resume Renderer");
+            info.setSubject("岗位优化简历");
+            Calendar epoch = Calendar.getInstance(TimeZone.getTimeZone("UTC"));
+            epoch.clear();
+            epoch.set(1970, Calendar.JANUARY, 1, 0, 0, 0);
+            info.setCreationDate(epoch);
+            info.setModificationDate(epoch);
+            ByteArrayOutputStream output = new ByteArrayOutputStream(pdf.length + 512);
+            pdfDocument.save(output);
+            return output.toByteArray();
+        } catch (IOException exception) {
+            throw new ResumeRenderException("简历 PDF 生成失败");
         }
     }
 
@@ -86,7 +123,7 @@ public class TypstResumeRenderer implements ResumePdfRenderer {
     }
 
     private Process startCompilation(Path workDir, Path outputPath) throws IOException {
-        ProcessBuilder builder = new ProcessBuilder(
+        List<String> command = new ArrayList<>(List.of(
                 properties.getTypstBinary(),
                 "compile",
                 ENTRY_FILENAME,
@@ -94,7 +131,24 @@ public class TypstResumeRenderer implements ResumePdfRenderer {
                 "--root", workDir.toString(),
                 "--package-path", workDir.resolve(".packages").toString(),
                 "--package-cache-path", workDir.resolve(".package-cache").toString(),
-                "--creation-timestamp", "0");
+                "--creation-timestamp", "0"));
+        String fontPath = properties.getFontPath();
+        if (fontPath != null && !fontPath.isBlank()) {
+            final Path configuredFontPath;
+            try {
+                configuredFontPath = Path.of(fontPath).toAbsolutePath().normalize();
+            } catch (InvalidPathException exception) {
+                throw new ResumeRenderException("简历字体环境不可用，请稍后重试", exception);
+            }
+            if (!Files.isDirectory(configuredFontPath)) {
+                throw new ResumeRenderException("简历字体环境不可用，请稍后重试");
+            }
+            // 生产目录只包含经过验证的静态字体，禁止 Typst 回退到宿主机 variable/Thin 字体。
+            command.add("--font-path");
+            command.add(configuredFontPath.toString());
+            command.add("--ignore-system-fonts");
+        }
+        ProcessBuilder builder = new ProcessBuilder(command);
         builder.directory(workDir.toFile());
         // 不使用 PIPE：先 wait 再读取可能因子进程输出填满缓冲区而死锁；同时避免诊断原文把简历内容写入日志。
         builder.redirectOutput(ProcessBuilder.Redirect.DISCARD);

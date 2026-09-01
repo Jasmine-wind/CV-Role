@@ -28,8 +28,16 @@ const document = (text: string): ResumeDocument => ({
       entries: [
         {
           id: 'e-1',
-          heading: '某公司',
-          meta: null,
+          organization: '某公司',
+          role: null,
+          school: null,
+          degree: null,
+          major: null,
+          startDate: null,
+          endDate: null,
+          location: null,
+          group: null,
+          skillItems: null,
           bullets: [{ id: 'b-1', text }],
         },
       ],

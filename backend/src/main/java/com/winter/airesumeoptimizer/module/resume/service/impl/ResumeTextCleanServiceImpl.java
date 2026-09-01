@@ -7,11 +7,9 @@ import com.winter.airesumeoptimizer.module.resume.service.ResumeTextCleanService
 import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.springframework.stereotype.Service;
@@ -53,14 +51,14 @@ public class ResumeTextCleanServiceImpl implements ResumeTextCleanService {
     static {
         SECTION_ALIASES.put("BASIC_INFO", List.of("个人信息", "基本信息", "联系方式", "个人资料", "Profile", "Personal Info"));
         SECTION_ALIASES.put("EDUCATION", List.of("教育经历", "教育背景", "学习经历", "学历背景", "Education", "Educational Background"));
-        SECTION_ALIASES.put("SKILLS", List.of("专业技能", "技术能力", "技术能力描述", "技能关键词", "技能清单", "技术栈", "核心技能", "核心能力", "个人技能", "IT技能", "IT 技能", "Technique", "Skills", "Technical Skills", "Core Competencies"));
+        SECTION_ALIASES.put("SKILLS", List.of("技能", "专业技能", "技术能力", "技术能力描述", "技能关键词", "技能清单", "技术栈", "核心技能", "核心能力", "个人技能", "IT技能", "IT 技能", "Technique", "Skills", "Technical Skills", "Core Competencies"));
         SECTION_ALIASES.put("WORK_EXPERIENCES", List.of("工作经历", "工作经验", "职业经历", "任职经历", "任职公司", "从业经历", "Work Experience", "Professional Experience", "Employment History", "Experience"));
         SECTION_ALIASES.put("INTERNSHIPS", List.of("实习经历", "实习经验", "Internship", "Internship Experience"));
         SECTION_ALIASES.put("PROJECTS", List.of("项目经历", "项目经验", "项目介绍", "项目实践", "项目作品", "项目名称", "参加项目描述", "实习/项目经历", "实习 / 项目经历", "科研项目", "研究项目", "Projects", "Project Experience"));
         SECTION_ALIASES.put("CAMPUS_EXPERIENCES", List.of("在校经历", "校园经历", "校园实践", "社会实践", "社团经历", "学生工作", "Campus Experience", "Activities"));
         SECTION_ALIASES.put("AWARDS", List.of("获奖经历", "荣誉奖项", "奖项荣誉", "荣誉奖励", "获奖情况", "竞赛获奖", "Awards", "Honors"));
         SECTION_ALIASES.put("CERTIFICATES", List.of("证书", "资格证书", "专业证书", "认证", "Certificates", "Certifications"));
-        SECTION_ALIASES.put("SUMMARY", List.of("自我评价", "个人总结", "个人优势", "自我介绍", "个人评价", "职业总结", "About me", "Summary", "Self Evaluation"));
+        SECTION_ALIASES.put("SUMMARY", List.of("自我评价", "个人总结", "个人概述", "个人优势", "自我介绍", "个人评价", "职业总结", "About me", "Summary", "Self Evaluation"));
         SECTION_ALIASES.put("OTHERS", List.of("其他", "其他说明", "补充信息", "其他信息", "Additional Information", "Others"));
 
         ICON_MAPPINGS.put('\uf0e0', new IconMapping("EMAIL_ICON", "BASIC_INFO"));
@@ -92,7 +90,7 @@ public class ResumeTextCleanServiceImpl implements ResumeTextCleanService {
         }
 
         List<String> result = new ArrayList<>();
-        Set<String> seenNormalizedLines = new LinkedHashSet<>();
+        String previousNormalizedLine = null;
         int duplicateCount = 0;
         int invalidCount = 0;
         boolean beforeFirstHeading = true;
@@ -121,11 +119,12 @@ public class ResumeTextCleanServiceImpl implements ResumeTextCleanService {
             List<String> expandedLines = expandTopMixedHeaderLine(line, rawIconType, beforeFirstHeading);
             for (String expandedLine : expandedLines) {
                 String dedupeKey = normalizeForDedupe(expandedLine);
-                if (!seenNormalizedLines.add(dedupeKey)) {
+                // 只折叠相邻重复抽取；全局去重会吞掉跨章节合法重复事实。
+                if (dedupeKey.equals(previousNormalizedLine)) {
                     duplicateCount++;
                     continue;
                 }
-
+                previousNormalizedLine = dedupeKey;
                 appendLine(result, expandedLine);
             }
             if (matchHeading(line) != null) {
@@ -165,7 +164,7 @@ public class ResumeTextCleanServiceImpl implements ResumeTextCleanService {
                 result.add(matcher.group());
                 remaining = removeSpan(remaining, matcher.start(), matcher.end());
             }
-            addHeaderTrailingSkill(result, remaining);
+            addHeaderTrailingContent(result, remaining);
             return result.isEmpty() ? List.of(line) : result;
         }
         if ("PHONE_ICON".equals(iconType) || PHONE_PATTERN.matcher(remaining).find()) {
@@ -174,7 +173,7 @@ public class ResumeTextCleanServiceImpl implements ResumeTextCleanService {
                 result.add(matcher.group().strip());
                 remaining = removeSpan(remaining, matcher.start(), matcher.end());
             }
-            addHeaderTrailingSkill(result, remaining);
+            addHeaderTrailingContent(result, remaining);
             return result.isEmpty() ? List.of(line) : result;
         }
         if ("GITHUB_ICON".equals(iconType) || GITHUB_PATTERN.matcher(remaining).find()) {
@@ -183,11 +182,11 @@ public class ResumeTextCleanServiceImpl implements ResumeTextCleanService {
                 result.add("GitHub: " + matcher.group().strip());
                 remaining = removeSpan(remaining, matcher.start(), matcher.end());
             }
-            addHeaderTrailingSkill(result, remaining);
+            addHeaderTrailingContent(result, remaining);
             return result.isEmpty() ? List.of(line) : result;
         }
         if ("LINKEDIN_ICON".equals(iconType)) {
-            addHeaderTrailingSkill(result, remaining.replaceFirst("^-+$", "").strip());
+            addHeaderTrailingContent(result, remaining.replaceFirst("^-+$", "").strip());
             return result.isEmpty() ? List.of(line) : result;
         }
 
@@ -203,12 +202,17 @@ public class ResumeTextCleanServiceImpl implements ResumeTextCleanService {
         return List.of(line);
     }
 
-    private void addHeaderTrailingSkill(List<String> result, String value) {
-        String cleaned = value == null ? "" : value.replaceFirst("^[-:：\\s]+", "").strip();
-        String skill = trailingHeaderSkill(cleaned);
-        if (skill != null) {
-            result.add(skill);
+    /**
+     * 头部混合行抽出联系方式后的剩余内容不允许静默丢弃：
+     * 命中头部技能词表则归一，否则整段保留，交由后续解析/确认链裁决归属。
+     */
+    private void addHeaderTrailingContent(List<String> result, String value) {
+        String cleaned = value == null ? "" : value.replaceFirst("^[-:：|·\\s]+", "").strip();
+        if (cleaned.isEmpty()) {
+            return;
         }
+        String skill = trailingHeaderSkill(cleaned);
+        result.add(skill != null ? skill : cleaned);
     }
 
     private String trailingHeaderSkill(String line) {
@@ -296,7 +300,12 @@ public class ResumeTextCleanServiceImpl implements ResumeTextCleanService {
             HeadingMatch headingMatch = matchHeading(line);
             if (headingMatch != null) {
                 if (shouldKeepAsProjectContent(currentType, headingMatch, line)) {
-                    currentLines.add(line);
+                    String projectContent = "PROJECTS".equals(headingMatch.sectionType())
+                            ? removeHeading(line, headingMatch)
+                            : line;
+                    if (!projectContent.isBlank()) {
+                        currentLines.add(projectContent);
+                    }
                     continue;
                 }
                 List<String> forwardLines = takeForwardAttachLines(headingMatch.sectionType(), currentLines);
@@ -427,15 +436,41 @@ public class ResumeTextCleanServiceImpl implements ResumeTextCleanService {
     }
 
     private boolean looksLikeSkillSummarySection(ResumeTextSectionDTO section) {
-        long skillLines = section.getLines().stream()
+        List<String> usefulLines = section.getLines().stream()
                 .filter(line -> !"本人".equals(line.strip()))
-                .filter(this::looksLikeSkillLine)
-                .count();
-        return skillLines > 0 && skillLines >= Math.max(1, (section.getLines().size() - 1) / 2);
+                .toList();
+        long skillLines = usefulLines.stream().filter(this::looksLikeSkillListLine).count();
+        long narrativeLines = usefulLines.size() - skillLines;
+        boolean legacySelfEvaluation = normalizeHeading(section.getHeading()).contains("自我评价")
+                || normalizeHeading(section.getHeading()).contains("about me");
+        // 旧模板的“自我评价 About me”常把一条分号技术串放在 Summary；只在该明确模板信号下修复。
+        if (legacySelfEvaluation && usefulLines.stream().anyMatch(line ->
+                techHintCount(line) >= 3 && line.matches(".*[；;].*"))) {
+            return true;
+        }
+        // 至少两行明确的技能串、且叙述行不超过一行时才修复其它旧式模板；普通总结句保持 Summary。
+        return skillLines >= 2 && narrativeLines <= 1;
     }
 
     private boolean isUsefulSkillSummaryLine(String line) {
-        return !"本人".equals(line.strip()) && (looksLikeSkillLine(line) || techHintCount(line) > 0);
+        return !"本人".equals(line.strip()) && looksLikeSkillListLine(line);
+    }
+
+    private boolean looksLikeSkillListLine(String line) {
+        if (!looksLikeSkillLine(line)) {
+            return false;
+        }
+        // 叙述句默认仍属于 Summary；仅放行明显由多个技术词和分号组成的旧式技能串。
+        if (SENTENCE_LIKE_PATTERN.matcher(line).find()) {
+            String lower = line.toLowerCase(Locale.ROOT);
+            boolean oldStyleTechnicalList = techHintCount(line) >= 3
+                    && line.matches(".*[,，、/|；;].*")
+                    && !lower.matches(".*(经验|参与|系统建设|稳定|可观测性|高并发|故障|工作年限|故障排查).*" );
+            if (!oldStyleTechnicalList) {
+                return false;
+            }
+        }
+        return line.contains("：") || line.contains(":") || line.matches(".*[,，、/|；;].*");
     }
 
     private boolean looksLikeEducationSection(ResumeTextSectionDTO section) {
@@ -560,9 +595,22 @@ public class ResumeTextCleanServiceImpl implements ResumeTextCleanService {
     }
 
     private boolean shouldKeepAsProjectContent(String currentType, HeadingMatch headingMatch, String line) {
-        return "PROJECTS".equals(currentType)
-                && "SKILLS".equals(headingMatch.sectionType())
-                && normalizeHeading(line).startsWith("技术栈");
+        if (!"PROJECTS".equals(currentType)) {
+            return false;
+        }
+        String normalizedLine = normalizeHeading(line);
+        if ("SKILLS".equals(headingMatch.sectionType())) {
+            return normalizedLine.startsWith("技术栈");
+        }
+        // 项目字段标签（尤其“项目名称”）不是新的章节；保留它们才能让后续
+        // ProjectSourceTextExtractor 按项目一/项目二等强边界解析完整条目。
+        return "PROJECTS".equals(headingMatch.sectionType())
+                && (normalizedLine.startsWith("项目名称")
+                || normalizedLine.startsWith("项目名")
+                || normalizedLine.startsWith("项目描述")
+                || normalizedLine.startsWith("项目简介")
+                || normalizedLine.startsWith("项目介绍")
+                || normalizedLine.startsWith("系统简介"));
     }
 
     private boolean allowInlineHeading(String normalizedLine, String normalizedHeading) {

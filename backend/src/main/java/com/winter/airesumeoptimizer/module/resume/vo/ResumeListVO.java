@@ -22,6 +22,10 @@ public class ResumeListVO {
     private String uploadStatus;
     @Schema(description = "简历准备状态", example = "SUCCESS")
     private String parseStatus;
+    @Schema(description = "交付质量状态", example = "READY")
+    private String qualityStatus;
+    @Schema(description = "是否已有 canonical SOURCE 版本")
+    private Boolean canonicalReady;
     @Schema(description = "简历准备失败原因")
     private String parseErrorMessage;
     @Schema(description = "上传时间")

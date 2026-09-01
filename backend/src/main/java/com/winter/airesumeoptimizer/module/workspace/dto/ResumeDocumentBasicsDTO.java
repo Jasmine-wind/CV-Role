@@ -19,6 +19,12 @@ public class ResumeDocumentBasicsDTO {
     @Schema(description = "姓名", example = "张三")
     private String name;
 
+    @Schema(description = "求职意向", example = "Java 后端开发工程师")
+    private String jobIntention;
+
+    @Schema(description = "最高学历", example = "本科")
+    private String highestEducation;
+
     @Schema(description = "联系方式等基础字段")
     private List<ResumeDocumentContactDTO> contacts;
 }

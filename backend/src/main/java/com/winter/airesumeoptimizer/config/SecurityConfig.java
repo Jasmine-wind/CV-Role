@@ -104,6 +104,9 @@ public class SecurityConfig {
                 "X-Resume-Missing-Contact",
                 "X-Resume-Page-Limit-Exceeded",
                 "X-Resume-Overflow-Detected",
+                "X-Resume-Orphan-Final-Page",
+                "X-Resume-Readability-Too-Small",
+                "X-Resume-Needs-Review",
                 "X-Preview-Receipt"));
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();

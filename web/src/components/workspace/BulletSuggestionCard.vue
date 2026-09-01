@@ -1,6 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import { diffText } from '@/utils/diffText'
+import { ref } from 'vue'
 
 const props = defineProps<{
   mode: 'composing' | 'requesting' | 'ready' | 'stale' | 'rejected' | 'error'
@@ -19,11 +18,6 @@ const emit = defineEmits<{
   submitCustom: [instruction: string]
 }>()
 
-const diffSegments = computed(() => {
-  if (!props.suggestedText) return []
-  return diffText(props.originalText, props.suggestedText)
-})
-
 const customInstruction = ref('')
 
 const submitCustom = () => {
@@ -35,77 +29,85 @@ const submitCustom = () => {
 </script>
 
 <template>
-  <div :class="['bullet-suggestion', `is-${mode}`]">
-    <template v-if="mode === 'composing'">
-      <p class="suggestion-title">自定义要求</p>
+  <div :class="['bullet-suggestion', `is-${props.mode}`]">
+    <template v-if="props.mode === 'composing'">
+      <p class="suggestion-title">告诉 AI 这次想怎么改</p>
       <el-input
         v-model="customInstruction"
         type="textarea"
         :autosize="{ minRows: 2, maxRows: 4 }"
         :maxlength="500"
-        placeholder="描述本次改写要求，例如：更突出后端职责。AI 不能新增事实。"
+        placeholder="例如：更突出后端职责。AI 不能新增事实。"
         aria-label="自定义改写要求"
       />
       <div class="suggestion-actions">
-        <el-button size="small" type="primary" :disabled="!customInstruction.trim()" @click="submitCustom">
+        <el-button
+          size="small"
+          type="primary"
+          :disabled="!customInstruction.trim()"
+          @click="submitCustom"
+        >
           生成建议
         </el-button>
         <el-button size="small" @click="emit('cancel')">取消</el-button>
       </div>
     </template>
 
-    <template v-else-if="mode === 'requesting'">
-      <p class="suggestion-title">正在生成岗位定向改写建议…</p>
-      <p class="suggestion-note">生成期间继续编辑这条要点会使建议失效。</p>
+    <template v-else-if="props.mode === 'requesting'">
+      <p class="suggestion-title">正在生成修改建议…</p>
+      <p class="suggestion-note">生成期间继续编辑这条内容会使建议失效。</p>
     </template>
 
-    <template v-else-if="mode === 'ready' || mode === 'stale'">
-      <p class="suggestion-title">优化建议</p>
-      <div class="suggestion-diff" aria-label="改写差异">
-        <span
-          v-for="(segment, index) in diffSegments"
-          :key="index"
-          :class="`diff-segment is-${segment.type}`"
-        >{{ segment.text }}</span>
+    <template v-else-if="props.mode === 'ready' || props.mode === 'stale'">
+      <div class="suggestion-copy-block">
+        <span class="suggestion-label">原文</span>
+        <p>{{ props.originalText }}</p>
       </div>
-      <p class="suggestion-diff-legend">
-        <span class="diff-legend-item is-added">新增表达</span>
-        <span class="diff-legend-item is-removed">原表达</span>
-      </p>
-      <p v-if="reason" class="suggestion-reason">修改原因：{{ reason }}</p>
-      <p v-if="mode === 'stale'" class="suggestion-stale">
+      <div class="suggestion-copy-block is-proposed">
+        <span class="suggestion-label">建议版本</span>
+        <p>{{ props.suggestedText }}</p>
+      </div>
+      <div class="suggestion-copy-block is-reason">
+        <span class="suggestion-label">为什么这样改</span>
+        <p>{{ props.reason || '保留原有事实，只调整表达。' }}</p>
+      </div>
+      <p v-if="props.mode === 'stale'" class="suggestion-stale">
         内容或版本已变化，这条建议已失效，不能采纳。可以重新生成或关闭。
       </p>
       <div class="suggestion-actions">
         <el-button
-          v-if="mode === 'ready'"
+          v-if="props.mode === 'ready'"
           size="small"
           type="primary"
-          :disabled="!suggestedText"
+          :disabled="!props.suggestedText"
           @click="emit('apply')"
         >
           采纳
         </el-button>
         <el-button size="small" @click="emit('regenerate')">重新生成</el-button>
-        <el-button size="small" text @click="emit('reject')">{{ mode === 'stale' ? '关闭' : '拒绝' }}</el-button>
+        <el-button size="small" text @click="emit('reject')">{{
+          props.mode === 'stale' ? '关闭' : '拒绝'
+        }}</el-button>
       </div>
     </template>
 
-    <template v-else-if="mode === 'rejected'">
-      <p class="suggestion-title">本次建议未通过事实校验</p>
-      <p class="suggestion-note">{{ rejectMessage ?? 'AI 改写引入了原文没有的事实，已被拒绝。' }}</p>
+    <template v-else-if="props.mode === 'rejected'">
+      <p class="suggestion-title">这条建议未通过事实核对</p>
+      <p class="suggestion-note">
+        {{ props.rejectMessage ?? '改写引入了原文没有的事实，已被拒绝。' }}
+      </p>
       <div class="suggestion-actions">
-        <el-button size="small" @click="emit('reject')">关闭</el-button>
-        <el-button size="small" @click="emit('regenerate')">重新生成</el-button>
+        <el-button size="small" type="primary" @click="emit('regenerate')">重新生成</el-button>
+        <el-button size="small" text @click="emit('reject')">关闭</el-button>
       </div>
     </template>
 
     <template v-else>
       <p class="suggestion-title">建议生成失败</p>
-      <p class="suggestion-note">{{ errorMessage ?? 'AI 服务暂时不可用，请稍后重试。' }}</p>
+      <p class="suggestion-note">{{ props.errorMessage ?? 'AI 服务暂时不可用，请稍后重试。' }}</p>
       <div class="suggestion-actions">
-        <el-button size="small" @click="emit('reject')">关闭</el-button>
-        <el-button size="small" @click="emit('regenerate')">重试</el-button>
+        <el-button size="small" type="primary" @click="emit('regenerate')">重试</el-button>
+        <el-button size="small" text @click="emit('reject')">关闭</el-button>
       </div>
     </template>
   </div>
@@ -113,12 +115,13 @@ const submitCustom = () => {
 
 <style scoped>
 .bullet-suggestion {
-  border: 1px solid var(--el-color-primary-light-8);
-  border-radius: var(--app-radius-sm);
-  background: var(--app-primary-soft);
-  padding: 12px;
   display: grid;
-  gap: 8px;
+  gap: 10px;
+  margin-top: 2px;
+  border: 1px solid var(--app-primary-subtle);
+  border-radius: var(--app-radius-md);
+  padding: 13px;
+  background: var(--app-primary-soft);
 }
 
 .bullet-suggestion.is-rejected,
@@ -127,65 +130,24 @@ const submitCustom = () => {
   background: var(--app-warning-soft);
 }
 
-.suggestion-title {
+.suggestion-title,
+.suggestion-note,
+.suggestion-stale,
+.suggestion-copy-block p {
   margin: 0;
+  line-height: 1.65;
+}
+
+.suggestion-title {
+  color: var(--app-text);
   font-size: 13px;
   font-weight: 700;
-  color: var(--app-text);
 }
 
-.suggestion-diff {
-  border-radius: 6px;
-  border: 1px solid var(--el-border-color-lighter);
-  background: var(--el-bg-color);
-  padding: 8px 10px;
-  font-size: 13px;
-  line-height: 1.9;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.diff-segment.is-added {
-  background: var(--el-color-success-light-8);
-  color: var(--el-color-success-dark-2);
-}
-
-.diff-segment.is-removed {
-  background: var(--el-color-danger-light-8);
-  color: var(--el-color-danger);
-  text-decoration: line-through;
-}
-
-.suggestion-diff-legend {
-  display: flex;
-  gap: 12px;
-  margin: 0;
-}
-
-.diff-legend-item {
-  font-size: 12px;
-  padding: 0 6px;
-  border-radius: 4px;
-}
-
-.diff-legend-item.is-added {
-  background: var(--el-color-success-light-8);
-  color: var(--el-color-success-dark-2);
-}
-
-.diff-legend-item.is-removed {
-  background: var(--el-color-danger-light-8);
-  color: var(--el-color-danger);
-  text-decoration: line-through;
-}
-
-.suggestion-reason,
 .suggestion-note,
 .suggestion-stale {
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.6;
   color: var(--app-text-secondary);
+  font-size: 12px;
 }
 
 .suggestion-stale {
@@ -193,8 +155,41 @@ const submitCustom = () => {
   font-weight: 600;
 }
 
+.suggestion-copy-block {
+  display: grid;
+  gap: 5px;
+  padding: 9px 10px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-sm);
+  background: var(--app-surface);
+}
+
+.suggestion-copy-block.is-proposed {
+  border-color: var(--el-color-success-light-7);
+  background: var(--app-success-soft);
+}
+
+.suggestion-copy-block.is-reason {
+  background: transparent;
+}
+
+.suggestion-label {
+  color: var(--app-text-muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.suggestion-copy-block p {
+  color: var(--app-text);
+  font-size: 13px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .suggestion-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
+  align-items: center;
 }
 </style>

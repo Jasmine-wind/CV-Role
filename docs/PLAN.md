@@ -139,6 +139,36 @@ Final Gate 结论：真实主链、Desktop / Narrow 浏览器、Workspace 失败
 
 Final Gate 结论：只读 cohort、正式 Evidence 追溯、保守分组、实际 Provider-dispatch Usage ledger、`REQUIRES_NEW` 隔离与 retention、真实 PostgreSQL/Flyway/MinIO/Typst/fake Provider Chromium E2E、Demo bootstrap/reset 和 Phase 1–8 回归均已独立验证；Contract 内发现的 Blocker / Major 已最小修复并复测，**Final Gate PASS**。
 
+### Product Polish — Slice A 可信交付链（已完成）
+
+Phase 1–9 完成后进入 Product Polish，不新建 Phase、不扩展产品范围。Slice A 只冻结高返工风险边界，修复“解析后联系人丢失 / 错位、章节与条目边界错误、换行被拆成 Bullet、未识别内容进入正式文档，且仍能导出看似正式但不可投递的 PDF”的问题。
+
+- canonical 交付文档保持 `RESUME_DOCUMENT_V1`：联系方式携带显式类型，条目按章节语义携带公司 / 职位 / 学校 / 学历 / 专业 / 起止时间原文，技能为一等技能组；`heading/meta` 仅作历史 generic V1 只读兼容。canonical JSON 只物化在 `resume_versions.structured_content`，解析结果只保存当前 SOURCE 指针和审查 sidecar；不静默改写历史 `resume_versions`。
+- 候选解析不是事实：新增确定性验证与 `PENDING / READY / NEEDS_REVIEW / FAILED` 质量状态（裁决 SoT 在 `resume_parse_results`，canonical 内容 SoT 仍在 `resume_versions.structured_content`，V24 加法式迁移）。无法可靠判定归属的内容进入未决候选由用户确认，AI 不为修解析补造事实，无法裁决时 fail closed；非 `READY` 或没有 canonical SOURCE 禁止创建新分析任务，历史任务不受影响。
+- 导出分两层质量门：Document Gate（质量状态 / 系统兜底章节 / 重复章节 / 可用联系方式）与 PDF Gate（编译 / 越界 / 孤立末页 / 不可读字号阻断，页数告警）；两页合法、孤立末页不合法。预览在待确认时仍可用作审查，正式导出阻断。
+- 渲染消费 V1 语义模型并按章节类型分支，模板升为 v2、渲染器升为 `typst-resume-renderer/2`；v1 模板保留供历史导出物解释。本 Slice 不做模板视觉重设计。
+- 修复解析层具体缺陷：头部混合联系行不再丢弃姓名 / 电话、邮箱按 `find()` 抽取、组织名扫描整行、技能标题别名、指针回退不再整章节兜底、抽取去重保留跨章节合法重复。
+- 明确不做：Analysis IA 重构、Workspace 视觉重构、多模板视觉设计、ATS、新 Resume Builder、AI Chat、Career Profile / Fact Vault、Markdown / JSON 导出、编辑内容回流分析链。
+
+门禁：真实风格中文简历夹具联系方式不丢失 / 不错配、经历 / 项目 / 技能 / 教育边界正确、无系统兜底章节且正常简历 `READY`；歧义夹具进入 `NEEDS_REVIEW` 且不补造事实；未确认 / 越界 / 孤立末页阻断正式导出而合法单页与两页可通过；SOURCE / TARGET SoT、Evidence / Rewrite / CAS / Preview receipt / BYOK 与历史数据不回退，后端全量测试、前端构建 / 类型 / 单测与三条浏览器恢复型 E2E 通过。
+
+### Product Polish — Slice B UX（已完成，Final Gate PASS）
+
+- 前端已完成行动优先 Analysis、编辑器优先 Workspace contextual inspector、语义化 Resume 字段、纵向 Suggest / Diff、Workspace 内“编辑 / 预览”模式和冗余字段收敛。
+- 新增 no-op Suggest 防护与前端回归覆盖；未改变 Phase 1–9 / Slice A API、数据源、状态机、真实性、CAS、Preview receipt 或 Export gate。
+- 独立 Final Gate 已验证混合 Analysis、Resume-first Workspace、语义化编辑、Suggest / Diff / Preview、1440×900 与 390×844 浏览器体验，以及 Phase 1–9 / Slice A 回归；Contract 内问题已最小修复并复测，**Final Gate PASS**。
+
+### Product Polish — Slice C PDF / Preview / Visual Polish（已完成，Final Gate PASS）
+
+- 保持 `RESUME_DOCUMENT_V1` 与用户显式 section order；默认 canonical 投影采用 Summary → Experience → Projects → Education → Skills → Other，模板不静默重排已编辑内容。
+- 三套 current template 升为 v3；Summary、Education、Achievement、Certificate、Other 使用无 marker 文本，Experience / Project 使用真实 Bullet；长字段通过 gutter 和安全分页处理，中英正文左对齐。
+- 三模板共用 A4 排版边界与字号目标，生产镜像固定静态 Noto CJK Regular/Bold 字体；PDF 写入稳定 title/metadata，保留浏览器原生 viewer，不引入 PDF.js。
+- PDFBox 新增末页 glyph 占用比例；低于 20% 与既有末页行数共同阻断稀疏尾页。补充标准中文、合法两页、中英混排、长字段和两个真实风格 JD fixtures，并扩展 Typst/PDF/Playwright 回归。
+- 未新增业务 API、DB model、Schema、Phase 10 或其它产品能力。
+- 独立 Final Gate 已复核真实三模板 PDF、固定字体、长字段与通用章节自然分页、Preview / Export、1440×900 与 390×844 浏览器体验、Fresh PostgreSQL/Flyway、Docker/Compose 与完整回归；Contract 内问题已最小修复并补测，**Final Gate PASS**。
+
+Implementation status：**Product Polish Slice C 已完成，Final Gate PASS**。
+
 ## 优先级边界
 
 - **P0**：主链路、版本、证据 / Gap、Workspace、编辑、Diff、自动保存、Typst / PDF、真实性与隔离、安全 Gateway。

@@ -1,219 +1,320 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import EmptyState from '@/components/common/EmptyState.vue'
-import type { EvidenceRequirementItem } from '@/types/evidence-analysis'
 import type { OptimizationAnalysisResult } from '@/types/job-analysis'
+import {
+  isKnownRequirementImportance,
+  isKnownRequirementMatchLevel,
+  sortEvidenceRequirements,
+} from '@/utils/analysisPresentation'
 
 const props = defineProps<{
   result: OptimizationAnalysisResult | null
   loading: boolean
   error: string | null
+  selectedRequirementId?: number | null
 }>()
 
 const emit = defineEmits<{
   retryLoad: []
+  close: []
 }>()
 
 const requirements = computed(() => props.result?.evidenceAnalysis?.requirements ?? [])
+const sortedRequirements = computed(() => sortEvidenceRequirements(requirements.value))
 
-const byLevel = (level: string): EvidenceRequirementItem[] =>
-  requirements.value.filter((item) => item.matchLevel === level)
+const priority = computed(() =>
+  sortedRequirements.value.filter(
+    (item) =>
+      (item.importance === 'REQUIRED' || item.importance === 'BONUS') &&
+      (item.matchLevel === 'PARTIAL_EVIDENCE' || item.matchLevel === 'NO_EVIDENCE'),
+  ),
+)
+const matched = computed(() =>
+  sortedRequirements.value.filter(
+    (item) =>
+      (item.importance === 'REQUIRED' || item.importance === 'BONUS') &&
+      item.matchLevel === 'MATCHED',
+  ),
+)
+const selected = computed(() => {
+  const selectedId = props.selectedRequirementId
+  if (selectedId) {
+    const found = requirements.value.find((item) => item.evidenceRequirementId === selectedId)
+    if (
+      found &&
+      isKnownRequirementImportance(found.importance) &&
+      isKnownRequirementMatchLevel(found.matchLevel)
+    ) {
+      return found
+    }
+  }
+  return priority.value[0] ?? matched.value[0] ?? null
+})
 
-const matched = computed(() => byLevel('MATCHED'))
-const partial = computed(() => byLevel('PARTIAL_EVIDENCE'))
-const missing = computed(() => byLevel('NO_EVIDENCE'))
+const statusLabel = (value: string) => {
+  switch (value) {
+    case 'MATCHED':
+      return '已有优势'
+    case 'PARTIAL_EVIDENCE':
+      return '建议完善'
+    case 'NO_EVIDENCE':
+      return '当前材料未体现'
+    default:
+      return '需要核对'
+  }
+}
+
+const statusClass = (value: string) => {
+  switch (value) {
+    case 'MATCHED':
+      return 'is-matched'
+    case 'PARTIAL_EVIDENCE':
+      return 'is-partial'
+    case 'NO_EVIDENCE':
+      return 'is-missing'
+    default:
+      return 'is-unknown'
+  }
+}
+
+const importanceLabel = (value: string) => (value === 'BONUS' ? '加分项' : '必需项')
 </script>
 
 <template>
-  <aside class="workspace-suggestions">
-    <header>
-      <h2>优化建议</h2>
-      <p class="suggestions-note">
-        以下结论基于本次分析时冻结的简历材料与岗位要求，右侧编辑不会实时重新计算。
-      </p>
+  <aside class="workspace-inspector" aria-label="优化建议">
+    <header class="inspector-header">
+      <div>
+        <h2>优化建议</h2>
+        <p>只查看当前岗位分析时冻结的材料。编辑简历后，分析不会实时重算。</p>
+      </div>
+      <button type="button" class="inspector-close" @click="emit('close')">收起</button>
     </header>
 
-    <p v-if="loading" class="suggestions-status">正在读取分析结论…</p>
-    <div v-else-if="error" class="suggestions-error" role="alert">
+    <p v-if="loading" class="inspector-status">正在读取分析结论…</p>
+    <div v-else-if="error" class="inspector-error" role="alert">
       <p>{{ error }}</p>
       <el-button size="small" @click="emit('retryLoad')">重新加载</el-button>
     </div>
 
-    <template v-else-if="requirements.length">
-      <p class="suggestions-summary" aria-label="三态数量摘要">
-        建议完善 {{ partial.length }} · 已有优势 {{ matched.length }} · 当前材料未体现 {{ missing.length }}
-      </p>
-
-      <section v-if="partial.length" class="suggestion-group">
-        <h3>建议完善 · {{ partial.length }}</h3>
-        <article v-for="item in partial" :key="item.evidenceRequirementId" class="suggestion-card">
-          <h4>{{ item.requirementText }}</h4>
-          <p v-if="item.conclusion">{{ item.conclusion }}</p>
-          <div v-if="item.evidences.length" class="suggestion-evidence">
-            <p v-for="evidence in item.evidences" :key="evidence.requirementEvidenceId">
+    <template v-else-if="result?.evidenceAnalysis">
+      <p class="inspector-context-note">当前只聚焦一条岗位要求；完整分析仍保留在分析页。</p>
+      <section v-if="selected" class="inspector-detail">
+        <div class="inspector-detail-heading">
+          <span :class="['inspector-status', statusClass(selected.matchLevel)]">{{
+            statusLabel(selected.matchLevel)
+          }}</span>
+          <span class="inspector-importance">{{ importanceLabel(selected.importance) }}</span>
+        </div>
+        <h3>{{ selected.requirementText }}</h3>
+        <div class="inspector-detail-block">
+          <span>当前材料</span>
+          <div v-if="selected.evidences.length" class="inspector-evidence">
+            <p v-for="evidence in selected.evidences" :key="evidence.requirementEvidenceId">
               <span v-if="evidence.sectionLabel">{{ evidence.sectionLabel }}：</span>
               「{{ evidence.evidenceText }}」
             </p>
           </div>
-          <p v-if="item.suggestion" class="suggestion-tip">{{ item.suggestion }}</p>
-          <small>请只补充真实经历；部分证据不代表可以写入未被材料证明的事实。</small>
-        </article>
+          <p v-else class="inspector-muted">当前材料中没有找到可引用的证据。</p>
+        </div>
+        <p v-if="selected.conclusion" class="inspector-conclusion">{{ selected.conclusion }}</p>
+        <p v-if="selected.suggestion" class="inspector-suggestion">{{ selected.suggestion }}</p>
+        <p v-if="selected.matchLevel === 'NO_EVIDENCE'" class="inspector-boundary">
+          只有在确有真实经历时，才手动补充到左侧简历；系统不会自动加入。
+        </p>
+        <p v-else-if="selected.matchLevel === 'PARTIAL_EVIDENCE'" class="inspector-boundary">
+          请在左侧简历中核对并编辑已有事实。本侧栏不会替你写入新事实。
+        </p>
       </section>
+      <p v-else class="inspector-quiet">当前结论需要核对，暂不在这里展开自动建议。</p>
+    </template>
 
-      <section v-if="matched.length" class="suggestion-group">
-        <h3>已有优势 · {{ matched.length }}</h3>
-        <article v-for="item in matched" :key="item.evidenceRequirementId" class="suggestion-card">
-          <h4>{{ item.requirementText }}</h4>
-          <p v-if="item.conclusion">{{ item.conclusion }}</p>
-          <div v-if="item.evidences.length" class="suggestion-evidence">
-            <p v-for="evidence in item.evidences" :key="evidence.requirementEvidenceId">
-              <span v-if="evidence.sectionLabel">{{ evidence.sectionLabel }}：</span>
-              「{{ evidence.evidenceText }}」
-            </p>
-          </div>
-        </article>
-      </section>
-
-      <section v-if="missing.length" class="suggestion-group">
-        <h3>当前材料未体现 · {{ missing.length }}</h3>
-        <article
-          v-for="item in missing"
-          :key="item.evidenceRequirementId"
-          class="suggestion-card is-gap"
-        >
-          <h4>{{ item.requirementText }}</h4>
-          <p v-if="item.conclusion">{{ item.conclusion }}</p>
-          <p v-if="item.suggestion" class="suggestion-tip">{{ item.suggestion }}</p>
-          <small>这只代表分析时的材料中没有证据；如确有真实经历，可自行补充。</small>
-        </article>
+    <template v-else-if="result?.legacyAnalysis">
+      <section class="inspector-section">
+        <h3>历史分析</h3>
+        <p class="inspector-muted">这是较早版本的分析结果，重新分析可以获得逐条 Evidence。</p>
       </section>
     </template>
 
-    <EmptyState
-      v-else
-      title="暂无逐条证据分析"
-      description="该任务没有正式证据分析结论，可以直接在右侧编辑简历内容。"
-    />
+    <p v-else class="inspector-quiet">暂无逐条证据分析，可以直接编辑简历内容。</p>
   </aside>
 </template>
 
 <style scoped>
-.workspace-suggestions {
+.workspace-inspector {
   display: grid;
-  gap: 16px;
   align-content: start;
+  gap: 18px;
+  min-width: 0;
 }
 
-.workspace-suggestions h2 {
+.inspector-header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.inspector-header h2 {
   margin: 0;
   color: var(--app-text);
   font-size: 18px;
 }
 
-.suggestions-note {
+.inspector-header p {
+  max-width: 280px;
   margin: 6px 0 0;
   color: var(--app-text-secondary);
   font-size: 12px;
   line-height: 1.6;
 }
 
-.suggestions-status {
+.inspector-close {
+  flex: 0 0 auto;
+  border: 0;
+  padding: 4px 0;
+  color: var(--app-primary);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  background: transparent;
+  cursor: pointer;
+}
+
+.inspector-context-note {
   margin: 0;
-  color: var(--app-text-secondary);
+  color: var(--app-text-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.inspector-section {
+  display: grid;
+  gap: 8px;
+}
+
+.inspector-section h3 {
+  margin: 0;
+  color: var(--app-text);
   font-size: 13px;
 }
 
-.suggestions-error {
+.inspector-status,
+.inspector-importance {
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.inspector-status.is-partial {
+  color: var(--app-primary);
+}
+.inspector-status.is-missing {
+  color: var(--app-warning);
+}
+.inspector-status.is-matched {
+  color: var(--app-success);
+}
+.inspector-status.is-unknown {
+  color: var(--app-danger);
+}
+.inspector-importance {
+  color: var(--app-text-muted);
+  font-weight: 600;
+}
+
+.inspector-detail {
+  display: grid;
+  gap: 9px;
+  padding-top: 2px;
+}
+
+.inspector-detail-heading {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.inspector-detail h3 {
+  margin: 0;
+  color: var(--app-text);
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+.inspector-detail-block {
+  display: grid;
+  gap: 6px;
+}
+
+.inspector-detail-block > span {
+  color: var(--app-text-muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.inspector-evidence {
+  display: grid;
+  gap: 5px;
+  padding: 9px 10px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-md);
+  background: var(--app-surface-soft);
+}
+
+.inspector-evidence p,
+.inspector-conclusion,
+.inspector-suggestion,
+.inspector-boundary,
+.inspector-muted,
+.inspector-quiet,
+.inspector-status {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.inspector-evidence p,
+.inspector-conclusion,
+.inspector-suggestion,
+.inspector-boundary,
+.inspector-muted,
+.inspector-quiet {
+  color: var(--app-text-secondary);
+}
+
+.inspector-evidence span {
+  color: var(--app-text);
+  font-weight: 700;
+}
+
+.inspector-conclusion,
+.inspector-suggestion {
+  color: var(--app-text);
+}
+
+.inspector-suggestion {
+  font-weight: 600;
+}
+
+.inspector-error {
   display: grid;
   gap: 8px;
   justify-items: start;
   padding: 12px;
   border: 1px solid var(--el-color-danger-light-7);
-  border-radius: var(--app-radius-sm);
+  border-radius: var(--app-radius-md);
   background: var(--app-danger-soft);
 }
 
-.suggestions-error p {
+.inspector-error p {
   margin: 0;
   color: var(--app-text);
-  font-size: 13px;
-  line-height: 1.6;
-}
-
-.suggestions-summary {
-  margin: 0;
-  padding: 8px 12px;
-  border-radius: var(--app-radius-sm);
-  color: var(--app-text);
-  font-size: 13px;
-  font-weight: 600;
-  background: var(--app-surface-soft);
-}
-
-.suggestion-group {
-  display: grid;
-  gap: 10px;
-}
-
-.suggestion-group h3 {
-  margin: 0;
-  color: var(--app-text);
-  font-size: 13px;
-  font-weight: 800;
-}
-
-.suggestion-card {
-  border: 1px solid var(--el-border-color-light);
-  border-radius: 10px;
-  background: var(--el-bg-color);
-  padding: 14px;
-  display: grid;
-  gap: 8px;
-}
-
-.suggestion-card.is-gap {
-  border-color: var(--el-color-warning-light-7);
-}
-
-.suggestion-card h4 {
-  margin: 0;
-  color: var(--app-text);
-  font-size: 14px;
-  line-height: 1.6;
-}
-
-.suggestion-card p {
-  margin: 0;
-  color: var(--app-text-secondary);
-  font-size: 13px;
-  line-height: 1.6;
-}
-
-.suggestion-card small {
-  color: var(--app-text-secondary);
   font-size: 12px;
-  line-height: 1.5;
+  line-height: 1.6;
 }
 
-.suggestion-evidence {
-  border-left: 3px solid var(--el-border-color-light);
-  background: var(--el-fill-color-lighter);
-  border-radius: 6px;
-  padding: 8px 10px;
-  display: grid;
-  gap: 4px;
-}
-
-.suggestion-evidence p {
-  font-size: 12px;
-}
-
-.suggestion-evidence span {
-  font-weight: 700;
-}
-
-.suggestion-tip {
-  color: var(--app-text);
-  font-weight: 600;
+@media (max-width: 720px) {
+  .inspector-header p {
+    max-width: none;
+  }
 }
 </style>

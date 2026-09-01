@@ -40,6 +40,7 @@ final class ProjectSourceTextExtractor {
         putSkill("MyBatis", "MyBatis", "Mybatis", "mybatis");
         putSkill("Dubbo", "Dubbo", "dubbo");
         putSkill("RabbitMQ", "RabbitMQ");
+        putSkill("Kafka", "Kafka");
         putSkill("Redis", "Redis", "redis");
         putSkill("MySQL", "MySQL", "mysql");
         putSkill("Oracle", "Oracle", "oracle");
@@ -347,11 +348,12 @@ final class ProjectSourceTextExtractor {
             Matcher indexMatcher = PROJECT_INDEX_PATTERN.matcher(line);
             LabelValue projectNameLabel = parseProjectNameLabel(line);
             boolean startsByIndex = indexMatcher.matches();
+            boolean startsByDatedHeader = projectNameFromDatedHeader(line) != null;
             boolean startsByRepeatedName = projectNameLabel != null
                     && hasText(cleanProjectName(projectNameLabel.value()))
                     && current != null
                     && current.hasProjectFieldContent();
-            if (startsByIndex || startsByRepeatedName) {
+            if (startsByIndex || startsByDatedHeader || startsByRepeatedName) {
                 if (current != null && current.hasMeaningfulContent()) {
                     segments.add(current);
                 }
@@ -387,6 +389,20 @@ final class ProjectSourceTextExtractor {
         String name = cleanProjectName(firstNonBlank(
                 fields.name(),
                 evidence.stream().filter(ProjectSourceTextExtractor::looksLikeStandaloneProjectName).findFirst().orElse(null)));
+        boolean nameAlreadyInEvidence = false;
+        if (hasText(name)) {
+            for (String line : evidence) {
+                if (sameText(line, name)) {
+                    nameAlreadyInEvidence = true;
+                    break;
+                }
+            }
+        }
+        if (hasText(name) && !nameAlreadyInEvidence) {
+            // Keep a normalized field value alongside the labeled source line so the
+            // legacy candidate view remains compatible without changing the source boundary.
+            evidence.add(name);
+        }
         List<String> responsibilities = normalizeResponsibilities(firstNonEmpty(fields.responsibilities(), extractResponsibilityLines(evidence)));
         String summary = firstNonBlank(firstSentenceSummary(fields.description()), fallbackSummary(evidence, name, responsibilities));
         Set<String> techStack = new LinkedHashSet<>();
@@ -437,6 +453,12 @@ final class ProjectSourceTextExtractor {
         for (SourceLine sourceLine : sourceLines == null ? List.<SourceLine>of() : sourceLines) {
             String line = sourceLine.text();
             if (!hasText(line) || PROJECT_INDEX_PATTERN.matcher(line).matches()) {
+                continue;
+            }
+            String datedName = projectNameFromDatedHeader(line);
+            if (datedName != null) {
+                name = firstNonBlank(name, datedName);
+                timeRange = firstNonBlank(timeRange, extractTimeRange(line));
                 continue;
             }
             LabelValue labelValue = parseLabel(line);
@@ -561,6 +583,31 @@ final class ProjectSourceTextExtractor {
         return line != null && line.strip().matches("^(项目经历|项目经验|项目实践|项目介绍|参加项目描述|Projects|Project Experience)\\s*$");
     }
 
+    /**
+     * 带日期的项目标题是跨格式都相对可靠的条目边界：只接受日期前有短标题、且标题不像职责句的行。
+     * 没有明确边界的连续文本不在这里猜测，交给后续未决内容处理。
+     */
+    private static String projectNameFromDatedHeader(String line) {
+        if (!hasText(line)) {
+            return null;
+        }
+        Matcher matcher = DATE_RANGE_PATTERN.matcher(line.strip());
+        if (!matcher.find()) {
+            return null;
+        }
+        String before = line.substring(0, matcher.start()).strip();
+        String after = line.substring(matcher.end()).strip();
+        String candidate = hasText(before) ? before : after;
+        candidate = removeFieldLabel(candidate);
+        if (!hasText(candidate)
+                || candidate.length() > 36
+                || candidate.matches(".*[。！？!?；;，,].*")
+                || candidate.matches("^(负责|参与|使用|采用|通过|实现|开发|编写|维护|优化|设计|管理|完成|做|对|是一个|该系统|该项目|主要).*")) {
+            return null;
+        }
+        return candidate;
+    }
+
     private static boolean isProjectPrefixOnly(List<SourceLine> lines) {
         List<String> usefulLines = unique(lines.stream().map(SourceLine::text).toList());
         return !usefulLines.isEmpty()
@@ -658,7 +705,11 @@ final class ProjectSourceTextExtractor {
     private static String fallbackSummary(List<String> evidence, String name, List<String> responsibilities) {
         for (String line : evidence == null ? List.<String>of() : evidence) {
             String cleaned = removeFieldLabel(line);
-            if (!hasText(cleaned) || cleaned.equals(name) || isProjectFieldLabel(cleaned) || isSkillOnly(cleaned)) {
+            if (!hasText(cleaned)
+                    || cleaned.equals(name)
+                    || projectNameFromDatedHeader(cleaned) != null
+                    || isProjectFieldLabel(cleaned)
+                    || isSkillOnly(cleaned)) {
                 continue;
             }
             if (responsibilities != null && responsibilities.stream().anyMatch(item -> sameText(item, cleaned))) {
@@ -677,9 +728,11 @@ final class ProjectSourceTextExtractor {
             String cleaned = removeFieldLabel(value);
             for (String part : cleaned.split("[；;]\\s*|(?<=。)")) {
                 String item = part.strip();
-                if (!hasText(item) || isProjectFieldLabel(item) || isSkillOnly(item) || !isResponsibilityLine(item)) {
+                if (!hasText(item) || isProjectFieldLabel(item) || isSkillOnly(item)) {
                     continue;
                 }
+                // 责任描述中的非谓语尾句（例如“；压测峰值达到 6,000 QPS”）仍是用户事实，
+                // 不能因为不像“负责/实现”句就被静默丢弃。
                 result.add(item);
             }
         }
@@ -765,7 +818,20 @@ final class ProjectSourceTextExtractor {
     }
 
     private static String extractRole(String text) {
-        Matcher matcher = ROLE_PATTERN.matcher(text == null ? "" : text);
+        String value = text == null ? "" : text;
+        Matcher dateMatcher = DATE_RANGE_PATTERN.matcher(value);
+        if (dateMatcher.find()) {
+            String suffix = value.substring(dateMatcher.end()).lines()
+                    .map(String::strip)
+                    .findFirst()
+                    .orElse("");
+            if (hasText(suffix)
+                    && suffix.length() <= 24
+                    && !suffix.matches(".*[，,。；;].*")) {
+                return suffix;
+            }
+        }
+        Matcher matcher = ROLE_PATTERN.matcher(value);
         return matcher.find() ? matcher.group("role") : null;
     }
 

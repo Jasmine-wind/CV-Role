@@ -85,14 +85,6 @@
   background: var(--app-primary-soft);
 }
 
-.app-sidebar-foot {
-  margin-top: auto;
-  padding: 12px 10px 0;
-  border-top: 1px solid var(--app-border-soft);
-  color: var(--app-text-muted);
-  font-size: 12px;
-}
-
 .app-page {
   flex: 1;
   min-width: 0;
@@ -219,6 +211,10 @@
 
   .app-topbar {
     padding: 8px 16px;
+  }
+
+  .app-topbar-menu-button {
+    min-height: 40px;
   }
 
   .app-topbar-brand {

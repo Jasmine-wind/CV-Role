@@ -12,13 +12,16 @@ import lombok.Setter;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-@Schema(description = "简历基础信息字段")
+@Schema(description = "简历联系方式，必须携带显式类型")
 public class ResumeDocumentContactDTO {
 
     @Schema(description = "字段稳定 ID", example = "c-1")
     private String id;
 
-    @Schema(description = "字段名", example = "电话")
+    @Schema(description = "联系方式类型", example = "PHONE")
+    private String type;
+
+    @Schema(description = "展示名，缺省时由类型派生", example = "电话")
     private String label;
 
     @Schema(description = "字段值", example = "13800000000")

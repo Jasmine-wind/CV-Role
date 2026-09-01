@@ -3,20 +3,17 @@ package com.winter.airesumeoptimizer.module.workspace.service;
 import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentDTO;
 
 /**
- * Structured Resume Document 与既有解析快照之间的转换边界。
- * 编辑器、保存与后续渲染只面向 {@link ResumeDocumentDTO}，不直接依赖 V1 解析输出结构。
+ * RESUME_DOCUMENT_V1 文档转换契约。
+ * normalize 是唯一写入口径；历史 generic V1 文档只读升级为同一 V1 语义结构。
  */
 public interface ResumeDocumentConverter {
 
-    /**
-     * 从任务冻结的 V1 简历解析快照生成可编辑文档。
-     * 转换是确定性的，恢复“本次优化前版本”时按同一输入重新生成。
-     */
-    ResumeDocumentDTO fromParsedSnapshot(String structuredJson);
+    /** 归一化并校验用户提交/持久化内容；结构违反契约时拒绝而不是静默修正。 */
+    ResumeDocumentDTO normalize(ResumeDocumentDTO document);
 
     /**
-     * 归一化并校验用户提交的文档：补齐稳定 ID、裁剪文本、执行编辑上限。
-     * 超限时抛出业务异常，不会落库。
+     * 读取持久化文档内容：V1 语义文档直接归一化，Slice A 之前的 generic V1 内容按确定性规则升级。
+     * 无法安全升级时显式失败引导重新解析，不做降级产出。
      */
-    ResumeDocumentDTO normalize(ResumeDocumentDTO document);
+    ResumeDocumentDTO upgradeLegacyDocument(String persistedJson);
 }

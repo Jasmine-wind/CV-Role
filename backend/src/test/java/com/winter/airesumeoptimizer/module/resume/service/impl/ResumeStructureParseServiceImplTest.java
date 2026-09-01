@@ -181,6 +181,28 @@ class ResumeStructureParseServiceImplTest {
     }
 
     @Test
+    void datedProjectHeadersRemainSeparateFromThePreviousProject() {
+        String rawText = """
+                张三
+                项目经历
+                订单中台重构 2023.01 - 2023.09 核心开发
+                设计统一订单状态机，落地分布式事务方案
+                技术栈：Java、Spring Boot、MySQL、Redis、Kafka
+                实时风控平台 2021.03 - 2021.12 后端开发
+                基于规则引擎实现毫秒级风险识别与拦截
+                """;
+
+        ResumeStructuredContentDTO result = service.parse(rawText);
+
+        assertThat(result.getStructuredData().getProjects()).extracting("name")
+                .containsExactly("订单中台重构", "实时风控平台");
+        assertThat(result.getStructuredData().getProjects().get(0).getEvidence())
+                .doesNotContain("实时风控平台 2021.03 - 2021.12 后端开发");
+        assertThat(result.getStructuredData().getProjects().get(0).getResponsibilities())
+                .containsExactly("设计统一订单状态机，落地分布式事务方案");
+    }
+
+    @Test
     void projectSourceTextExtractorShouldOnlySplitByStrongProjectSeparators() {
         List<String> lines = List.of(
                 "项目一：",

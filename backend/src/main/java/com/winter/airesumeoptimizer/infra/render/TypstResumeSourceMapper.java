@@ -38,6 +38,10 @@ public class TypstResumeSourceMapper {
         StringBuilder builder = new StringBuilder();
         builder.append("(\n");
         builder.append("    name: ").append(toTypstString(basics == null ? null : basics.getName())).append(",\n");
+        builder.append("    job-intention: ")
+                .append(toTypstString(basics == null ? null : basics.getJobIntention())).append(",\n");
+        builder.append("    highest-education: ")
+                .append(toTypstString(basics == null ? null : basics.getHighestEducation())).append(",\n");
         builder.append("    contacts: ");
         List<ResumeDocumentContactDTO> contacts = basics == null ? null : basics.getContacts();
         if (contacts == null || contacts.isEmpty()) {
@@ -45,7 +49,9 @@ public class TypstResumeSourceMapper {
         } else {
             builder.append("(\n");
             for (ResumeDocumentContactDTO contact : contacts) {
-                builder.append("      (label: ")
+                builder.append("      (type: ")
+                        .append(toTypstString(contact == null ? null : contact.getType()))
+                        .append(", label: ")
                         .append(toTypstString(contact == null ? null : contact.getLabel()))
                         .append(", value: ")
                         .append(toTypstString(contact == null ? null : contact.getValue()))
@@ -88,12 +94,35 @@ public class TypstResumeSourceMapper {
                 continue;
             }
             builder.append("        (\n");
-            builder.append("          heading: ").append(toTypstString(entry.getHeading())).append(",\n");
-            builder.append("          meta: ").append(toTypstString(entry.getMeta())).append(",\n");
+            builder.append("          organization: ").append(toTypstString(entry.getOrganization())).append(",\n");
+            builder.append("          role: ").append(toTypstString(entry.getRole())).append(",\n");
+            builder.append("          school: ").append(toTypstString(entry.getSchool())).append(",\n");
+            builder.append("          degree: ").append(toTypstString(entry.getDegree())).append(",\n");
+            builder.append("          major: ").append(toTypstString(entry.getMajor())).append(",\n");
+            builder.append("          start-date: ").append(toTypstString(entry.getStartDate())).append(",\n");
+            builder.append("          end-date: ").append(toTypstString(entry.getEndDate())).append(",\n");
+            builder.append("          location: ").append(toTypstString(entry.getLocation())).append(",\n");
+            builder.append("          group: ").append(toTypstString(entry.getGroup())).append(",\n");
+            builder.append("          skill-items: ").append(mapSkillItems(entry.getSkillItems())).append(",\n");
             builder.append("          bullets: ").append(mapBullets(entry.getBullets())).append(",\n");
             builder.append("        ),\n");
         }
         builder.append("      )");
+        return builder.toString();
+    }
+
+    private String mapSkillItems(List<String> skillItems) {
+        if (skillItems == null || skillItems.isEmpty()) {
+            return "()";
+        }
+        StringBuilder builder = new StringBuilder();
+        builder.append("(\n");
+        for (String item : skillItems) {
+            builder.append("            ")
+                    .append(toTypstString(item))
+                    .append(",\n");
+        }
+        builder.append("          )");
         return builder.toString();
     }
 

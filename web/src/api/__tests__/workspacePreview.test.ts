@@ -32,6 +32,9 @@ describe('previewWorkspacePdf', () => {
         'x-resume-missing-contact': 'true',
         'x-resume-page-limit-exceeded': 'false',
         'x-resume-overflow-detected': 'false',
+        'x-resume-orphan-final-page': 'false',
+        'x-resume-readability-too-small': 'false',
+        'x-resume-needs-review': 'false',
       },
     })
 
@@ -49,6 +52,9 @@ describe('previewWorkspacePdf', () => {
         missingContact: true,
         pageLimitExceeded: false,
         overflowDetected: false,
+        orphanFinalPage: false,
+        readabilityTooSmall: false,
+        needsReview: false,
       },
     })
   })

@@ -61,6 +61,5 @@ onMounted(() => {
       </RouterLink>
     </nav>
 
-    <p class="app-sidebar-foot">分析只依据你的真实简历材料。</p>
   </aside>
 </template>

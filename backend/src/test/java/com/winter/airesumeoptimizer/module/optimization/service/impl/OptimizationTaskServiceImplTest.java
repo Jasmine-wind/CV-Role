@@ -27,7 +27,9 @@ import com.winter.airesumeoptimizer.module.optimization.mapper.ResumeVersionMapp
 import com.winter.airesumeoptimizer.module.optimization.service.OptimizationTaskService;
 import com.winter.airesumeoptimizer.module.optimization.vo.OptimizationTaskVO;
 import com.winter.airesumeoptimizer.module.resume.entity.Resume;
+import com.winter.airesumeoptimizer.module.resume.entity.ResumeParseResult;
 import com.winter.airesumeoptimizer.module.resume.mapper.ResumeMapper;
+import com.winter.airesumeoptimizer.module.resume.mapper.ResumeParseResultMapper;
 import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -36,6 +38,7 @@ import org.mockito.ArgumentCaptor;
 class OptimizationTaskServiceImplTest {
 
     private final ResumeMapper resumeMapper = mock(ResumeMapper.class);
+    private final ResumeParseResultMapper resumeParseResultMapper = mock(ResumeParseResultMapper.class);
     private final JobDescriptionService jobDescriptionService = mock(JobDescriptionService.class);
     private final JobDescriptionMapper jobDescriptionMapper = mock(JobDescriptionMapper.class);
     private final JobTargetMapper jobTargetMapper = mock(JobTargetMapper.class);
@@ -44,6 +47,7 @@ class OptimizationTaskServiceImplTest {
     private final AiJobMatchResultMapper aiJobMatchResultMapper = mock(AiJobMatchResultMapper.class);
     private final OptimizationTaskServiceImpl service = new OptimizationTaskServiceImpl(
             resumeMapper,
+            resumeParseResultMapper,
             jobDescriptionService,
             jobDescriptionMapper,
             jobTargetMapper,
@@ -68,6 +72,14 @@ class OptimizationTaskServiceImplTest {
         jobDescription.setRawText("Java 后端\n负责 Spring Boot 服务开发");
 
         when(resumeMapper.selectOne(any())).thenReturn(resume);
+        ResumeParseResult readyParseResult = new ResumeParseResult();
+        readyParseResult.setResumeId(10L);
+        readyParseResult.setParseStatus("SUCCESS");
+        readyParseResult.setQualityStatus("READY");
+        readyParseResult.setCanonicalSourceVersionId(40L);
+        readyParseResult.setUnresolvedItems("[]");
+        when(resumeParseResultMapper.selectOne(any())).thenReturn(readyParseResult);
+        when(resumeVersionMapper.selectOne(any())).thenReturn(sourceVersion());
         when(jobDescriptionService.submit(any(), any())).thenReturn(JobDescriptionVO.builder().id(20L).build());
         when(jobDescriptionMapper.selectOne(any())).thenReturn(jobDescription);
         when(jobTargetMapper.selectOne(any())).thenReturn(null);
@@ -76,7 +88,7 @@ class OptimizationTaskServiceImplTest {
             target.setId(30L);
             return 1;
         });
-        AtomicLong versionIds = new AtomicLong(40L);
+        AtomicLong versionIds = new AtomicLong(41L);
         when(resumeVersionMapper.insert(any(ResumeVersion.class))).thenAnswer(invocation -> {
             ResumeVersion version = invocation.getArgument(0);
             version.setId(versionIds.getAndIncrement());
@@ -107,15 +119,18 @@ class OptimizationTaskServiceImplTest {
         assertThat(result.getResumeName()).isEqualTo("resume.pdf");
 
         ArgumentCaptor<ResumeVersion> versionCaptor = ArgumentCaptor.forClass(ResumeVersion.class);
-        verify(resumeVersionMapper, org.mockito.Mockito.times(2)).insert(versionCaptor.capture());
-        ResumeVersion source = versionCaptor.getAllValues().get(0);
-        ResumeVersion targeted = versionCaptor.getAllValues().get(1);
-        assertThat(source.getVersionType()).isEqualTo("SOURCE");
-        assertThat(source.getSourceVersionId()).isNull();
+        verify(resumeVersionMapper, org.mockito.Mockito.times(1)).insert(versionCaptor.capture());
+        ResumeVersion targeted = versionCaptor.getValue();
         assertThat(targeted.getVersionType()).isEqualTo("TARGETED");
-        assertThat(targeted.getSourceVersionId()).isEqualTo(source.getId());
+        assertThat(targeted.getSourceVersionId()).isEqualTo(40L);
         assertThat(targeted.getJobTargetId()).isEqualTo(30L);
-        assertThat(targeted.getStructuredContent()).isNull();
+        assertThat(targeted.getContentStatus()).isEqualTo("READY");
+        assertThat(targeted.getStructuredContent()).isEqualTo(sourceVersion().getStructuredContent());
+        assertThat(targeted.getContentRevision()).isZero();
+        ArgumentCaptor<OptimizationTask> taskCaptor = ArgumentCaptor.forClass(OptimizationTask.class);
+        verify(optimizationTaskMapper).insert(taskCaptor.capture());
+        assertThat(taskCaptor.getValue().getResumeInputSnapshot()).isEqualTo(sourceVersion().getStructuredContent());
+        verify(resumeVersionMapper, never()).update(any(), any());
         verify(resumeMapper, never()).updateById(any(Resume.class));
     }
 
@@ -153,6 +168,46 @@ class OptimizationTaskServiceImplTest {
     }
 
     @Test
+    void createShouldRejectReadyRowWithoutCanonicalDocument() {
+        ResumeParseResult incomplete = new ResumeParseResult();
+        incomplete.setResumeId(10L);
+        incomplete.setParseStatus("SUCCESS");
+        incomplete.setQualityStatus("READY");
+        incomplete.setUnresolvedItems("[]");
+        when(resumeParseResultMapper.selectOne(any())).thenReturn(incomplete);
+
+        assertThatThrownBy(() -> service.create(
+                1L, 10L, "Java 后端", "Java 后端\n负责 Spring Boot 服务开发",
+                "SYSTEM_DEFAULT_OPENAI_COMPATIBLE", "test-model"))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        exception -> assertThat(exception.getCode()).isEqualTo(409));
+        verify(resumeVersionMapper, never()).insert(any(ResumeVersion.class));
+    }
+
+    @Test
+    void createShouldRejectResumeWithoutConfirmedDeliveryQuality() {
+        // Slice A 质量门：解析中 / 待确认 / 失败的简历不得携带进入新分析任务。
+        for (String qualityStatus : java.util.List.of("PENDING", "NEEDS_REVIEW", "FAILED")) {
+            ResumeParseResult unconfirmed = new ResumeParseResult();
+            unconfirmed.setResumeId(10L);
+            unconfirmed.setQualityStatus(qualityStatus);
+            when(resumeParseResultMapper.selectOne(any())).thenReturn(unconfirmed);
+
+            assertThatThrownBy(() -> service.create(
+                    1L,
+                    10L,
+                    "Java 后端",
+                    "Java 后端\n负责 Spring Boot 服务开发",
+                    "SYSTEM_DEFAULT_OPENAI_COMPATIBLE",
+                    "test-model"))
+                    .isInstanceOfSatisfying(BusinessException.class,
+                            exception -> assertThat(exception.getCode()).isEqualTo(409));
+        }
+        verify(resumeVersionMapper, never()).insert(any(ResumeVersion.class));
+        verify(optimizationTaskMapper, never()).insert(any(OptimizationTask.class));
+    }
+
+    @Test
     void attachAsyncTaskShouldRejectMutationOfCompletedHistory() {
         when(optimizationTaskMapper.selectOne(any())).thenReturn(task("SUCCESS"));
 
@@ -164,16 +219,30 @@ class OptimizationTaskServiceImplTest {
     }
 
     @Test
-    void captureResumeSnapshotShouldCopyImmutableInputIntoBothVersionsAndTask() {
+    void captureResumeSnapshotShouldOnlyBackfillTargetWhenSourceIsAlreadyFrozen() {
         OptimizationTask task = task("RUNNING");
         when(optimizationTaskMapper.selectOne(any())).thenReturn(task);
         when(resumeVersionMapper.update(any(), any())).thenReturn(1);
         when(optimizationTaskMapper.update(any(), any())).thenReturn(1);
 
-        service.captureResumeSnapshot(1L, 50L, "{\"skills\":[\"Java\"]}");
+        service.captureResumeSnapshot(1L, 50L, sourceVersion().getStructuredContent());
 
-        verify(resumeVersionMapper, org.mockito.Mockito.times(2)).update(any(), any());
+        verify(resumeVersionMapper, org.mockito.Mockito.times(1)).update(any(), any());
         verify(optimizationTaskMapper).update(any(), any());
+    }
+
+    @Test
+    void captureResumeSnapshotShouldRejectLateReparseInsteadOfRewritingSource() {
+        OptimizationTask task = task("RUNNING");
+        when(optimizationTaskMapper.selectOne(any())).thenReturn(task);
+
+        assertThatThrownBy(() -> service.captureResumeSnapshot(1L, 50L,
+                "{\"schemaVersion\":\"RESUME_DOCUMENT_V1\",\"different\":true}"))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        exception -> assertThat(exception.getCode()).isEqualTo(409));
+
+        verify(resumeVersionMapper, never()).update(any(), any());
+        verify(optimizationTaskMapper, never()).update(any(), any());
     }
 
     @Test
@@ -182,7 +251,7 @@ class OptimizationTaskServiceImplTest {
         task.setResumeInputSnapshot("{\"skills\":[\"原始快照\"]}");
         when(optimizationTaskMapper.selectOne(any())).thenReturn(task);
 
-        service.captureResumeSnapshot(1L, 50L, "{\"skills\":[\"后来内容\"]}");
+        service.captureResumeSnapshot(1L, 50L, canonicalSnapshot());
 
         verify(optimizationTaskMapper, never()).update(any(), any());
         verify(resumeVersionMapper, never()).update(any(), any());
@@ -395,11 +464,21 @@ class OptimizationTaskServiceImplTest {
         return analysis;
     }
 
+    private String canonicalSnapshot() {
+        return "{\"schemaVersion\":\"RESUME_DOCUMENT_V1\",\"basics\":{\"name\":\"张三\",\"contacts\":[]},\"sections\":[]}";
+    }
+
     private ResumeVersion sourceVersion() {
         ResumeVersion version = new ResumeVersion();
         version.setId(40L);
         version.setUserId(1L);
         version.setResumeId(10L);
+        version.setVersionType("SOURCE");
+        version.setSourceType("PARSED_UPLOAD");
+        version.setContentStatus("READY");
+        version.setStructuredContent(
+                "{\"schemaVersion\":\"RESUME_DOCUMENT_V1\",\"basics\":{\"name\":\"张三\",\"contacts\":[]},\"sections\":[]}");
+        version.setContentRevision(0L);
         return version;
     }
 

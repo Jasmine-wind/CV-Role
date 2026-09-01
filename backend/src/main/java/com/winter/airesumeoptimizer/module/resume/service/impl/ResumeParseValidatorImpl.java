@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.springframework.stereotype.Service;
 
@@ -25,7 +26,7 @@ public class ResumeParseValidatorImpl implements ResumeParseValidator {
     private static final Set<String> SECTION_HEADINGS = Set.of(
             "个人信息", "基本信息", "联系方式", "教育经历", "教育背景", "专业技能", "技术能力", "技能关键词", "技术栈",
             "工作经历", "工作经验", "职业经历", "实习经历", "项目经历", "项目经验", "校园经历", "获奖经历", "证书",
-            "自我评价", "个人总结", "profile", "education", "skills", "experience", "projects", "summary");
+            "自我评价", "个人总结", "个人概述", "profile", "education", "skills", "experience", "projects", "summary");
     private static final Set<String> INVALID_NAME_EXACT = Set.of(
             "本人", "个人简历", "personal resume", "resume", "personal", "curriculum vitae", "cv", "参加项目描述",
             "基本情况", "基本资料", "组织", "同学们");
@@ -125,15 +126,15 @@ public class ResumeParseValidatorImpl implements ResumeParseValidator {
             warnings.add("AI_PHONE_INVALID_FALLBACK_TO_RULE");
         }
 
-        String email = validEmail(rule.getEmail()) ? rule.getEmail().strip() : null;
-        if (isBlank(email) && validEmail(valueFromBasicInfo(rule, "email"))) {
-            email = valueFromBasicInfo(rule, "email").strip();
+        String email = extractEmail(rule.getEmail());
+        if (isBlank(email)) {
+            email = extractEmail(valueFromBasicInfo(rule, "email"));
         }
-        if (isBlank(email) && validEmail(ai.getEmail())) {
-            email = ai.getEmail().strip();
+        if (isBlank(email)) {
+            email = extractEmail(ai.getEmail());
         }
-        if (isBlank(email) && validEmail(valueFromBasicInfo(ai, "email"))) {
-            email = valueFromBasicInfo(ai, "email").strip();
+        if (isBlank(email)) {
+            email = extractEmail(valueFromBasicInfo(ai, "email"));
         }
         if (!isBlank(ai.getEmail()) && !ai.getEmail().strip().equals(email)) {
             warnings.add("AI_EMAIL_INVALID_FALLBACK_TO_RULE");
@@ -283,12 +284,13 @@ public class ResumeParseValidatorImpl implements ResumeParseValidator {
 
     @SafeVarargs
     private final void removeAssignedDuplicates(List<String> warnings, List<String>... lists) {
-        Set<String> seen = new LinkedHashSet<>();
+        // 只去掉同一章节列表内的重复；同一句经历合法地出现在工作/项目等章节时不能静默吞掉。
         for (List<String> list : lists) {
+            Set<String> seenWithinSection = new LinkedHashSet<>();
             List<String> kept = new ArrayList<>();
             for (String value : list) {
                 String key = normalizeForDedupe(value);
-                if (seen.add(key)) {
+                if (seenWithinSection.add(key)) {
                     kept.add(value);
                 } else {
                     warnings.add("AI_DUPLICATE_TEXT_REMOVED");
@@ -478,15 +480,27 @@ public class ResumeParseValidatorImpl implements ResumeParseValidator {
         return !isBlank(value) && PHONE_PATTERN.matcher(value).find();
     }
 
+    /**
+     * 与规则抽取层同为 find() 语义：邮箱前后带噪声字符时先抽取再整值校验，
+     * 避免合法邮箱因全串匹配被误判无效而丢失。
+     */
     private boolean validEmail(String value) {
-        return !isBlank(value) && EMAIL_PATTERN.matcher(value).matches();
+        return !isBlank(value) && EMAIL_PATTERN.matcher(value).find();
+    }
+
+    private String extractEmail(String value) {
+        if (isBlank(value)) {
+            return null;
+        }
+        Matcher matcher = EMAIL_PATTERN.matcher(value);
+        return matcher.find() ? matcher.group().strip() : null;
     }
 
     private String validBasicInfoValue(String key, String value) {
         return switch (key) {
             case "name" -> validName(value) ? cleanLine(value) : null;
             case "phone" -> validPhone(value) ? normalizePhone(value) : null;
-            case "email" -> validEmail(value) ? cleanLine(value) : null;
+            case "email" -> extractEmail(value);
             case "degree" -> firstDegree(value);
             case "gender" -> validGender(value);
             case "age" -> validAge(value);

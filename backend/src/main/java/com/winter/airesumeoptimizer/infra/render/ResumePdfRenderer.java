@@ -12,7 +12,7 @@ import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentDTO;
 public interface ResumePdfRenderer {
 
     /** 渲染器实现版本，记录进 ExportArtifact 以便复现历史导出。 */
-    String RENDERER_VERSION = "typst-resume-renderer/1";
+    String RENDERER_VERSION = "typst-resume-renderer/3";
 
     /**
      * 同步渲染 PDF。

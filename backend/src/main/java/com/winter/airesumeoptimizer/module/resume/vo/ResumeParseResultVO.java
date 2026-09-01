@@ -52,6 +52,18 @@ public class ResumeParseResultVO {
     @Schema(description = "结构化解析质量分数", example = "85")
     private Integer parseQualityScore;
 
+    @Schema(description = "交付质量状态", example = "READY")
+    private String qualityStatus;
+
+    @Schema(description = "确定性验证问题 JSON")
+    private String qualityIssues;
+
+    @Schema(description = "待用户确认的候选项 JSON")
+    private String unresolvedItems;
+
+    @Schema(description = "canonical 交付文档 JSON（RESUME_DOCUMENT_V1）")
+    private String canonicalDocument;
+
     @Schema(description = "更新时间")
     private LocalDateTime updatedAt;
 }

@@ -68,6 +68,9 @@ public class WorkspaceExportController {
                 .header("X-Resume-Missing-Contact", Boolean.toString(rendered.preflight().missingContact()))
                 .header("X-Resume-Page-Limit-Exceeded", Boolean.toString(rendered.preflight().pageLimitExceeded()))
                 .header("X-Resume-Overflow-Detected", Boolean.toString(rendered.preflight().overflowDetected()))
+                .header("X-Resume-Orphan-Final-Page", Boolean.toString(rendered.preflight().orphanFinalPage()))
+                .header("X-Resume-Readability-Too-Small", Boolean.toString(rendered.preflight().readabilityTooSmall()))
+                .header("X-Resume-Needs-Review", Boolean.toString(rendered.preflight().needsReview()))
                 .header("X-Preview-Receipt", rendered.previewReceipt())
                 .body(rendered.pdf());
     }
