@@ -113,3 +113,7 @@ temp/
 /minio-data/
 /postgres-data/
 .design-reference/
+
+# Local visual review artifacts
+.impeccable/
+/final-visual-gate/landing-*/
