@@ -4,6 +4,7 @@ import { ElMessage } from 'element-plus'
 import { reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import AuthShell from '@/components/auth/AuthShell.vue'
 
 interface LoginForm {
   account: string
@@ -50,16 +51,11 @@ const handleSubmit = async () => {
 </script>
 
 <template>
-  <main class="auth-page">
-    <section class="auth-panel">
-      <RouterLink to="/" class="auth-brand">
-        <span>CV</span>
-        <strong>简历优化</strong>
-      </RouterLink>
-      <h1 class="auth-title">登录</h1>
-      <p class="auth-subtitle">使用用户名或邮箱登录，继续为目标岗位准备简历。</p>
+  <AuthShell>
+    <h1 class="auth-title">登录</h1>
+    <p class="auth-subtitle">使用用户名或邮箱登录，继续为目标岗位准备简历。</p>
 
-      <el-form ref="formRef" :model="form" :rules="rules" label-position="top" size="large">
+    <el-form ref="formRef" :model="form" :rules="rules" label-position="top" size="large">
         <el-form-item label="用户名或邮箱" prop="account">
           <el-input
             v-model.trim="form.account"
@@ -87,7 +83,6 @@ const handleSubmit = async () => {
             <router-link class="auth-link" to="/register">去注册</router-link>
           </p>
         </div>
-      </el-form>
-    </section>
-  </main>
+    </el-form>
+  </AuthShell>
 </template>

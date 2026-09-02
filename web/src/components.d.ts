@@ -11,8 +11,8 @@ export {}
 /* prettier-ignore */
 declare module 'vue' {
   export interface GlobalComponents {
+    AuthShell: typeof import('./components/auth/AuthShell.vue')['default']
     BulletSuggestionCard: typeof import('./components/workspace/BulletSuggestionCard.vue')['default']
-    ElAlert: typeof import('element-plus/es')['ElAlert']
     ElButton: typeof import('element-plus/es')['ElButton']
     ElDropdown: typeof import('element-plus/es')['ElDropdown']
     ElDropdownItem: typeof import('element-plus/es')['ElDropdownItem']
@@ -20,20 +20,21 @@ declare module 'vue' {
     ElForm: typeof import('element-plus/es')['ElForm']
     ElFormItem: typeof import('element-plus/es')['ElFormItem']
     ElInput: typeof import('element-plus/es')['ElInput']
-    ElOption: typeof import('element-plus/es')['ElOption']
     ElRadioButton: typeof import('element-plus/es')['ElRadioButton']
     ElRadioGroup: typeof import('element-plus/es')['ElRadioGroup']
-    ElSelect: typeof import('element-plus/es')['ElSelect']
-    ElTag: typeof import('element-plus/es')['ElTag']
     EmptyState: typeof import('./components/common/EmptyState.vue')['default']
     ErrorState: typeof import('./components/common/ErrorState.vue')['default']
     PageHeader: typeof import('./components/common/PageHeader.vue')['default']
+    ProductFlowDemo: typeof import('./components/brand/ProductFlowDemo.vue')['default']
+    RequirementNavigator: typeof import('./components/task/RequirementNavigator.vue')['default']
     ResumeEditor: typeof import('./components/workspace/ResumeEditor.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
     SkeletonBlock: typeof import('./components/common/SkeletonBlock.vue')['default']
+    TaskHeader: typeof import('./components/task/TaskHeader.vue')['default']
     WorkspacePanel: typeof import('./components/workspace/WorkspacePanel.vue')['default']
     WorkspacePreviewExport: typeof import('./components/workspace/WorkspacePreviewExport.vue')['default']
+    WorkspaceRequirements: typeof import('./components/workspace/WorkspaceRequirements.vue')['default']
     WorkspaceSuggestions: typeof import('./components/workspace/WorkspaceSuggestions.vue')['default']
   }
 }

@@ -21,6 +21,11 @@ const displayName = computed(() => {
 
 const userEmail = computed(() => authStore.currentUser?.email || '当前账号')
 
+const primaryNavItems = [
+  { label: '开始优化', route: '/app' },
+  { label: '我的简历', route: '/resumes' },
+]
+
 const handleAccountCommand = (command: string) => {
   if (command === 'settings') {
     router.push('/settings/ai-provider')
@@ -46,10 +51,27 @@ const handleAccountCommand = (command: string) => {
       >
         菜单
       </el-button>
-      <RouterLink to="/app" class="app-topbar-brand">
+      <RouterLink to="/app" class="app-topbar-brand" aria-label="简历优化首页">
         <span class="app-sidebar-mark">CV</span>
-        简历优化
+        <span>简历优化</span>
       </RouterLink>
+      <nav class="app-topbar-nav" aria-label="主导航">
+        <RouterLink
+          v-for="item in primaryNavItems"
+          :key="item.route"
+          :to="item.route"
+          class="app-topbar-nav-link"
+        >
+          {{ item.label }}
+        </RouterLink>
+      </nav>
+      <span
+        v-if="$route.name === 'workspace' || $route.name === 'job-analysis'"
+        class="app-workspace-context"
+      >
+        岗位任务 <span aria-hidden="true">/</span>
+        {{ $route.name === 'workspace' ? '编辑工作区' : '证据审阅' }}
+      </span>
     </div>
 
     <div class="app-topbar-account">

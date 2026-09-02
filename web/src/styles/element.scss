@@ -1,14 +1,23 @@
 :root {
   --el-color-primary: var(--app-primary);
-  --el-color-primary-light-3: #60a5fa;
-  --el-color-primary-light-5: #93c5fd;
-  --el-color-primary-light-7: #bfdbfe;
-  --el-color-primary-light-8: #dbeafe;
+  --el-color-primary-light-3: #c48675;
+  --el-color-primary-light-5: #d2a294;
+  --el-color-primary-light-7: #dfc2b7;
+  --el-color-primary-light-8: #ead2c9;
   --el-color-primary-light-9: var(--app-primary-soft);
-  --el-color-primary-dark-2: var(--app-primary-hover);
+  --el-color-primary-dark-2: var(--app-primary-active);
 
-  --el-border-radius-base: 8px;
-  --el-border-radius-small: 6px;
+  --el-color-success: var(--app-success);
+  --el-color-success-light-7: #d8d5cc;
+  --el-color-success-light-9: var(--app-success-soft);
+  --el-color-warning: var(--app-warning);
+  --el-color-warning-light-7: #ddcbbb;
+  --el-color-warning-light-9: var(--app-warning-soft);
+  --el-color-danger: var(--app-danger);
+  --el-color-danger-light-7: var(--app-primary-subtle);
+  --el-color-danger-light-9: var(--app-danger-soft);
+  --el-border-radius-base: 5px;
+  --el-border-radius-small: 3px;
   --el-border-color: var(--app-border);
   --el-border-color-light: var(--app-border-soft);
   --el-fill-color-light: var(--app-bg-soft);
@@ -28,8 +37,8 @@
   --el-button-border-color: var(--app-primary);
   --el-button-hover-bg-color: var(--app-primary-hover);
   --el-button-hover-border-color: var(--app-primary-hover);
-  --el-button-active-bg-color: #1e40af;
-  --el-button-active-border-color: #1e40af;
+  --el-button-active-bg-color: var(--app-primary-active);
+  --el-button-active-border-color: var(--app-primary-active);
 }
 
 .el-button--success {
@@ -74,4 +83,13 @@
 .el-textarea__inner,
 .el-select__wrapper {
   box-shadow: 0 0 0 1px var(--app-border) inset;
+  border-radius: var(--app-radius-md);
+}
+
+.el-button,
+.el-input__wrapper,
+.el-textarea__inner,
+.el-select__wrapper {
+  transition: background-color 160ms ease, border-color 160ms ease, box-shadow 160ms ease,
+    color 160ms ease;
 }

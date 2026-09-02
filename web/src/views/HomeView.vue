@@ -43,6 +43,9 @@ const preparationPolling = new Map<number, AsyncTaskPollingController>()
 const selectedResume = computed(
   () => resumes.value.find((item) => item.id === selectedResumeId.value) ?? null,
 )
+const otherResumes = computed(() =>
+  resumes.value.filter((item) => item.id !== selectedResumeId.value),
+)
 const resumeStatusLabel = (resume: ResumeListItem | null) => {
   if (!resume) return '请选择简历'
   if (resume.qualityStatus === 'PENDING') return '正在准备'
@@ -381,8 +384,8 @@ onUnmounted(() => {
 <template>
   <section class="home-page">
     <PageHeader
-      title="开始岗位分析"
-      description="选择一份简历，粘贴目标岗位 JD，系统会完成其余准备并给出逐条核对的分析结果。"
+      title="开始岗位优化"
+      description="选择一份真实简历，提供目标岗位 JD，系统会完成准备并给出逐条可核对的分析结果。"
     />
 
     <SkeletonBlock v-if="loading && !resumes.length" title :rows="5" />
@@ -395,154 +398,182 @@ onUnmounted(() => {
       @action="loadResumes()"
     />
 
-    <section v-else class="home-start-card app-card">
-      <div class="home-start-field">
-        <div class="home-field-head">
-          <label for="home-resume">我的简历</label>
-          <el-button
+    <section v-else class="home-composer" aria-label="岗位优化输入">
+      <div class="home-composer-grid">
+        <section class="home-source-column" aria-labelledby="home-source-title">
+          <header class="home-section-heading">
+            <span class="home-section-label">RESUME SOURCE</span>
+            <h3 id="home-source-title">我的简历</h3>
+            <p>选择一份真实材料作为本次岗位分析的基础。</p>
+          </header>
+
+          <div v-if="selectedResume" class="home-source-current">
+            <span class="home-source-indicator" aria-hidden="true" />
+            <div>
+              <strong>{{ selectedResume.originalFilename }}</strong>
+              <span>{{ selectedResume.fileType }} · {{ selectedResumeStatus }}</span>
+            </div>
+          </div>
+
+          <div
+            v-if="otherResumes.length"
+            class="home-resume-options"
+            role="listbox"
+            aria-label="选择其他简历"
+          >
+            <span class="home-options-label">其他简历</span>
+            <button
+              v-for="resume in otherResumes"
+              :key="resume.id"
+              type="button"
+              class="home-resume-option"
+              :class="{ 'is-selected': selectedResumeId === resume.id }"
+              :aria-selected="selectedResumeId === resume.id"
+              :disabled="analysisRunning"
+              role="option"
+              @click="selectedResumeId = resume.id"
+            >
+              <span class="home-option-dot" aria-hidden="true" />
+              <span class="home-option-copy">
+                <strong>{{ resume.originalFilename }}</strong>
+                <small>{{ resume.fileType }} · {{ resumeStatusLabel(resume) }}</small>
+              </span>
+              <span v-if="selectedResumeId === resume.id" class="home-option-check">当前</span>
+            </button>
+          </div>
+
+          <button
             v-if="resumes.length"
-            text
-            type="primary"
-            size="small"
+            type="button"
+            class="home-upload-trigger"
             :disabled="analysisRunning"
             @click="uploadRowVisible = !uploadRowVisible"
           >
-            {{ uploadRowVisible ? '收起' : '上传另一份' }}
-          </el-button>
-        </div>
+            <span aria-hidden="true">＋</span>
+            {{ uploadRowVisible ? '收起上传' : '上传另一份简历' }}
+          </button>
 
-        <el-select
-          v-if="resumes.length"
-          id="home-resume"
-          v-model="selectedResumeId"
-          class="home-resume-select"
-          placeholder="选择简历"
-          :disabled="analysisRunning"
-        >
-          <el-option
-            v-for="resume in resumes"
-            :key="resume.id"
-            :label="resume.originalFilename"
-            :value="resume.id"
-          >
-            <span>{{ resume.originalFilename }}</span>
-          </el-option>
-        </el-select>
+          <div v-if="!resumes.length || uploadRowVisible" class="home-inline-upload">
+            <p v-if="!resumes.length">先上传一份真实简历。上传后系统会自动读取内容。</p>
+            <label class="home-file-picker">
+              <span>{{ selectedFile?.name || '选择 PDF、DOC 或 DOCX' }}</span>
+              <input
+                ref="fileInput"
+                data-testid="home-resume-upload"
+                type="file"
+                accept=".pdf,.doc,.docx"
+                @change="handleFileChange"
+              />
+            </label>
+            <el-button
+              type="primary"
+              :loading="uploading"
+              :disabled="!selectedFile"
+              @click="handleUpload"
+            >
+              上传简历
+            </el-button>
+          </div>
 
-        <div v-if="!resumes.length || uploadRowVisible" class="home-inline-upload">
-          <p v-if="!resumes.length">先上传一份真实简历。上传后系统会自动读取内容。</p>
-          <label class="home-file-picker">
-            <span>{{ selectedFile?.name || '选择简历文件' }}</span>
-            <input
-              ref="fileInput"
-              data-testid="home-resume-upload"
-              type="file"
-              accept=".pdf,.doc,.docx"
-              @change="handleFileChange"
+          <div v-if="preparationTaskId" class="home-analysis-state is-running" role="status">
+            <span class="home-state-dot" />
+            <div>
+              <strong>正在准备简历</strong>
+              <p>{{ preparationMessage }}</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="home-target-column" aria-labelledby="home-target-title">
+          <header class="home-section-heading">
+            <span class="home-section-label">TARGET JOB</span>
+            <h3 id="home-target-title">目标岗位 JD</h3>
+            <p>粘贴完整岗位描述，包含职责、要求和加分项。</p>
+          </header>
+
+          <div v-if="resumes.length" class="home-jd-field">
+            <el-input
+              id="home-jd"
+              v-model="jobDescription"
+              type="textarea"
+              :rows="11"
+              maxlength="10000"
+              show-word-limit
+              resize="vertical"
+              placeholder="粘贴完整的岗位描述，包括职责、要求和加分项……"
+              :disabled="analysisRunning"
             />
-          </label>
-          <el-button
-            type="primary"
-            :loading="uploading"
-            :disabled="!selectedFile"
-            @click="handleUpload"
+            <p class="home-field-boundary">分析只依据你提供的简历材料，不会为匹配岗位编造经历。</p>
+          </div>
+          <p v-else class="home-target-empty">上传并准备一份简历后，再提供目标岗位 JD。</p>
+
+          <div
+            v-if="analysisError && !activeAnalysis"
+            class="home-analysis-state is-error"
+            role="alert"
           >
-            上传简历
-          </el-button>
-        </div>
-      </div>
-
-      <div v-if="resumes.length" class="home-start-field">
-        <label for="home-jd">目标岗位 JD</label>
-        <el-input
-          id="home-jd"
-          v-model="jobDescription"
-          type="textarea"
-          :rows="10"
-          maxlength="10000"
-          show-word-limit
-          resize="vertical"
-          placeholder="粘贴完整的岗位描述，包括职责、要求和加分项……"
-          :disabled="analysisRunning"
-        />
-      </div>
-
-      <div v-if="preparationTaskId" class="home-analysis-state is-running" role="status">
-        <span class="home-state-dot" />
-        <div>
-          <strong>正在准备简历</strong>
-          <p>{{ preparationMessage }}</p>
-        </div>
-      </div>
-
-      <div
-        v-if="analysisError && !activeAnalysis"
-        class="home-analysis-state is-error"
-        role="alert"
-      >
-        <span class="home-state-dot" />
-        <div>
-          <strong>岗位分析没有开始</strong>
-          <p>{{ analysisError }}</p>
-          <p>当前选择和岗位 JD 仍保留在本页，可以直接重试。</p>
-          <div class="home-state-actions">
-            <el-button
-              type="primary"
-              plain
-              :loading="startingAnalysis"
-              @click="handleStartAnalysis"
-            >
-              重新开始分析
-            </el-button>
+            <span class="home-state-dot" />
+            <div>
+              <strong>岗位分析没有开始</strong>
+              <p>{{ analysisError }}</p>
+              <p>当前选择和岗位 JD 仍保留在本页，可以直接重试。</p>
+              <div class="home-state-actions">
+                <el-button
+                  type="primary"
+                  plain
+                  :loading="startingAnalysis"
+                  @click="handleStartAnalysis"
+                >
+                  重新开始分析
+                </el-button>
+              </div>
+            </div>
           </div>
-        </div>
+
+          <div
+            v-else-if="activeAnalysis"
+            class="home-analysis-state"
+            :class="analysisError ? 'is-error' : 'is-running'"
+            role="status"
+          >
+            <span class="home-state-dot" />
+            <div>
+              <strong>{{ analysisError ? '岗位分析没有完成' : '正在分析岗位' }}</strong>
+              <p v-if="analysisError">
+                {{ analysisError }}
+                <template v-if="!analysisTimedOut"
+                  >你的简历和目标岗位信息已保存，可以直接重试，无需重新填写。</template
+                >
+              </p>
+              <p v-else>{{ currentStage }}</p>
+              <div v-if="analysisError" class="home-state-actions">
+                <el-button
+                  v-if="analysisTimedOut"
+                  plain
+                  :loading="startingAnalysis"
+                  @click="continueWaiting()"
+                >
+                  继续等待
+                </el-button>
+                <el-button
+                  v-else
+                  type="primary"
+                  plain
+                  :loading="startingAnalysis"
+                  @click="retryAnalysis()"
+                >
+                  重试分析
+                </el-button>
+              </div>
+            </div>
+          </div>
+        </section>
       </div>
 
-      <div
-        v-else-if="activeAnalysis"
-        class="home-analysis-state"
-        :class="analysisError ? 'is-error' : 'is-running'"
-        role="status"
-      >
-        <span class="home-state-dot" />
-        <div>
-          <strong>{{ analysisError ? '岗位分析没有完成' : '正在分析岗位' }}</strong>
-          <p v-if="analysisError">
-            {{ analysisError }}
-            <template v-if="!analysisTimedOut"
-              >你的简历和目标岗位信息已保存，可以直接重试，无需重新填写。</template
-            >
-          </p>
-          <p v-else>{{ currentStage }}</p>
-          <div v-if="analysisError" class="home-state-actions">
-            <el-button
-              v-if="analysisTimedOut"
-              plain
-              :loading="startingAnalysis"
-              @click="continueWaiting()"
-            >
-              继续等待
-            </el-button>
-            <el-button
-              v-else
-              type="primary"
-              plain
-              :loading="startingAnalysis"
-              @click="retryAnalysis()"
-            >
-              重试分析
-            </el-button>
-          </div>
-        </div>
-      </div>
-
-      <footer v-if="resumes.length" class="home-start-actions">
-        <div class="home-selected-resume">
-          <div class="home-selected-resume-heading">
-            <strong>{{ selectedResume?.originalFilename || '请选择简历' }}</strong>
-            <span class="home-ready-state">{{ selectedResumeStatus }}</span>
-          </div>
-          <small>系统不会为了匹配岗位编造你的经历。</small>
+      <footer v-if="resumes.length" class="home-task-bar">
+        <div class="home-task-boundary">
+          <span class="home-state-dot is-static" aria-hidden="true" />
+          <span>基于真实简历材料分析，系统不会为了匹配岗位编造经历。</span>
         </div>
         <div class="home-start-actions-buttons">
           <el-button
@@ -567,35 +598,21 @@ onUnmounted(() => {
       </footer>
     </section>
 
-    <section v-if="!loadFailed && resumes.length" class="home-resume-summary">
-      <header>
-        <div>
-          <h2>我的简历</h2>
-          <p>已有 {{ resumes.length }} 份简历，可以随时用于新的岗位分析。</p>
-        </div>
-        <el-button text type="primary" @click="router.push('/resumes')">管理简历</el-button>
-      </header>
-      <div class="home-resume-chips">
-        <button
-          v-for="resume in resumes.slice(0, 4)"
-          :key="resume.id"
-          type="button"
-          :class="{ 'is-selected': selectedResumeId === resume.id }"
-          :disabled="analysisRunning"
-          @click="selectedResumeId = resume.id"
-        >
-          <strong>{{ resume.originalFilename }}</strong>
-        </button>
+    <section v-if="!loadFailed && resumes.length" class="home-library-link">
+      <div>
+        <strong>简历库</strong>
+        <span>已有 {{ resumes.length }} 份简历，可随时用于新的岗位分析。</span>
       </div>
+      <el-button text type="primary" @click="router.push('/resumes')">管理简历 →</el-button>
     </section>
 
-    <section v-if="hasJobDirectionInsight" class="home-insight-card app-card">
+    <section v-if="hasJobDirectionInsight" class="home-insight-row">
       <div>
-        <h2>岗位方向洞察</h2>
-        <p>近期岗位分析已积累出可参考的共同要求；它不会改变当前的单岗位分析结果。</p>
+        <strong>岗位方向洞察</strong>
+        <span>基于这份简历的历史岗位分析，查看重复出现的岗位要求。</span>
       </div>
-      <el-button type="primary" plain @click="router.push('/job-direction-insights')"
-        >查看方向洞察</el-button
+      <el-button text type="primary" @click="router.push('/job-direction-insights')"
+        >查看 →</el-button
       >
     </section>
   </section>
@@ -604,68 +621,220 @@ onUnmounted(() => {
 <style scoped>
 .home-page {
   display: grid;
-  gap: 24px;
+  gap: var(--app-section-spacing);
 }
 
-.home-start-card {
+.home-composer {
   display: grid;
-  gap: 22px;
-  padding: 24px;
+  border-top: 1px solid var(--app-border-strong);
+  border-bottom: 1px solid var(--app-border-strong);
+  background: var(--app-surface);
 }
 
-.home-start-field {
+.home-composer-grid {
   display: grid;
-  gap: 10px;
+  grid-template-columns: minmax(260px, 0.38fr) minmax(0, 0.62fr);
 }
 
-.home-field-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+.home-source-column,
+.home-target-column {
+  display: grid;
+  align-content: start;
+  gap: var(--app-space-5);
+  min-width: 0;
+  padding: var(--app-space-8);
 }
 
-.home-start-field > label,
-.home-field-head > label {
+.home-source-column {
+  border-right: 1px solid var(--app-border-strong);
+}
+
+.home-section-heading {
+  display: grid;
+  gap: var(--app-space-1);
+}
+
+.home-section-label {
+  color: var(--app-text-muted);
+  font-family: var(--app-font-mono);
+  font-size: var(--app-font-size-xs);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+.home-section-heading h3 {
+  margin: 0;
   color: var(--app-text);
-  font-size: 14px;
+  font-size: 20px;
+  line-height: var(--app-line-height-tight);
+}
+
+.home-section-heading p,
+.home-field-boundary,
+.home-target-empty {
+  margin: 0;
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-size-sm);
+  line-height: var(--app-line-height-body);
+}
+
+.home-source-current {
+  display: flex;
+  gap: var(--app-space-3);
+  align-items: flex-start;
+  padding-bottom: var(--app-space-4);
+  border-bottom: 1px solid var(--app-border);
+}
+
+.home-source-indicator,
+.home-option-dot {
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--app-success);
+}
+
+.home-source-indicator {
+  width: 8px;
+  height: 8px;
+  margin-top: 6px;
+}
+
+.home-source-current div,
+.home-option-copy {
+  display: grid;
+  gap: var(--app-space-1);
+  min-width: 0;
+}
+
+.home-source-current strong,
+.home-option-copy strong {
+  overflow: hidden;
+  color: var(--app-text);
+  font-size: var(--app-font-size-md);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home-source-current span,
+.home-option-copy small {
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-size-xs);
+}
+
+.home-resume-options {
+  display: grid;
+  border-top: 1px solid var(--app-border-soft);
+}
+
+.home-options-label {
+  padding: var(--app-space-3) 0 var(--app-space-1);
+  color: var(--app-text-muted);
+  font-size: var(--app-font-size-xs);
   font-weight: 700;
 }
 
-.home-resume-select {
+.home-resume-option {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr) auto;
+  gap: var(--app-space-3);
+  align-items: center;
   width: 100%;
+  min-width: 0;
+  border: 0;
+  border-bottom: 1px solid var(--app-border-soft);
+  padding: var(--app-space-3) 0;
+  color: var(--app-text);
+  text-align: left;
+  background: transparent;
+  cursor: pointer;
+}
+
+.home-resume-option:hover,
+.home-resume-option:focus-visible {
+  color: var(--app-text);
+  background: var(--app-surface-soft);
+}
+
+.home-resume-option.is-selected {
+  border-bottom-color: var(--app-primary-subtle);
+  box-shadow: inset 3px 0 var(--app-primary);
+  padding-left: var(--app-space-3);
+  background: var(--app-primary-soft);
+}
+
+.home-option-dot {
+  width: 6px;
+  height: 6px;
+  background: var(--app-border-strong);
+}
+
+.home-resume-option.is-selected .home-option-dot {
+  background: var(--app-primary);
+}
+
+.home-option-check {
+  color: var(--app-primary-active);
+  font-size: var(--app-font-size-xs);
+  font-weight: 700;
+}
+
+.home-upload-trigger {
+  justify-self: start;
+  border: 0;
+  padding: 0;
+  color: var(--app-primary-active);
+  font: inherit;
+  font-size: var(--app-font-size-sm);
+  font-weight: 700;
+  background: transparent;
+  cursor: pointer;
+}
+
+.home-upload-trigger:hover,
+.home-upload-trigger:focus-visible {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.home-upload-trigger:disabled {
+  color: var(--app-text-muted);
+  cursor: not-allowed;
 }
 
 .home-inline-upload {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  align-items: center;
-  padding: 16px;
-  border: 1px dashed var(--app-border);
-  border-radius: var(--app-radius-md);
+  display: grid;
+  gap: var(--app-space-3);
+  padding: var(--app-space-4);
+  border: 1px dashed var(--app-border-strong);
   background: var(--app-surface-soft);
 }
 
 .home-inline-upload p {
-  flex: 1 1 100%;
   margin: 0;
   color: var(--app-text-secondary);
-  font-size: 14px;
+  font-size: var(--app-font-size-sm);
+  line-height: var(--app-line-height-body);
 }
 
 .home-file-picker {
   display: inline-flex;
   min-height: 38px;
   align-items: center;
-  padding: 0 14px;
+  min-width: 0;
+  padding: 0 var(--app-space-3);
   border: 1px solid var(--app-border);
   border-radius: var(--app-radius-sm);
   color: var(--app-text);
-  font-size: 14px;
+  font-size: var(--app-font-size-sm);
   font-weight: 600;
   cursor: pointer;
   background: var(--app-surface);
+}
+
+.home-file-picker span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .home-file-picker input {
@@ -680,55 +849,41 @@ onUnmounted(() => {
   outline-offset: 2px;
 }
 
-.home-start-actions,
-.home-resume-summary > header,
-.home-insight-card {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 20px;
-}
-
-.home-start-actions > div {
+.home-jd-field {
   display: grid;
-  gap: 4px;
-}
-
-.home-selected-resume-heading {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
+  gap: var(--app-space-3);
   min-width: 0;
 }
 
-.home-ready-state {
-  color: var(--app-success);
-  font-size: 12px;
-  font-weight: 700;
+.home-jd-field :deep(.el-textarea__inner) {
+  min-height: 250px !important;
+  padding: var(--app-space-4);
+  color: var(--app-text);
+  font-size: var(--app-font-size-md);
+  line-height: var(--app-line-height-body);
+  background: var(--app-surface);
 }
 
-.home-start-actions-buttons {
-  display: flex !important;
-  align-items: center;
-  gap: 8px;
+.home-field-boundary {
+  font-size: var(--app-font-size-xs);
 }
 
-.home-start-actions small,
-.home-resume-summary p,
-.home-analysis-state p {
-  margin: 0;
-  color: var(--app-text-secondary);
-  font-size: 13px;
-  line-height: 1.7;
+.home-target-empty {
+  display: grid;
+  min-height: 160px;
+  place-items: center;
+  border: 1px dashed var(--app-border);
+  padding: var(--app-space-5);
+  text-align: center;
+  background: var(--app-surface-soft);
 }
 
 .home-analysis-state {
   display: flex;
-  gap: 14px;
+  gap: var(--app-space-3);
   align-items: flex-start;
-  padding: 16px;
-  border: 1px solid var(--app-border);
-  border-radius: var(--app-radius-md);
+  padding: var(--app-space-4);
+  border-top: 1px solid var(--app-border);
   background: var(--app-surface-soft);
 }
 
@@ -742,10 +897,15 @@ onUnmounted(() => {
   height: 10px;
   margin-top: 5px;
   border-radius: 999px;
+  flex: 0 0 auto;
   background: var(--app-primary);
 }
 
-.home-analysis-state.is-running .home-state-dot {
+.home-state-dot.is-static {
+  background: var(--app-success);
+}
+
+.home-analysis-state.is-running .home-state-dot:not(.is-static) {
   animation: home-pulse 1.4s ease-in-out infinite;
 }
 
@@ -756,80 +916,83 @@ onUnmounted(() => {
 
 .home-analysis-state > div {
   display: grid;
-  gap: 6px;
+  gap: var(--app-space-2);
+}
+
+.home-analysis-state strong {
+  color: var(--app-text);
+  font-size: var(--app-font-size-sm);
+}
+
+.home-analysis-state p {
+  margin: 0;
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-size-xs);
+  line-height: var(--app-line-height-body);
 }
 
 .home-state-actions {
   display: flex;
-  gap: 10px;
-  margin-top: 2px;
+  flex-wrap: wrap;
+  gap: var(--app-space-2);
+  margin-top: var(--app-space-1);
 }
 
-.home-resume-summary {
-  display: grid;
-  gap: 14px;
+.home-task-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--app-space-5);
+  padding: var(--app-space-4) var(--app-space-8);
+  border-top: 1px solid var(--app-border-strong);
+  background: var(--app-surface-soft);
 }
 
-.home-resume-summary h2 {
-  margin: 0;
-  color: var(--app-text);
-  font-size: 18px;
-}
-
-.home-insight-card {
-  padding: 18px 20px;
-}
-
-.home-insight-card > div {
-  display: grid;
-  gap: 5px;
-}
-
-.home-insight-card h2 {
-  margin: 0;
-  color: var(--app-text);
-  font-size: 18px;
-}
-
-.home-insight-card p {
-  margin: 0;
+.home-task-boundary {
+  display: flex;
+  gap: var(--app-space-2);
+  align-items: center;
   color: var(--app-text-secondary);
-  font-size: 13px;
-  line-height: 1.7;
+  font-size: var(--app-font-size-xs);
+  line-height: var(--app-line-height-body);
 }
 
-.home-resume-chips {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
-  gap: 12px;
+.home-start-actions-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--app-space-2);
 }
 
-.home-resume-chips button {
-  display: grid;
-  gap: 5px;
-  min-width: 0;
-  padding: 14px;
-  border: 1px solid var(--app-border);
-  border-radius: var(--app-radius-md);
+.home-library-link,
+.home-insight-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--app-space-5);
+  border-bottom: 1px solid var(--app-border);
+  padding: var(--app-space-4) 0;
+}
+
+.home-library-link > div,
+.home-insight-row > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--app-space-2);
+  align-items: baseline;
+}
+
+.home-library-link strong,
+.home-insight-row strong {
   color: var(--app-text);
-  text-align: left;
-  cursor: pointer;
-  background: var(--app-surface);
+  font-size: var(--app-font-size-md);
 }
 
-.home-resume-chips button.is-selected {
-  border-color: var(--app-primary);
-  background: var(--app-primary-soft);
-}
-
-.home-resume-chips strong {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.home-resume-chips small {
+.home-library-link span,
+.home-insight-row span {
   color: var(--app-text-secondary);
+  font-size: var(--app-font-size-sm);
 }
 
 @keyframes home-pulse {
@@ -845,15 +1008,37 @@ onUnmounted(() => {
 }
 
 @media (max-width: 760px) {
-  .home-start-actions,
-  .home-resume-summary > header,
-  .home-insight-card {
-    flex-direction: column;
-    align-items: stretch;
+  .home-composer-grid {
+    grid-template-columns: 1fr;
   }
 
-  .home-start-actions .el-button {
-    width: 100%;
+  .home-source-column {
+    border-right: 0;
+    border-bottom: 1px solid var(--app-border-strong);
+  }
+
+  .home-source-column,
+  .home-target-column {
+    padding: var(--app-space-5) var(--app-content-gutter-narrow);
+  }
+
+  .home-jd-field :deep(.el-textarea__inner) {
+    min-height: 220px !important;
+  }
+
+  .home-task-bar,
+  .home-library-link,
+  .home-insight-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .home-start-actions-buttons {
+    justify-content: stretch;
+  }
+
+  .home-start-actions-buttons .el-button {
+    flex: 1 1 auto;
   }
 }
 </style>

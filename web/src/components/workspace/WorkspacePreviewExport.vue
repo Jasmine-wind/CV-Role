@@ -60,6 +60,7 @@ type OperationFailure = {
 }
 
 const operationFailure = ref<OperationFailure | null>(null)
+const exportSuccess = ref<ExportArtifact | null>(null)
 
 // 只有最近一次保存成功后，才允许用服务端内容生成 Preview / Export；
 // dirty / saving / failed / conflict 时前端草稿一律不得进入渲染链路。
@@ -119,6 +120,41 @@ const preflightStatusClass = computed(() => {
   return 'is-ready'
 })
 
+const preflightChecks = computed(() => {
+  const result = previewPreflight.value
+  if (!result) return []
+  return [
+    {
+      label: '联系方式',
+      detail: result.missingContact ? '缺少可用联系方式' : '已检测到可用联系方式',
+      state: result.missingContact ? 'warning' : 'ready',
+    },
+    {
+      label: '页面边界',
+      detail: result.overflowDetected ? '检测到文字越界' : '未检测到文字越界',
+      state: result.overflowDetected ? 'warning' : 'ready',
+    },
+    {
+      label: '页面结构',
+      detail: result.orphanFinalPage ? '末页内容过少' : '页面结构正常',
+      state: result.orphanFinalPage ? 'warning' : 'ready',
+    },
+    {
+      label: '文字可读性',
+      detail: result.readabilityTooSmall ? '部分字号低于可读下限' : '字号检查通过',
+      state: result.readabilityTooSmall ? 'warning' : 'ready',
+    },
+  ] as const
+})
+
+const previewStateLabel = computed(() => {
+  if (!canOperate.value) return '等待保存'
+  if (previewLoading.value) return '正在生成'
+  if (operationFailure.value?.operation === 'preview') return '生成失败'
+  if (previewUrl.value) return '已生成'
+  return '尚未生成'
+})
+
 const operateHint = computed(() => {
   if (props.status === 'saved' && (props.revision === null || props.revision <= 0)) {
     return '请先完成一次保存，再生成预览'
@@ -145,6 +181,7 @@ const revokePreviewUrl = () => {
 
 const invalidatePreview = () => {
   previewRequestSequence += 1
+  exportSuccess.value = null
   revokePreviewUrl()
   previewKey.value = ''
   previewReceipt.value = null
@@ -260,6 +297,7 @@ const handleExport = async () => {
   )
     return
   operationFailure.value = null
+  exportSuccess.value = null
   exporting.value = true
   const taskAtRequest = props.optimizationTaskId
   const revisionAtRequest = props.revision
@@ -283,6 +321,7 @@ const handleExport = async () => {
     const blob = await downloadArtifactPdf(exportedArtifact.id)
     if (!requestIsCurrent()) return
     triggerBrowserDownload(blob, exportedArtifact.fileName)
+    exportSuccess.value = exportedArtifact
     ElMessage.success('PDF 导出成功')
   } catch (error) {
     if (!requestIsCurrent()) return
@@ -307,6 +346,7 @@ const handleDownloadArtifact = async (artifact: ExportArtifact) => {
   try {
     const blob = await downloadArtifactPdf(artifact.id)
     triggerBrowserDownload(blob, artifact.fileName)
+    exportSuccess.value = artifact
   } catch (error) {
     const message = error instanceof Error ? error.message : '下载失败，请稍后重试'
     operationFailure.value = { operation: 'download', message, artifact }
@@ -329,6 +369,7 @@ const handleDeleteArtifact = async (artifact: ExportArtifact) => {
   operationFailure.value = null
   try {
     await deleteWorkspaceArtifact(artifact.id)
+    if (exportSuccess.value?.id === artifact.id) exportSuccess.value = null
     await refreshArtifacts()
     ElMessage.success('已删除导出文件')
   } catch (error) {
@@ -404,72 +445,6 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="preview-export">
-    <header class="preview-toolbar">
-      <div class="preview-template-control">
-        <span class="control-label">模板</span>
-        <el-radio-group v-model="templateId" size="small" aria-label="选择简历模板">
-          <el-radio-button
-            v-for="option in TEMPLATE_OPTIONS"
-            :key="option.value"
-            :value="option.value"
-            :data-testid="`preview-template-${option.value}`"
-          >
-            {{ option.label }}
-          </el-radio-button>
-        </el-radio-group>
-      </div>
-      <div class="preview-toolbar-actions">
-        <span v-if="previewPreflight" class="preview-page-count"
-          >{{ previewPreflight.pageCount }} 页</span
-        >
-        <el-button
-          size="small"
-          :loading="previewLoading"
-          :disabled="!canOperate"
-          @click="handlePreview"
-        >
-          {{ previewUrl ? '重新预览' : '生成预览' }}
-        </el-button>
-        <el-button type="primary" :loading="exporting" :disabled="!canExport" @click="handleExport">
-          导出 PDF
-        </el-button>
-      </div>
-    </header>
-
-    <p v-if="!canOperate" class="operate-hint">{{ operateHint }}</p>
-    <p v-else-if="!previewPreflight && !previewLoading" class="preview-first-hint">
-      先生成一次预览，系统会检查联系方式、页数和排版边界后再允许导出。
-    </p>
-
-    <ErrorState
-      v-if="operationFailure"
-      compact
-      :title="operationFailureTitle"
-      :description="operationFailure.message"
-      :action-text="operationFailureActionText"
-      @action="retryFailedOperation"
-    />
-
-    <div
-      v-if="previewPreflight"
-      class="preflight-status"
-      :class="preflightStatusClass"
-      role="status"
-    >
-      <div class="preflight-status-heading">
-        <strong>{{ preflightStatusLabel }}</strong>
-      </div>
-      <p v-if="blockingPreflightMessages.length" class="preflight-blocked-copy">
-        处理以下问题后才能导出：{{ blockingPreflightMessages[0] }}
-      </p>
-      <details v-if="allPreflightMessages.length" class="preflight-details">
-        <summary>查看检查</summary>
-        <ul>
-          <li v-for="message in allPreflightMessages" :key="message">{{ message }}</li>
-        </ul>
-      </details>
-    </div>
-
     <div class="preview-layout">
       <section
         class="preview-document"
@@ -492,14 +467,102 @@ onBeforeUnmount(() => {
         </div>
       </section>
 
-      <aside class="preview-supporting-content">
-        <p class="preview-note">
-          PDF
-          使用最近一次成功保存的内容；未保存的编辑和未采纳的建议不会进入文档。修改内容或模板后需要重新预览。
-        </p>
+      <aside class="preview-inspector" aria-label="导出检查器">
+        <section class="preview-inspector-section preview-template-section">
+          <span class="preview-section-label">TEMPLATE</span>
+          <h2>选择简历模板</h2>
+          <el-radio-group v-model="templateId" size="small" aria-label="选择简历模板">
+            <el-radio-button
+              v-for="option in TEMPLATE_OPTIONS"
+              :key="option.value"
+              :value="option.value"
+              :data-testid="`preview-template-${option.value}`"
+            >
+              {{ option.label }}
+            </el-radio-button>
+          </el-radio-group>
+          <p>修改模板后需要重新生成预览。</p>
+        </section>
+
+        <section class="preview-inspector-section">
+          <div class="preview-section-heading">
+            <span class="preview-section-label">PREVIEW STATE</span>
+            <strong>{{ previewStateLabel }}</strong>
+          </div>
+          <p v-if="!canOperate" class="operate-hint">{{ operateHint }}</p>
+          <p v-else-if="!previewPreflight && !previewLoading" class="preview-first-hint">
+            先生成一次预览，系统会检查最终文档后再允许导出。
+          </p>
+          <div class="preview-state-row">
+            <span>当前文档</span>
+            <span>{{ previewPreflight ? `${previewPreflight.pageCount} 页` : '等待检查' }}</span>
+          </div>
+          <el-button
+            size="small"
+            :loading="previewLoading"
+            :disabled="!canOperate"
+            @click="handlePreview"
+          >
+            {{ previewUrl ? '重新预览' : '生成预览' }}
+          </el-button>
+        </section>
+
+        <section v-if="previewPreflight" class="preview-inspector-section preflight-section">
+          <div class="preview-section-heading">
+            <span class="preview-section-label">DOCUMENT CHECK</span>
+            <strong :class="preflightStatusClass">{{ preflightStatusLabel }}</strong>
+          </div>
+          <div class="preflight-summary">
+            <strong>{{ previewPreflight.pageCount }} pages</strong>
+            <span v-if="previewPreflight.pageLimitExceeded" class="is-advisory">超过建议的 2 页</span>
+          </div>
+          <ul class="preflight-check-list" role="list">
+            <li v-for="check in preflightChecks" :key="check.label" :class="`is-${check.state}`">
+              <span class="preflight-check-marker" aria-hidden="true" />
+              <span><strong>{{ check.label }}</strong><small>{{ check.detail }}</small></span>
+            </li>
+          </ul>
+          <p v-if="blockingPreflightMessages.length" class="preflight-blocked-copy">
+            处理后才能导出：{{ blockingPreflightMessages[0] }}
+          </p>
+          <details v-if="allPreflightMessages.length" class="preflight-details">
+            <summary>查看完整检查</summary>
+            <ul>
+              <li v-for="message in allPreflightMessages" :key="message">{{ message }}</li>
+            </ul>
+          </details>
+        </section>
+
+        <ErrorState
+          v-if="operationFailure"
+          compact
+          :title="operationFailureTitle"
+          :description="operationFailure.message"
+          :action-text="operationFailureActionText"
+          @action="retryFailedOperation"
+        />
+
+        <section class="preview-inspector-section preview-export-action">
+          <div class="preview-section-heading">
+            <span class="preview-section-label">EXPORT</span>
+            <strong v-if="exportSuccess" class="is-success">PDF 已生成</strong>
+          </div>
+          <p v-if="exportSuccess" class="export-success-copy">
+            {{ exportSuccess.fileName }} · {{ exportSuccess.pageCount }} 页 · {{ Math.ceil(exportSuccess.fileSize / 1024) }} KB
+          </p>
+          <p v-else-if="!canExport" class="export-blocked-copy">
+            {{ preflightStatusLabel === '尚未检查' ? '生成预览并完成 Document Check 后可导出。' : '请先处理 Document Check 中的阻断项。' }}
+          </p>
+          <el-button type="primary" :loading="exporting" :disabled="!canExport" @click="handleExport">
+            导出 PDF
+          </el-button>
+        </section>
 
         <details class="export-history" @toggle="handleHistoryToggle">
-          <summary>导出记录</summary>
+          <summary>
+            <span class="preview-section-label">EXPORT HISTORY</span>
+            <span>最近导出</span>
+          </summary>
           <div class="export-history-content">
             <p v-if="artifactsLoading && artifacts.length === 0" class="artifact-status">
               正在读取导出记录…
@@ -518,7 +581,9 @@ onBeforeUnmount(() => {
                 <div class="artifact-info">
                   <span class="artifact-name">{{ artifact.fileName }}</span>
                   <span class="artifact-meta">
-                    {{ TEMPLATE_LABELS[artifact.templateId] }} · {{ artifact.pageCount }} 页 ·
+                    {{ TEMPLATE_LABELS[artifact.templateId] }} · revision {{ artifact.contentRevision }} ·
+                    {{ artifact.pageCount }} 页 · {{ Math.ceil(artifact.fileSize / 1024) }} KB ·
+                    {{ artifact.status === 'DELETE_PENDING' ? '待删除' : '已就绪' }} ·
                     {{ formatCreatedAt(artifact.createdAt) }}
                   </span>
                 </div>
@@ -531,12 +596,7 @@ onBeforeUnmount(() => {
                   >
                     下载
                   </el-button>
-                  <el-button
-                    size="small"
-                    type="danger"
-                    plain
-                    @click="handleDeleteArtifact(artifact)"
-                  >
+                  <el-button size="small" type="danger" plain @click="handleDeleteArtifact(artifact)">
                     {{ artifact.status === 'DELETE_PENDING' ? '重试删除' : '删除' }}
                   </el-button>
                 </div>
@@ -551,101 +611,236 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .preview-export {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  flex-direction: column;
+}
+
+.preview-layout {
   display: grid;
-  gap: 16px;
   min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  grid-template-columns: minmax(0, 1fr) clamp(280px, 24vw, 360px);
+  overflow: hidden;
+  background: var(--app-stage);
 }
 
-.preview-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
+.preview-document {
+  display: grid;
   min-width: 0;
-  padding-bottom: 14px;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  border-right: 1px solid var(--app-border-strong);
+  background: var(--app-pdf-canvas);
+}
+
+.preview-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  border: 0;
+  background: var(--app-surface);
+}
+
+.preview-placeholder {
+  display: grid;
+  min-height: 0;
+  height: 100%;
+  place-items: center;
+  align-content: center;
+  gap: var(--app-space-2);
+  padding: var(--app-space-8);
+  color: var(--app-text-secondary);
+  text-align: center;
+  background: var(--app-surface-soft);
+}
+
+.preview-placeholder strong {
+  color: var(--app-text);
+  font-size: var(--app-font-size-lg);
+}
+
+.preview-placeholder span {
+  max-width: 42ch;
+  font-size: var(--app-font-size-sm);
+  line-height: var(--app-line-height-body);
+}
+
+.preview-inspector {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  flex-direction: column;
+  background: var(--app-surface-soft);
+  scrollbar-color: var(--app-scroll-thumb) transparent;
+  scrollbar-width: thin;
+}
+
+.preview-inspector-section {
+  display: grid;
+  gap: var(--app-space-3);
   border-bottom: 1px solid var(--app-border);
+  padding: var(--app-space-5) var(--app-space-5);
 }
 
-.preview-template-control,
-.preview-toolbar-actions {
+.preview-section-label {
+  color: var(--app-text-muted);
+  font-family: var(--app-font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+.preview-inspector-section h2 {
+  margin: 0;
+  color: var(--app-text);
+  font-size: var(--app-font-size-lg);
+  line-height: var(--app-line-height-tight);
+}
+
+.preview-template-section p,
+.operate-hint,
+.preview-first-hint,
+.preview-note,
+.artifact-status,
+.export-blocked-copy,
+.export-success-copy {
+  margin: 0;
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-size-xs);
+  line-height: var(--app-line-height-body);
+}
+
+.preview-template-section p {
+  color: var(--app-text-muted);
+}
+
+.preview-template-section :deep(.el-radio-group) {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-
-.preview-toolbar-actions {
-  justify-content: flex-end;
   flex-wrap: wrap;
 }
 
-.control-label,
-.preview-page-count {
-  color: var(--app-text-secondary);
-  font-size: 12px;
+.preview-template-section :deep(.el-radio-button__inner) {
+  min-height: 34px;
+  padding: 0 var(--app-space-3);
+  line-height: 34px;
 }
 
-.preview-page-count {
+.preview-section-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--app-space-3);
+}
+
+.preview-section-heading strong {
+  color: var(--app-text);
+  font-size: var(--app-font-size-xs);
+}
+
+.preview-section-heading strong.is-ready,
+.preview-section-heading strong.is-success {
+  color: var(--app-success);
+}
+
+.preview-section-heading strong.is-advisory {
+  color: var(--app-warning);
+}
+
+.preview-section-heading strong.is-blocked {
+  color: var(--app-danger);
+}
+
+.preview-state-row {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--app-space-3);
+  border-top: 1px solid var(--app-border-soft);
+  padding-top: var(--app-space-3);
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-size-xs);
+}
+
+.preview-state-row span:last-child {
   color: var(--app-text);
   font-weight: 700;
 }
 
-.operate-hint,
-.preview-first-hint,
-.preview-note,
-.artifact-status {
-  margin: 0;
-  color: var(--app-text-secondary);
-  font-size: 12px;
-  line-height: 1.7;
-}
-
-.operate-hint {
-  color: var(--app-warning);
-  font-weight: 600;
-}
-
-.preflight-status {
-  display: grid;
-  gap: 7px;
-  padding: 12px 14px;
-  border: 1px solid var(--app-border-soft);
-  border-radius: var(--app-radius-md);
-  background: var(--app-surface-soft);
-}
-
-.preflight-status.is-ready {
-  border-color: var(--el-color-success-light-7);
-  background: var(--app-success-soft);
-}
-
-.preflight-status.is-advisory {
-  border-color: var(--el-color-warning-light-7);
-  background: var(--app-warning-soft);
-}
-
-.preflight-status.is-blocked {
-  border-color: var(--el-color-danger-light-7);
-  background: var(--app-danger-soft);
-}
-
-.preflight-status-heading {
+.preflight-summary {
   display: flex;
-  gap: 12px;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--app-space-3);
   color: var(--app-text);
-  font-size: 13px;
+  font-size: var(--app-font-size-sm);
+}
+
+.preflight-summary .is-advisory {
+  color: var(--app-warning);
+  font-size: var(--app-font-size-xs);
+}
+
+.preflight-check-list {
+  display: grid;
+  gap: var(--app-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.preflight-check-list li {
+  display: grid;
+  grid-template-columns: 7px minmax(0, 1fr);
+  gap: var(--app-space-2);
+  align-items: start;
+  color: var(--app-text);
+  font-size: var(--app-font-size-xs);
+}
+
+.preflight-check-marker {
+  width: 7px;
+  height: 7px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: var(--app-success);
+}
+
+.preflight-check-list li.is-warning .preflight-check-marker {
+  background: var(--app-danger);
+}
+
+.preflight-check-list li span:last-child {
+  display: grid;
+  gap: 2px;
+}
+
+.preflight-check-list small {
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-size-xs);
+  line-height: var(--app-line-height-body);
+}
+
+.preflight-check-list li.is-warning small {
+  color: var(--app-danger);
 }
 
 .preflight-blocked-copy {
   margin: 0;
-  color: var(--app-text-secondary);
-  font-size: 12px;
-  line-height: 1.6;
+  color: var(--app-danger);
+  font-size: var(--app-font-size-xs);
+  line-height: var(--app-line-height-body);
 }
 
 .preflight-details {
   color: var(--app-text-secondary);
-  font-size: 12px;
+  font-size: var(--app-font-size-xs);
 }
 
 .preflight-details summary {
@@ -657,88 +852,64 @@ onBeforeUnmount(() => {
 
 .preflight-details ul {
   display: grid;
-  gap: 4px;
-  margin: 7px 0 0;
-  padding-left: 18px;
-  line-height: 1.6;
+  gap: var(--app-space-1);
+  margin: var(--app-space-2) 0 0;
+  padding-left: var(--app-space-5);
+  line-height: var(--app-line-height-body);
 }
 
-.preview-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 260px;
-  gap: 20px;
-  align-items: start;
-  min-width: 0;
+.preview-export-action {
+  background: color-mix(in srgb, var(--app-surface-soft) 70%, var(--app-bg-soft));
 }
 
-.preview-document {
-  display: grid;
-  min-width: 0;
-  min-height: min(720px, calc(100dvh - 260px));
-  border: 1px solid var(--app-border);
-  border-radius: var(--app-radius-lg);
-  overflow: hidden;
-  background: var(--app-pdf-canvas);
-}
-
-.preview-frame {
-  display: block;
+.preview-export-action :deep(.el-button) {
   width: 100%;
-  height: min(900px, calc(100dvh - 250px));
-  min-height: 680px;
-  border: 0;
-  background: var(--app-surface);
+  min-height: 40px;
 }
 
-.preview-placeholder {
-  display: grid;
-  min-height: min(720px, calc(100dvh - 260px));
-  place-items: center;
-  align-content: center;
-  gap: 8px;
-  padding: 28px;
-  color: var(--app-text-secondary);
-  text-align: center;
-  background: var(--app-surface-soft);
+.export-blocked-copy {
+  color: var(--app-warning);
 }
 
-.preview-placeholder strong {
+.export-success-copy {
   color: var(--app-text);
-  font-size: 15px;
 }
 
-.preview-placeholder span {
-  font-size: 12px;
-}
-
-.preview-supporting-content {
-  display: grid;
-  gap: 16px;
-  min-width: 0;
+.preview-export > .preview-inspector > :deep(.ui-empty-state),
+.preview-inspector > :deep(.ui-error-state) {
+  margin: var(--app-space-4) var(--app-space-5);
 }
 
 .export-history {
-  border-top: 1px solid var(--app-border);
-  padding-top: 12px;
+  margin-top: auto;
+  border-top: 1px solid var(--app-border-strong);
 }
 
 .export-history summary {
-  width: fit-content;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--app-space-3);
+  padding: var(--app-space-4) var(--app-space-5);
   color: var(--app-text);
-  font-size: 13px;
+  font-size: var(--app-font-size-sm);
   font-weight: 700;
   cursor: pointer;
 }
 
+.export-history summary .preview-section-label {
+  color: var(--app-text-muted);
+  font-size: 10px;
+}
+
 .export-history-content {
   display: grid;
-  gap: 10px;
-  padding-top: 12px;
+  gap: var(--app-space-3);
+  padding: 0 var(--app-space-5) var(--app-space-5);
 }
 
 .artifact-list {
   display: grid;
-  gap: 10px;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -746,88 +917,88 @@ onBeforeUnmount(() => {
 
 .artifact-list li {
   display: grid;
-  gap: 10px;
-  padding: 11px 0;
-  border-bottom: 1px solid var(--app-border-soft);
+  gap: var(--app-space-3);
+  border-top: 1px solid var(--app-border);
+  padding: var(--app-space-3) 0;
 }
 
 .artifact-info {
   display: grid;
-  gap: 4px;
+  gap: var(--app-space-1);
   min-width: 0;
 }
 
 .artifact-name {
   overflow-wrap: anywhere;
   color: var(--app-text);
-  font-size: 12px;
+  font-size: var(--app-font-size-xs);
+  font-weight: 700;
 }
 
 .artifact-meta {
   color: var(--app-text-secondary);
   font-size: 11px;
+  line-height: var(--app-line-height-body);
 }
 
 .artifact-actions {
   display: flex;
-  gap: 7px;
+  gap: var(--app-space-2);
 }
 
-@media (max-width: 900px) {
+@media (max-width: 1119px) {
+  .preview-export {
+    height: auto;
+    min-height: 0;
+  }
+
   .preview-layout {
-    grid-template-columns: 1fr;
-  }
-
-  .preview-supporting-content {
-    grid-template-columns: minmax(0, 1fr) minmax(220px, 280px);
-    align-items: start;
-  }
-}
-
-@media (max-width: 720px) {
-  .preview-toolbar :deep(.el-button) {
-    min-height: 40px;
-  }
-
-  .preview-template-control :deep(.el-radio-button__inner) {
-    display: inline-flex;
-    min-height: 40px;
-    align-items: center;
-    padding: 0 14px;
-  }
-
-  .preview-toolbar {
-    align-items: flex-start;
+    display: flex;
+    overflow: visible;
     flex-direction: column;
   }
 
-  .preview-template-control,
-  .preview-toolbar-actions {
-    width: 100%;
-    justify-content: space-between;
-  }
-
-  .preview-toolbar-actions {
-    justify-content: flex-start;
-  }
-
-  .preview-layout,
-  .preview-supporting-content {
-    display: grid;
-    grid-template-columns: 1fr;
-  }
-
   .preview-document {
-    min-height: 620px;
+    height: min(72dvh, 720px);
+    min-height: 520px;
+    border-right: 0;
+    border-bottom: 1px solid var(--app-border-strong);
   }
 
-  .preview-frame {
-    height: 72dvh;
-    min-height: 620px;
+  .preview-inspector {
+    overflow: visible;
   }
 
-  .preview-placeholder {
-    min-height: 620px;
+  .preview-inspector-section {
+    padding-right: var(--app-content-gutter-narrow);
+    padding-left: var(--app-content-gutter-narrow);
+  }
+
+  .export-history summary,
+  .export-history-content {
+    padding-right: var(--app-content-gutter-narrow);
+    padding-left: var(--app-content-gutter-narrow);
+  }
+}
+
+@media (max-width: 640px) {
+  .preview-document {
+    height: min(72dvh, 640px);
+    min-height: 480px;
+  }
+
+  .preview-inspector-section {
+    padding-top: var(--app-space-4);
+    padding-bottom: var(--app-space-4);
+  }
+
+  .preview-template-section :deep(.el-radio-button__inner) {
+    min-height: 40px;
+    line-height: 40px;
+  }
+
+  .artifact-actions {
+    flex-wrap: wrap;
   }
 }
 </style>

@@ -3,7 +3,7 @@ import { onMounted } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 
 defineProps<{
-  /** 窄屏 Drawer 展开状态；桌面端始终可见，忽略该值。 */
+  /** 窄屏 Drawer 展开状态。桌面端由 Global Topbar 承担导航。 */
   open?: boolean
   /** 仅窄屏 Drawer 关闭时从辅助技术与 tab 顺序中移除导航。 */
   drawer?: boolean
@@ -17,7 +17,7 @@ const authStore = useAuthStore()
 
 const primaryNavItems = [
   {
-    label: '首页',
+    label: '开始优化',
     route: '/app',
   },
   {

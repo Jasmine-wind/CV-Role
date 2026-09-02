@@ -56,7 +56,7 @@ scripts/  生产运维脚本
 - `ai/usage`：Provider attempt ledger、独立事务写入和 90 天 retention；不是产品漏斗 Source of Truth。
 - `demo`：只在明确 `demo` profile + property 下创建合成普通 User 数据，不参与生产域模型或授权。
 
-前端按 `api/`、`components/`、`layout/`、`router/`、`stores/`、`types/`、`utils/`、`views/` 分层。页面包含 Landing、首页、我的简历、按正式优化任务访问的岗位分析结果、按正式优化任务访问的优化工作区、达到样本门槛后从首页进入的岗位方向洞察、AI 设置、登录和注册；一级导航仍只有首页和我的简历，AI 设置与洞察都不进入首次使用步骤。全局壳只承担 navigation / account / 窄屏菜单（窄屏 sidebar 为 Drawer），页面标题与任务操作由各页面自身承担。Preview / Export 以 Workspace 内的“编辑 / 预览”模式集成，Preview 使用完整文档阅读区域，仅保存成功状态可用；Workspace contextual inspector 只展示当前岗位要求上下文，完整分析仍留在 Analysis 页面。Element Plus 由 unplugin-vue-components 按需解析，路由懒加载；视觉变量集中在 `styles/tokens.scss`（近白背景、弱边框、少阴影、克制圆角、单一主色），状态色只用于真实反馈。
+前端按 `api/`、`components/`、`layout/`、`router/`、`stores/`、`types/`、`utils/`、`views/` 分层。页面包含 Landing、首页、我的简历、按正式优化任务访问的岗位分析结果、按正式优化任务访问的优化工作区、达到样本门槛后从首页进入的岗位方向洞察、AI 设置、登录和注册；一级导航仍只有首页和我的简历，AI 设置与洞察都不进入首次使用步骤。全局壳只承担 navigation / account / 窄屏菜单（窄屏 sidebar 为 Drawer），页面标题与任务操作由各页面自身承担。Preview / Export 以 Workspace 内的“编辑 / 预览”模式集成，Preview 使用完整文档阅读区域，仅保存成功状态可用；Workspace 当前采用岗位要求导航 / 简历编辑器 / contextual inspector 的三栏任务壳，检查器只展示当前岗位要求上下文，完整分析仍留在 Analysis 页面，窄屏转为要求横向条 + 编辑 / 建议切换。Element Plus 由 unplugin-vue-components 按需解析，路由懒加载；视觉变量集中在 `styles/tokens.scss`（近白背景、弱边框、少阴影、克制圆角、单一主色），状态色只用于真实反馈。
 
 ## 3. 当前主链路
 

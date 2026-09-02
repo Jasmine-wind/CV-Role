@@ -10,14 +10,7 @@ body {
   margin: 0;
   min-width: 320px;
   color: var(--app-text);
-  font-family:
-    Inter,
-    'Segoe UI',
-    'Microsoft YaHei',
-    'PingFang SC',
-    'Noto Sans CJK SC',
-    system-ui,
-    sans-serif;
+  font-family: var(--app-font-sans);
   background: var(--app-bg);
 }
 
@@ -37,8 +30,8 @@ textarea {
 }
 
 ::selection {
-  color: var(--app-navy);
-  background: var(--app-primary-subtle);
+  color: var(--app-text);
+  background: var(--app-primary-soft);
 }
 
 ::-webkit-scrollbar {
@@ -53,7 +46,7 @@ textarea {
 ::-webkit-scrollbar-thumb {
   border: 2px solid var(--app-bg-soft);
   border-radius: 999px;
-  background: #cbd5e1;
+  background: var(--app-scroll-thumb);
 }
 
 .app-card {

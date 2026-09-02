@@ -72,20 +72,20 @@ async function openWorkspaceWithoutEditing(page: Page) {
 }
 
 async function previewAndExportAll(page: Page, testInfo: TestInfo, prefix: string) {
-  await page.getByRole('tab', { name: '预览', exact: true }).click()
+  await page.getByRole('button', { name: '预览 →', exact: true }).click()
   await expect(
-    page.locator('.preflight-status').getByText('可以导出', { exact: true }),
+    page.locator('.preflight-section').getByText('可以导出', { exact: true }),
   ).toBeVisible({ timeout: 45_000 })
   await expect(page.getByTitle('简历 PDF 预览')).toBeVisible({ timeout: 45_000 })
 
   for (const template of ['classic', 'modern', 'minimal']) {
     if (template !== 'classic') {
       await page.getByTestId(`preview-template-${template}`).click()
-      await page.locator('.preview-toolbar').getByRole('button', { name: /预览/ }).click()
+      await page.locator('.preview-inspector').getByRole('button', { name: /预览/ }).click()
       await expect(page.getByTitle('简历 PDF 预览')).toBeVisible({ timeout: 45_000 })
     }
     await expect(
-      page.locator('.preflight-status').getByText('可以导出', { exact: true }),
+      page.locator('.preflight-section').getByText('可以导出', { exact: true }),
     ).toBeVisible({ timeout: 45_000 })
     const download = page.waitForEvent('download')
     await page.getByRole('button', { name: '导出 PDF', exact: true }).click()
@@ -125,14 +125,14 @@ test('happy path: upload, analysis, workspace, deterministic suggestion, preview
   await expect(page.getByRole('button', { name: '采纳', exact: true })).toHaveCount(0)
   await expect(page.getByText('已保存', { exact: true })).toBeVisible({ timeout: 15_000 })
 
-  await page.getByRole('tab', { name: '预览', exact: true }).click()
+  await page.getByRole('button', { name: '预览 →', exact: true }).click()
   await expect(
-    page.locator('.preflight-status').getByText('可以导出', { exact: true }),
+    page.locator('.preflight-section').getByText('可以导出', { exact: true }),
   ).toBeVisible({ timeout: 45_000 })
   await expect(page.getByTitle('简历 PDF 预览')).toBeVisible()
-  await page.getByRole('tab', { name: '编辑', exact: true }).click()
+  await page.getByRole('button', { name: '返回编辑', exact: true }).click()
   await expect(page.getByTitle('简历 PDF 预览')).toBeHidden()
-  await page.getByRole('tab', { name: '预览', exact: true }).click()
+  await page.getByRole('button', { name: '预览 →', exact: true }).click()
   await expect(page.getByTitle('简历 PDF 预览')).toBeVisible({ timeout: 45_000 })
 
   await previewAndExportAll(page, testInfo, 'mixed')
@@ -224,11 +224,11 @@ test('workspace conflict preserves the local draft; stale Preview and Suggest ca
     await previewRelease
     await route.fulfill({ response })
   })
-  await first.getByRole('tab', { name: '预览', exact: true }).click()
+  await first.getByRole('button', { name: '预览 →', exact: true }).click()
   await previewStarted
   // Preview is a focus mode; switch back to the editor while the request is pending
   // to prove the late response cannot replace a new local draft.
-  await first.getByRole('tab', { name: '编辑', exact: true }).click()
+  await first.getByRole('button', { name: '返回编辑', exact: true }).click()
   await firstBullet.fill('负责 Java 后端服务开发 - changed while preview was pending', {
     force: true,
   })
@@ -328,9 +328,9 @@ test.describe('narrow viewport', () => {
     await uploadAndStartAnalysis(page, englishPlatformJobDescription, mixedFixture)
     await waitForAnalysis(page)
     await openWorkspaceWithoutEditing(page)
-    await page.getByRole('tab', { name: '预览', exact: true }).click()
+    await page.getByRole('button', { name: '预览 →', exact: true }).click()
     await expect(
-      page.locator('.preflight-status').getByText('可以导出', { exact: true }),
+      page.locator('.preflight-section').getByText('可以导出', { exact: true }),
     ).toBeVisible({ timeout: 45_000 })
     const frame = page.getByTitle('简历 PDF 预览')
     await expect(frame).toBeVisible({ timeout: 45_000 })

@@ -6,7 +6,7 @@ declare module 'vue-router' {
     requiresAuth?: boolean
     guestOnly?: boolean
     title?: string
-    layoutWidth?: 'default' | 'wide' | 'reading'
+    layoutWidth?: 'standard' | 'reading' | 'focused'
   }
 }
 
@@ -28,7 +28,7 @@ const router = createRouter({
       meta: {
         requiresAuth: true,
         title: '首页',
-        layoutWidth: 'wide',
+        layoutWidth: 'standard',
       },
     },
     {
@@ -38,7 +38,7 @@ const router = createRouter({
       meta: {
         requiresAuth: true,
         title: '岗位方向洞察',
-        layoutWidth: 'wide',
+        layoutWidth: 'standard',
       },
     },
     {
@@ -48,7 +48,7 @@ const router = createRouter({
       meta: {
         requiresAuth: true,
         title: '岗位分析',
-        layoutWidth: 'wide',
+        layoutWidth: 'focused',
       },
     },
     {
@@ -58,7 +58,7 @@ const router = createRouter({
       meta: {
         requiresAuth: true,
         title: '优化工作区',
-        layoutWidth: 'wide',
+        layoutWidth: 'focused',
       },
     },
     {
@@ -68,6 +68,7 @@ const router = createRouter({
       meta: {
         requiresAuth: true,
         title: '我的简历',
+        layoutWidth: 'standard',
       },
     },
     {
@@ -77,6 +78,7 @@ const router = createRouter({
       meta: {
         requiresAuth: true,
         title: 'AI 设置',
+        layoutWidth: 'standard',
       },
     },
     {

@@ -7,9 +7,11 @@ import AppTopbar from './AppTopbar.vue'
 const route = useRoute()
 
 const contentWidthClass = computed(() => {
-  const layoutWidth = route.meta.layoutWidth || 'default'
+  const layoutWidth = route.meta.layoutWidth || 'standard'
   return `is-${layoutWidth}`
 })
+
+const isTaskLayout = computed(() => route.name === 'workspace' || route.name === 'job-analysis')
 
 // 窄屏导航作为可键盘操作的 Drawer：关闭时不留在 tab 顺序，打开时焦点进入导航。
 const menuOpen = ref(false)
@@ -60,7 +62,11 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="app-shell" @keydown.esc="closeMenu">
+  <div
+    class="app-shell"
+    :class="{ 'is-task-layout': isTaskLayout }"
+    @keydown.esc="closeMenu"
+  >
     <AppSidebar :open="menuOpen" :drawer="isNarrowScreen" @navigate="closeMenu" />
     <button
       v-if="menuOpen && isNarrowScreen"

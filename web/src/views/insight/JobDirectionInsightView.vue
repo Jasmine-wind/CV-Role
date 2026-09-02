@@ -3,11 +3,13 @@ import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { getJobDirectionInsights } from '@/api/job-direction-insight'
 import ErrorState from '@/components/common/ErrorState.vue'
+import EmptyState from '@/components/common/EmptyState.vue'
 import PageHeader from '@/components/common/PageHeader.vue'
 import SkeletonBlock from '@/components/common/SkeletonBlock.vue'
 import type {
   EvidenceCoverageLevel,
   JobDirectionCohort,
+  JobDirectionRequirement,
   JobDirectionInsights,
 } from '@/types/job-direction-insight'
 
@@ -15,6 +17,7 @@ const router = useRouter()
 const insights = ref<JobDirectionInsights | null>(null)
 const loading = ref(false)
 const error = ref<string | null>(null)
+const selectedByCohort = ref<Record<string, string>>({})
 
 const load = async () => {
   loading.value = true
@@ -30,9 +33,32 @@ const load = async () => {
 
 const coverageLabel = (level: EvidenceCoverageLevel) => {
   switch (level) {
-    case 'MATCHED': return '已有优势'
-    case 'PARTIAL_EVIDENCE': return '建议完善'
-    case 'NO_EVIDENCE': return '当前材料未体现'
+    case 'MATCHED':
+      return '已有优势'
+    case 'PARTIAL_EVIDENCE':
+      return '建议完善'
+    case 'NO_EVIDENCE':
+      return '当前材料未体现'
+  }
+}
+
+const coverageClass = (level: EvidenceCoverageLevel) => `is-${level.toLowerCase()}`
+
+const cohortKey = (cohort: JobDirectionCohort) => `${cohort.resumeId}-${cohort.newestAnalysisAt}`
+
+const selectedRequirement = (cohort: JobDirectionCohort) => {
+  const selectedLabel = selectedByCohort.value[cohortKey(cohort)]
+  return (
+    cohort.commonRequirements.find((item) => item.label === selectedLabel) ??
+    cohort.commonRequirements[0] ??
+    null
+  )
+}
+
+const selectRequirement = (cohort: JobDirectionCohort, requirement: JobDirectionRequirement) => {
+  selectedByCohort.value = {
+    ...selectedByCohort.value,
+    [cohortKey(cohort)]: requirement.label,
   }
 }
 
@@ -50,6 +76,7 @@ onMounted(() => {
 <template>
   <section class="job-direction-insights">
     <PageHeader
+      eyebrow="只读岗位视角"
       title="岗位方向洞察"
       description="系统只汇总同一份冻结简历材料下的正式岗位分析，帮助你看清近期岗位中反复出现的要求。"
     >
@@ -68,56 +95,98 @@ onMounted(() => {
       @action="load"
     />
 
-    <section v-else-if="!insights?.cohorts.length" class="insight-empty app-card">
-      <h2>继续按岗位分析，洞察会自然出现</h2>
-      <p>
-        当同一份冻结简历材料在最近 180 天内完成至少 8 个不同岗位的正式分析后，
-        系统会在这里汇总常见要求。它不会替你推断现实能力，也不会改变任何已有分析结果。
-      </p>
-      <el-button type="primary" @click="router.push('/app')">分析新岗位</el-button>
-    </section>
+    <EmptyState
+      v-else-if="!insights?.cohorts.length"
+      title="继续按岗位分析，洞察会自然出现"
+      description="当同一份冻结简历材料在最近 180 天内完成至少 8 个不同岗位的正式分析后，系统会在这里汇总常见要求。它不会替你推断现实能力，也不会改变任何已有分析结果。"
+      action-text="分析新岗位"
+      @action="router.push('/app')"
+    />
 
     <div v-else class="cohort-list">
-      <article v-for="cohort in insights.cohorts" :key="`${cohort.resumeId}-${cohort.newestAnalysisAt}`" class="cohort-card app-card">
+      <article v-for="cohort in insights.cohorts" :key="cohortKey(cohort)" class="insight-cohort">
         <header class="cohort-header">
-          <div>
-            <p class="cohort-eyebrow">基于冻结材料的近期岗位样本</p>
+          <div class="cohort-identity">
             <h2>{{ cohort.resumeName }}</h2>
-            <p>{{ windowText(cohort) }} · {{ cohort.sampleSize }} 个不同岗位</p>
+            <p>{{ cohort.sampleSize }} 个不同岗位 · {{ windowText(cohort) }}</p>
           </div>
-          <span class="cohort-count">{{ cohort.sampleSize }} 个岗位</span>
+          <dl class="cohort-facts">
+            <div><dt>样本</dt><dd>{{ cohort.sampleSize }} / {{ cohort.minimumSampleSize }}+</dd></div>
+            <div><dt>最新分析</dt><dd>{{ cohort.newestAnalysisAt.slice(0, 10) }}</dd></div>
+          </dl>
         </header>
 
         <p class="cohort-note">
-          下方状态只描述当时冻结的简历材料是否支持这些岗位要求；不会判断你的真实能力，也不会实时随工作区编辑变化。
+          以下状态只描述当时冻结的简历材料是否支持这些岗位要求；不会判断你的真实能力，也不会实时随工作区编辑变化。
         </p>
 
-        <div v-if="cohort.commonRequirements.length" class="requirement-list">
-          <article v-for="requirement in cohort.commonRequirements" :key="requirement.label" class="requirement-card">
-            <div class="requirement-head">
+        <div v-if="cohort.commonRequirements.length" class="insight-layout">
+          <section class="common-requirements" aria-label="常见岗位要求">
+            <header class="insight-section-header">
               <div>
-                <h3>{{ requirement.label }}</h3>
-                <p>出现在 {{ requirement.occurrenceCount }} / {{ requirement.sampleSize }} 个岗位中</p>
+                <span class="insight-section-label">COMMON REQUIREMENTS</span>
+                <h3>反复出现的要求</h3>
               </div>
-              <span class="requirement-frequency">{{ requirement.occurrenceCount }}/{{ requirement.sampleSize }}</span>
+              <span>{{ cohort.commonRequirements.length }} 条</span>
+            </header>
+            <div class="insight-requirement-list" role="list">
+              <button
+                v-for="requirement in cohort.commonRequirements"
+                :key="requirement.label"
+                type="button"
+                class="insight-requirement-row"
+                :class="{ 'is-selected': selectedRequirement(cohort)?.label === requirement.label }"
+                @click="selectRequirement(cohort, requirement)"
+              >
+                <span class="insight-requirement-name">{{ requirement.label }}</span>
+                <span class="insight-requirement-frequency">
+                  {{ requirement.occurrenceCount }} / {{ requirement.sampleSize }} 个岗位
+                </span>
+                <span class="insight-requirement-distribution">
+                  <span v-if="requirement.matchedCount" class="is-matched">匹配 {{ requirement.matchedCount }}</span>
+                  <span v-if="requirement.partialEvidenceCount" class="is-partial">部分 {{ requirement.partialEvidenceCount }}</span>
+                  <span v-if="requirement.noEvidenceCount" class="is-missing">未体现 {{ requirement.noEvidenceCount }}</span>
+                </span>
+              </button>
             </div>
-            <div class="coverage-distribution" aria-label="冻结材料证据分布">
-              <span v-if="requirement.matchedCount">已有优势 {{ requirement.matchedCount }}</span>
-              <span v-if="requirement.partialEvidenceCount">建议完善 {{ requirement.partialEvidenceCount }}</span>
-              <span v-if="requirement.noEvidenceCount">当前材料未体现 {{ requirement.noEvidenceCount }}</span>
-            </div>
-            <details class="requirement-trace">
-              <summary>查看分析来源</summary>
-              <ul>
-                <li v-for="source in requirement.sources" :key="source.evidenceRequirementId">
-                  <strong>{{ coverageLabel(source.matchLevel) }}：</strong>{{ source.requirementText }}
-                  <p v-for="evidence in source.evidences" :key="evidence.requirementEvidenceId">
-                    <span v-if="evidence.sectionLabel">{{ evidence.sectionLabel }}：</span>「{{ evidence.evidenceText }}」
-                  </p>
-                </li>
-              </ul>
-            </details>
-          </article>
+          </section>
+
+          <aside v-if="selectedRequirement(cohort)" class="insight-source-trace" aria-label="岗位要求来源">
+            <header class="insight-section-header">
+              <div>
+                <span class="insight-section-label">SOURCE TRACE</span>
+                <h3>{{ selectedRequirement(cohort)?.label }}</h3>
+              </div>
+              <span>{{ selectedRequirement(cohort)?.sources.length }} 个来源</span>
+            </header>
+
+            <section class="trace-distribution">
+              <span class="trace-label">Evidence distribution</span>
+              <div class="trace-counts">
+                <span class="is-matched">匹配 {{ selectedRequirement(cohort)?.matchedCount }}</span>
+                <span class="is-partial">部分 {{ selectedRequirement(cohort)?.partialEvidenceCount }}</span>
+                <span class="is-missing">未体现 {{ selectedRequirement(cohort)?.noEvidenceCount }}</span>
+              </div>
+            </section>
+
+            <section class="trace-sources">
+              <div class="trace-sources-heading">
+                <span class="trace-label">Sources</span>
+                <span>只读引用</span>
+              </div>
+              <article v-for="source in selectedRequirement(cohort)?.sources" :key="source.evidenceRequirementId" class="trace-source">
+                <div class="trace-source-heading">
+                  <span :class="['trace-status', coverageClass(source.matchLevel)]">{{ coverageLabel(source.matchLevel) }}</span>
+                  <span>任务 #{{ source.optimizationTaskId }}</span>
+                </div>
+                <p>{{ source.requirementText }}</p>
+                <blockquote v-for="evidence in source.evidences" :key="evidence.requirementEvidenceId">
+                  <span v-if="evidence.sectionLabel">{{ evidence.sectionLabel }} · </span>“{{ evidence.evidenceText }}”
+                </blockquote>
+                <small v-if="!source.evidences.length">当前冻结材料没有可引用的证据。</small>
+              </article>
+            </section>
+          </aside>
         </div>
         <p v-else class="no-common-requirements">
           当前样本中还没有达到“至少半数岗位出现”的保守共性要求。
@@ -128,142 +197,300 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.job-direction-insights,
+.job-direction-insights {
+  display: grid;
+  gap: var(--app-section-spacing);
+}
+
 .cohort-list {
   display: grid;
-  gap: 24px;
+  gap: var(--app-space-8);
 }
 
-.insight-empty,
-.cohort-card {
+.insight-cohort {
   display: grid;
-  gap: 16px;
-  padding: 24px;
+  gap: var(--app-space-5);
+  border-top: 1px solid var(--app-border-strong);
+  border-bottom: 1px solid var(--app-border-strong);
+  padding: var(--app-space-5) 0 var(--app-space-8);
 }
 
-.insight-empty h2,
-.cohort-header h2,
-.requirement-card h3 {
+.cohort-header,
+.insight-section-header,
+.cohort-facts,
+.trace-source-heading,
+.trace-sources-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--app-space-4);
+}
+
+.cohort-identity {
+  display: grid;
+  gap: var(--app-space-1);
+}
+
+.cohort-identity h2,
+.insight-section-header h3 {
   margin: 0;
   color: var(--app-text);
 }
 
-.insight-empty p,
-.cohort-header p,
+.cohort-identity h2 {
+  font-size: 22px;
+  line-height: var(--app-line-height-tight);
+}
+
+.cohort-identity p,
 .cohort-note,
-.requirement-head p,
-.requirement-trace p,
 .no-common-requirements {
   margin: 0;
   color: var(--app-text-secondary);
-  font-size: 13px;
-  line-height: 1.7;
+  font-size: var(--app-font-size-sm);
+  line-height: var(--app-line-height-body);
 }
 
-.cohort-header,
-.requirement-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.cohort-header > div,
-.requirement-head > div {
-  display: grid;
-  gap: 5px;
-}
-
-.cohort-eyebrow {
-  color: var(--app-primary) !important;
-  font-size: 12px !important;
-  font-weight: 700;
-}
-
-.cohort-count,
-.requirement-frequency {
+.cohort-facts {
   flex: 0 0 auto;
-  border: 1px solid var(--app-border);
-  border-radius: 999px;
-  padding: 5px 10px;
-  color: var(--app-text-secondary);
-  font-size: 12px;
+  gap: var(--app-space-5);
+  margin: 0;
+}
+
+.cohort-facts div {
+  display: grid;
+  gap: var(--app-space-1);
+}
+
+.cohort-facts dt,
+.insight-section-label,
+.trace-label,
+.trace-sources-heading > span:last-child {
+  color: var(--app-text-muted);
+  font-family: var(--app-font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.cohort-facts dd {
+  margin: 0;
+  color: var(--app-text);
+  font-size: var(--app-font-size-sm);
   font-weight: 700;
 }
 
 .cohort-note {
-  border-left: 3px solid var(--app-border);
-  padding-left: 12px;
+  border-left: 1px solid var(--app-border-strong);
+  padding-left: var(--app-space-3);
 }
 
-.requirement-list {
+.insight-layout {
   display: grid;
-  gap: 12px;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 0.56fr);
+  gap: var(--app-space-8);
+  border-top: 1px solid var(--app-border);
+  padding-top: var(--app-space-5);
 }
 
-.requirement-card {
+.common-requirements,
+.insight-source-trace {
+  min-width: 0;
+}
+
+.insight-section-header {
+  align-items: baseline;
+  padding-bottom: var(--app-space-3);
+  border-bottom: 1px solid var(--app-border-strong);
+}
+
+.insight-section-header > span {
+  color: var(--app-text-muted);
+  font-size: var(--app-font-size-xs);
+}
+
+.insight-section-header h3 {
+  margin-top: var(--app-space-1);
+  font-size: 18px;
+}
+
+.insight-requirement-list {
+  border-bottom: 1px solid var(--app-border);
+}
+
+.insight-requirement-row {
+  position: relative;
   display: grid;
-  gap: 12px;
-  border: 1px solid var(--app-border);
-  border-radius: var(--app-radius-md);
-  padding: 16px;
-  background: var(--app-surface);
-}
-
-.requirement-card h3 {
-  font-size: 15px;
-  line-height: 1.6;
-}
-
-.coverage-distribution {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.coverage-distribution span {
-  padding: 4px 8px;
-  border-radius: var(--app-radius-sm);
-  background: var(--app-surface-soft);
-  color: var(--app-text-secondary);
-  font-size: 12px;
-}
-
-.requirement-trace {
-  color: var(--app-text-secondary);
-  font-size: 13px;
-}
-
-.requirement-trace summary {
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--app-space-1) var(--app-space-3);
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid var(--app-border);
+  padding: var(--app-space-4) var(--app-space-3);
+  color: var(--app-text);
+  text-align: left;
+  background: transparent;
   cursor: pointer;
-  color: var(--app-primary);
+}
+
+.insight-requirement-row:hover,
+.insight-requirement-row:focus-visible {
+  background: var(--app-surface-soft);
+}
+
+.insight-requirement-row::before {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 2px;
+  background: var(--app-primary);
+  content: '';
+  opacity: 0;
+}
+
+.insight-requirement-row.is-selected {
+  background: var(--app-primary-soft);
+}
+
+.insight-requirement-row.is-selected::before {
+  opacity: 1;
+}
+
+.insight-requirement-name {
+  color: var(--app-text);
+  font-size: var(--app-font-size-md);
   font-weight: 700;
 }
 
-.requirement-trace ul {
+.insight-requirement-frequency {
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-size-xs);
+}
+
+.insight-requirement-distribution {
+  display: flex;
+  flex-wrap: wrap;
+  grid-column: 1 / -1;
+  gap: var(--app-space-3);
+  color: var(--app-text-muted);
+  font-size: var(--app-font-size-xs);
+}
+
+.is-matched {
+  color: var(--app-success);
+}
+
+.is-partial {
+  color: var(--app-warning);
+}
+
+.is-missing {
+  color: var(--app-primary-active);
+}
+
+.insight-source-trace {
+  border-left: 1px solid var(--app-border-strong);
+  padding-left: var(--app-space-6);
+}
+
+.trace-distribution,
+.trace-sources {
   display: grid;
-  gap: 10px;
-  margin: 10px 0 0;
-  padding-left: 20px;
+  gap: var(--app-space-3);
+  border-bottom: 1px solid var(--app-border);
+  padding: var(--app-space-4) 0;
 }
 
-.requirement-trace li {
-  line-height: 1.7;
+.trace-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--app-space-3);
+  font-size: var(--app-font-size-xs);
+  font-weight: 700;
 }
 
-.requirement-trace p {
-  padding-left: 4px;
+.trace-source {
+  display: grid;
+  gap: var(--app-space-2);
+  border-top: 1px solid var(--app-border-soft);
+  padding-top: var(--app-space-3);
+}
+
+.trace-source-heading {
+  align-items: baseline;
+  color: var(--app-text-muted);
+  font-family: var(--app-font-mono);
+  font-size: 10px;
+}
+
+.trace-status.is-matched {
+  color: var(--app-success);
+}
+
+.trace-status.is-partial_evidence {
+  color: var(--app-warning);
+}
+
+.trace-status.is-no_evidence {
+  color: var(--app-primary-active);
+}
+
+.trace-source p,
+.trace-source small {
+  margin: 0;
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-size-xs);
+  line-height: var(--app-line-height-body);
+}
+
+.trace-source p {
+  color: var(--app-text);
+  font-weight: 700;
+}
+
+.trace-source blockquote {
+  margin: 0;
+  border-left: 1px solid var(--app-primary);
+  padding-left: var(--app-space-3);
+  color: var(--app-text);
+  font-size: var(--app-font-size-xs);
+  line-height: var(--app-line-height-body);
+}
+
+.no-common-requirements {
+  padding: var(--app-space-3) 0;
+}
+
+@media (max-width: 900px) {
+  .insight-layout {
+    display: block;
+  }
+
+  .insight-source-trace {
+    margin-top: var(--app-space-6);
+    border-top: 1px solid var(--app-border-strong);
+    border-left: 0;
+    padding: var(--app-space-5) 0 0;
+  }
 }
 
 @media (max-width: 640px) {
-  .insight-empty,
-  .cohort-card {
-    padding: 18px;
+  .cohort-header {
+    flex-direction: column;
   }
 
-  .cohort-header,
-  .requirement-head {
-    flex-direction: column;
+  .cohort-facts {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .insight-requirement-row {
+    grid-template-columns: 1fr;
+  }
+
+  .insight-requirement-frequency {
+    grid-column: 1;
   }
 }
 </style>

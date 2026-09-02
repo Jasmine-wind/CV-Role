@@ -28,6 +28,7 @@ const resumes = ref<ResumeListItem[]>([])
 const loading = ref(false)
 const loadFailed = ref(false)
 const uploading = ref(false)
+const uploadOpen = ref(false)
 const deletingId = ref<number | null>(null)
 const selectedFile = ref<File | null>(null)
 const fileInput = ref<HTMLInputElement | null>(null)
@@ -131,6 +132,9 @@ interface ReviewItemState {
 }
 
 const reviewResumeId = ref<number | null>(null)
+const reviewResume = computed(
+  () => resumes.value.find((resume) => resume.id === reviewResumeId.value) ?? null,
+)
 const reviewLoading = ref(false)
 const reviewQualityStatus = ref<string | null>(null)
 const reviewName = ref('')
@@ -418,6 +422,7 @@ const handleUpload = async () => {
       fileInput.value.value = ''
     }
     await loadResumes()
+    uploadOpen.value = false
     let preparationStarted = Boolean(uploaded.preparationTaskId)
     if (uploaded.preparationTaskId) {
       startPreparationPolling(uploaded.id, uploaded.preparationTaskId)
@@ -485,13 +490,19 @@ onUnmounted(() => {
   <section class="resume-page resume-simple-page">
     <PageHeader
       title="我的简历"
-      description="上传后系统会自动读取并准备内容，你不需要选择解析方式或执行额外步骤。"
-    />
+      description="管理用于岗位优化的真实基础简历。上传后系统会自动读取并准备内容。"
+    >
+      <template #actions>
+        <el-button type="primary" @click="uploadOpen = !uploadOpen">
+          {{ uploadOpen ? '收起上传' : '+ 上传简历' }}
+        </el-button>
+      </template>
+    </PageHeader>
 
-    <section class="resume-simple-upload app-card">
-      <div>
-        <h2>上传简历</h2>
-        <p>{{ selectedFileText }}</p>
+    <section v-if="uploadOpen" class="resume-upload-row" aria-label="上传简历">
+      <div class="resume-upload-copy">
+        <strong>上传一份新的真实简历</strong>
+        <span>{{ selectedFileText }}</span>
       </div>
       <label class="resume-file-picker">
         <span>{{ selectedFile ? '重新选择' : '选择文件' }}</span>
@@ -517,8 +528,9 @@ onUnmounted(() => {
       @action="loadResumes()"
     />
 
-    <section v-else-if="resumes.length" class="resume-simple-list">
-      <header>
+    <section v-else-if="resumes.length" class="resume-library-shell">
+      <div class="resume-library-main">
+      <header class="resume-library-heading">
         <div>
           <h2>已保存的简历</h2>
           <p>选择简历并粘贴岗位 JD，即可在首页开始分析。</p>
@@ -526,15 +538,28 @@ onUnmounted(() => {
         <strong>{{ resumes.length }} 份</strong>
       </header>
 
-      <article v-for="resume in resumes" :key="resume.id" class="resume-simple-item app-card">
+      <div class="resume-library-column-head" aria-hidden="true">
+        <span>文件</span>
+        <span>状态</span>
+        <span>上传时间</span>
+        <span>操作</span>
+      </div>
+      <div class="resume-library-list" role="list">
+      <article v-for="resume in resumes" :key="resume.id" class="resume-library-row" role="listitem">
         <div class="resume-simple-file">
           <span>{{ resume.fileType }}</span>
           <div>
             <strong>{{ resume.originalFilename }}</strong>
-            <small>上传后自动准备内容</small>
+            <small>{{ formatFileSize(resume.fileSize) }}</small>
           </div>
         </div>
-        <el-tag :type="statusFor(resume).tone" effect="light">{{ statusFor(resume).label }}</el-tag>
+        <div class="resume-library-status">
+          <span class="resume-status-dot" :class="`is-${statusFor(resume).tone}`" aria-hidden="true" />
+          <span>{{ statusFor(resume).label }}</span>
+        </div>
+        <time class="resume-library-date" :datetime="resume.createdAt">
+          {{ resume.createdAt.slice(0, 10) }}
+        </time>
         <p v-if="resume.parseStatus === 'FAILED'" class="resume-simple-error">
           {{ resume.parseErrorMessage || '未能读取这份简历，请重试。' }}
         </p>
@@ -551,7 +576,7 @@ onUnmounted(() => {
             plain
             @click="reviewResumeId === resume.id ? closeReview() : openReview(resume.id)"
           >
-            {{ reviewResumeId === resume.id ? '收起确认' : '去确认' }}
+            {{ reviewResumeId === resume.id ? '收起确认' : '确认 →' }}
           </el-button>
           <el-button
             v-if="
@@ -581,125 +606,136 @@ onUnmounted(() => {
           </details>
         </div>
 
-        <section v-if="reviewResumeId === resume.id" class="resume-review-panel">
-          <p v-if="reviewLoading">正在读取待确认内容…</p>
-          <template v-else>
-            <div v-if="reviewNameMissing" class="resume-review-name">
-              <label>
-                <span>姓名（请确认）</span>
-                <input v-model="reviewName" placeholder="请输入姓名" />
-              </label>
-            </div>
-            <p v-if="reviewItems.length === 0 && reviewQualityStatus === 'READY'">
-              已全部确认完成。
-            </p>
-            <p v-else-if="reviewItems.length === 0" class="resume-review-reason">
-              当前没有可直接确认的候选内容，请重新准备一份排版更清晰的简历后再试。
-            </p>
-            <article v-for="state in reviewItems" :key="state.item.id" class="resume-review-item">
-              <p class="resume-review-reason">{{ state.item.reason || '请确认以下内容' }}</p>
-              <div
-                v-if="
-                  state.item.kind === 'CONTACT_CANDIDATE' ||
-                  state.item.kind === 'REQUIRED_CONTACT_CANDIDATE'
-                "
-                class="resume-review-row"
-              >
-                <select v-model="state.contact.type" aria-label="联系方式类型">
-                  <option
-                    v-for="option in state.item.kind === 'REQUIRED_CONTACT_CANDIDATE'
-                      ? REQUIRED_CONTACT_TYPE_OPTIONS
-                      : CONTACT_TYPE_OPTIONS"
-                    :key="option.value"
-                    :value="option.value"
-                  >
-                    {{ option.label }}
-                  </option>
-                </select>
-                <input v-model="state.contact.value" placeholder="联系方式内容" />
-              </div>
-              <div v-else-if="state.item.kind === 'NAME_CANDIDATE'" class="resume-review-row">
-                <input v-model="state.text" aria-label="确认姓名" placeholder="姓名" />
-              </div>
-              <div v-else-if="state.item.kind === 'TEXT_FRAGMENT'" class="resume-review-row">
-                <textarea v-model="state.text" rows="2" placeholder="内容"></textarea>
-              </div>
-              <div
-                v-else-if="state.item.kind === 'ENTRY_CANDIDATE'"
-                class="resume-review-entry-form"
-              >
-                <input
-                  v-if="state.entry.kind === 'EDUCATION'"
-                  v-model="state.entry.school"
-                  placeholder="学校名（必填）"
-                />
-                <input
-                  v-else
-                  v-model="state.entry.organization"
-                  placeholder="公司或项目名（必填）"
-                />
-                <input v-model="state.entry.role" placeholder="职位或角色（可选）" />
-                <input
-                  v-if="state.entry.kind === 'EDUCATION'"
-                  v-model="state.entry.degree"
-                  placeholder="学历（可选）"
-                />
-                <input
-                  v-if="state.entry.kind === 'EDUCATION'"
-                  v-model="state.entry.major"
-                  placeholder="专业（可选）"
-                />
-                <div class="resume-review-date-row">
-                  <input v-model="state.entry.startDate" placeholder="开始时间（可选）" />
-                  <input v-model="state.entry.endDate" placeholder="结束时间（可选）" />
-                </div>
-                <textarea
-                  v-for="(bullet, index) in state.entry.bullets"
-                  :key="`${state.item.id}-bullet-${index}`"
-                  v-model="bullet.text"
-                  rows="2"
-                  placeholder="内容"
-                ></textarea>
-              </div>
-              <div v-else class="resume-review-entry-preview">
-                <strong>{{ entryDraftSummary(state.item.canonicalDraft).title }}</strong>
-                <span v-if="entryDraftSummary(state.item.canonicalDraft).details.length">
-                  {{ entryDraftSummary(state.item.canonicalDraft).details.join(' · ') }}
-                </span>
-                <p
-                  v-for="bullet in entryDraftSummary(state.item.canonicalDraft).bullets"
-                  :key="bullet"
-                >
-                  {{ bullet }}
-                </p>
-              </div>
-              <div class="resume-review-actions">
-                <el-button
-                  size="small"
-                  type="primary"
-                  :loading="resolvingItemId === state.item.id"
-                  @click="acceptReviewItem(resume.id, state)"
-                >
-                  接受
-                </el-button>
-                <el-button
-                  v-if="
-                    state.item.kind !== 'REQUIRED_CONTACT_CANDIDATE' &&
-                    state.item.kind !== 'NAME_CANDIDATE'
-                  "
-                  size="small"
-                  type="danger"
-                  plain
-                  :loading="resolvingItemId === state.item.id"
-                  @click="deleteReviewItem(resume.id, state)"
-                >
-                  删除
-                </el-button>
-              </div>
-            </article>
-          </template>
-        </section>
       </article>
+      </div>
+      </div>
+
+      <aside v-if="reviewResumeId && reviewResume" class="resume-review-inspector">
+        <header class="resume-review-header">
+          <div>
+            <span class="resume-review-label">CONTEXTUAL REVIEW</span>
+            <h2>需要确认</h2>
+            <p>{{ reviewResume.originalFilename }}</p>
+          </div>
+          <button type="button" class="resume-review-close" @click="closeReview">收起</button>
+        </header>
+        <p v-if="reviewLoading" class="resume-review-loading">正在读取待确认内容…</p>
+        <template v-else>
+          <div v-if="reviewNameMissing" class="resume-review-name">
+            <label>
+              <span>姓名（请确认）</span>
+              <input v-model="reviewName" placeholder="请输入姓名" />
+            </label>
+          </div>
+          <p v-if="reviewItems.length === 0 && reviewQualityStatus === 'READY'">
+            已全部确认完成。
+          </p>
+          <p v-else-if="reviewItems.length === 0" class="resume-review-reason">
+            当前没有可直接确认的候选内容，请重新准备一份排版更清晰的简历后再试。
+          </p>
+          <article v-for="state in reviewItems" :key="state.item.id" class="resume-review-item">
+            <p class="resume-review-reason">{{ state.item.reason || '请确认以下内容' }}</p>
+            <div
+              v-if="
+                state.item.kind === 'CONTACT_CANDIDATE' ||
+                state.item.kind === 'REQUIRED_CONTACT_CANDIDATE'
+              "
+              class="resume-review-row"
+            >
+              <select v-model="state.contact.type" aria-label="联系方式类型">
+                <option
+                  v-for="option in state.item.kind === 'REQUIRED_CONTACT_CANDIDATE'
+                    ? REQUIRED_CONTACT_TYPE_OPTIONS
+                    : CONTACT_TYPE_OPTIONS"
+                  :key="option.value"
+                  :value="option.value"
+                >
+                  {{ option.label }}
+                </option>
+              </select>
+              <input v-model="state.contact.value" placeholder="联系方式内容" />
+            </div>
+            <div v-else-if="state.item.kind === 'NAME_CANDIDATE'" class="resume-review-row">
+              <input v-model="state.text" aria-label="确认姓名" placeholder="姓名" />
+            </div>
+            <div v-else-if="state.item.kind === 'TEXT_FRAGMENT'" class="resume-review-row">
+              <textarea v-model="state.text" rows="2" placeholder="内容"></textarea>
+            </div>
+            <div
+              v-else-if="state.item.kind === 'ENTRY_CANDIDATE'"
+              class="resume-review-entry-form"
+            >
+              <input
+                v-if="state.entry.kind === 'EDUCATION'"
+                v-model="state.entry.school"
+                placeholder="学校名（必填）"
+              />
+              <input
+                v-else
+                v-model="state.entry.organization"
+                placeholder="公司或项目名（必填）"
+              />
+              <input v-model="state.entry.role" placeholder="职位或角色（可选）" />
+              <input
+                v-if="state.entry.kind === 'EDUCATION'"
+                v-model="state.entry.degree"
+                placeholder="学历（可选）"
+              />
+              <input
+                v-if="state.entry.kind === 'EDUCATION'"
+                v-model="state.entry.major"
+                placeholder="专业（可选）"
+              />
+              <div class="resume-review-date-row">
+                <input v-model="state.entry.startDate" placeholder="开始时间（可选）" />
+                <input v-model="state.entry.endDate" placeholder="结束时间（可选）" />
+              </div>
+              <textarea
+                v-for="(bullet, index) in state.entry.bullets"
+                :key="`${state.item.id}-bullet-${index}`"
+                v-model="bullet.text"
+                rows="2"
+                placeholder="内容"
+              ></textarea>
+            </div>
+            <div v-else class="resume-review-entry-preview">
+              <strong>{{ entryDraftSummary(state.item.canonicalDraft).title }}</strong>
+              <span v-if="entryDraftSummary(state.item.canonicalDraft).details.length">
+                {{ entryDraftSummary(state.item.canonicalDraft).details.join(' · ') }}
+              </span>
+              <p
+                v-for="bullet in entryDraftSummary(state.item.canonicalDraft).bullets"
+                :key="bullet"
+              >
+                {{ bullet }}
+              </p>
+            </div>
+            <div class="resume-review-actions">
+              <el-button
+                size="small"
+                type="primary"
+                :loading="resolvingItemId === state.item.id"
+                @click="acceptReviewItem(reviewResume.id, state)"
+              >
+                接受
+              </el-button>
+              <el-button
+                v-if="
+                  state.item.kind !== 'REQUIRED_CONTACT_CANDIDATE' &&
+                  state.item.kind !== 'NAME_CANDIDATE'
+                "
+                size="small"
+                type="danger"
+                plain
+                :loading="resolvingItemId === state.item.id"
+                @click="deleteReviewItem(reviewResume.id, state)"
+              >
+                删除
+              </el-button>
+            </div>
+          </article>
+        </template>
+      </aside>
     </section>
 
     <EmptyState
@@ -711,45 +747,60 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.resume-simple-page {
+.resume-library-page {
   display: grid;
-  gap: 24px;
+  gap: var(--app-section-spacing);
 }
 
-.resume-simple-upload {
+.resume-upload-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
-  gap: 16px;
+  gap: var(--app-space-4);
   align-items: center;
-  padding: 24px;
+  border-top: 1px solid var(--app-border);
+  border-bottom: 1px solid var(--app-border);
+  padding: var(--app-space-4) 0;
 }
 
-.resume-simple-upload h2,
-.resume-simple-list h2 {
-  margin: 0;
-  color: var(--app-navy);
-  font-size: 20px;
+.resume-upload-copy {
+  display: grid;
+  gap: var(--app-space-1);
+  min-width: 0;
 }
 
-.resume-simple-upload p,
-.resume-simple-list header p {
-  margin: 6px 0 0;
+.resume-upload-copy strong {
+  color: var(--app-text);
+  font-size: var(--app-font-size-md);
+}
+
+.resume-upload-copy span,
+.resume-library-heading p {
   color: var(--app-text-secondary);
-  font-size: 14px;
+  font-size: var(--app-font-size-sm);
+  line-height: var(--app-line-height-body);
 }
 
 .resume-file-picker {
   display: inline-flex;
+  min-height: 40px;
   align-items: center;
   justify-content: center;
-  min-height: 40px;
-  padding: 0 16px;
+  max-width: 260px;
+  min-width: 0;
+  padding: 0 var(--app-space-4);
   border: 1px solid var(--app-border);
-  border-radius: var(--app-radius-md);
+  border-radius: var(--app-radius-sm);
   color: var(--app-text);
+  font-size: var(--app-font-size-sm);
   font-weight: 700;
   cursor: pointer;
   background: var(--app-surface);
+}
+
+.resume-file-picker span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .resume-file-picker input {
@@ -765,77 +816,162 @@ onUnmounted(() => {
   outline-offset: 2px;
 }
 
-.resume-simple-list {
+.resume-library-shell {
   display: grid;
-  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 0.36fr);
+  gap: var(--app-space-8);
+  border-top: 1px solid var(--app-border-strong);
+  padding-top: var(--app-space-5);
 }
 
-.resume-simple-list > header {
+.resume-library-main {
+  min-width: 0;
+}
+
+.resume-library-heading {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 16px;
+  gap: var(--app-space-4);
+  padding-bottom: var(--app-space-5);
 }
 
-.resume-simple-list > header > strong {
-  color: var(--app-primary);
+.resume-library-heading h2 {
+  margin: 0;
+  color: var(--app-text);
+  font-size: 20px;
+  line-height: var(--app-line-height-tight);
 }
 
-.resume-simple-item {
+.resume-library-heading p {
+  margin: var(--app-space-1) 0 0;
+}
+
+.resume-library-heading > strong {
+  flex: 0 0 auto;
+  color: var(--app-text-muted);
+  font-size: var(--app-font-size-sm);
+}
+
+.resume-library-column-head,
+.resume-library-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  gap: 16px;
+  grid-template-columns: minmax(0, 2fr) minmax(110px, 0.8fr) minmax(90px, 0.75fr) auto;
+  gap: var(--app-space-4);
   align-items: center;
-  padding: 18px 20px;
+}
+
+.resume-library-column-head {
+  padding: 0 var(--app-space-3) var(--app-space-2);
+  color: var(--app-text-muted);
+  font-size: var(--app-font-size-xs);
+  font-weight: 700;
+}
+
+.resume-library-list {
+  border-top: 1px solid var(--app-border-strong);
+}
+
+.resume-library-row {
+  position: relative;
+  padding: var(--app-space-4) var(--app-space-3);
+  border-bottom: 1px solid var(--app-border);
+}
+
+.resume-library-row:hover,
+.resume-library-row.is-selected {
+  background: var(--app-surface-soft);
+}
+
+.resume-library-row.is-selected {
+  box-shadow: inset 3px 0 var(--app-primary);
 }
 
 .resume-simple-file {
   display: flex;
   min-width: 0;
   align-items: center;
-  gap: 14px;
+  gap: var(--app-space-3);
 }
 
 .resume-simple-file > span {
-  display: grid;
-  flex: 0 0 48px;
-  height: 48px;
-  place-items: center;
-  border-radius: var(--app-radius-md);
-  color: var(--app-primary);
-  font-size: 12px;
-  font-weight: 800;
-  background: var(--app-primary-soft);
+  display: inline-flex;
+  flex: 0 0 auto;
+  min-width: 34px;
+  justify-content: center;
+  color: var(--app-text-muted);
+  font-family: var(--app-font-mono);
+  font-size: 10px;
+  font-weight: 700;
 }
 
 .resume-simple-file div {
   display: grid;
   min-width: 0;
-  gap: 5px;
+  gap: var(--app-space-1);
 }
 
 .resume-simple-file strong {
   overflow: hidden;
   color: var(--app-text);
+  font-size: var(--app-font-size-md);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .resume-simple-file small {
   color: var(--app-text-secondary);
+  font-size: var(--app-font-size-xs);
 }
 
+.resume-library-status {
+  display: flex;
+  gap: var(--app-space-2);
+  align-items: center;
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-size-xs);
+}
+
+.resume-status-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--app-border-strong);
+}
+
+.resume-status-dot.is-success {
+  background: var(--app-success);
+}
+
+.resume-status-dot.is-warning {
+  background: var(--app-warning);
+}
+
+.resume-status-dot.is-danger {
+  background: var(--app-danger);
+}
+
+.resume-library-date {
+  color: var(--app-text-muted);
+  font-size: var(--app-font-size-xs);
+}
+
+.resume-library-error,
 .resume-simple-error {
   grid-column: 1 / -1;
   margin: 0;
-  color: var(--el-color-danger);
-  font-size: 13px;
+  color: var(--app-danger);
+  font-size: var(--app-font-size-xs);
+  line-height: var(--app-line-height-body);
 }
 
-.resume-simple-actions {
+.resume-simple-actions,
+.resume-library-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: flex-end;
+  gap: var(--app-space-2);
 }
 
 .resume-item-more {
@@ -847,8 +983,8 @@ onUnmounted(() => {
   padding: 7px 10px;
   border-radius: var(--app-radius-md);
   color: var(--app-text-secondary);
-  font-size: 13px;
-  font-weight: 600;
+  font-size: var(--app-font-size-xs);
+  font-weight: 700;
   cursor: pointer;
 }
 
@@ -880,46 +1016,99 @@ onUnmounted(() => {
   justify-content: flex-start;
 }
 
-.resume-review-panel {
-  grid-column: 1 / -1;
+.resume-review-inspector {
   display: grid;
-  gap: 12px;
-  border-top: 1px dashed var(--app-border);
-  padding-top: 14px;
+  align-content: start;
+  gap: var(--app-space-4);
+  min-width: 0;
+  align-self: start;
+  position: sticky;
+  top: calc(var(--app-shell-header-height) + var(--app-space-4));
+  border-left: 1px solid var(--app-border-strong);
+  padding: var(--app-space-3) 0 var(--app-space-5) var(--app-space-6);
+  background: var(--app-surface-soft);
+}
+
+.resume-review-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--app-space-3);
+}
+
+.resume-review-label {
+  color: var(--app-text-muted);
+  font-family: var(--app-font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+.resume-review-header h2 {
+  margin: var(--app-space-1) 0 0;
+  color: var(--app-text);
+  font-size: 20px;
+  line-height: var(--app-line-height-tight);
+}
+
+.resume-review-header p {
+  margin: var(--app-space-1) 0 0;
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-size-sm);
+}
+
+.resume-review-close {
+  border: 0;
+  border-bottom: 1px solid var(--app-text);
+  padding: 3px 0;
+  color: var(--app-text);
+  font: inherit;
+  font-size: var(--app-font-size-xs);
+  font-weight: 700;
+  background: transparent;
+  cursor: pointer;
+}
+
+.resume-review-close:hover,
+.resume-review-close:focus-visible {
+  color: var(--app-primary-active);
+  border-color: var(--app-primary);
+}
+
+.resume-review-loading,
+.resume-review-reason,
+.resume-review-entry-preview {
+  margin: 0;
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-size-xs);
+  line-height: var(--app-line-height-body);
 }
 
 .resume-review-item {
   display: grid;
-  gap: 8px;
-  border: 1px solid var(--app-border);
-  border-radius: var(--app-radius-md);
-  padding: 12px;
-}
-
-.resume-review-reason {
-  margin: 0;
-  color: var(--app-text-secondary);
-  font-size: 13px;
+  gap: var(--app-space-3);
+  border-top: 1px solid var(--app-border);
+  padding-top: var(--app-space-4);
 }
 
 .resume-review-name,
 .resume-review-entry-form {
   display: grid;
-  gap: 8px;
+  gap: var(--app-space-2);
 }
 
 .resume-review-name label {
   display: grid;
-  gap: 6px;
+  gap: var(--app-space-1);
   color: var(--app-text-secondary);
-  font-size: 13px;
+  font-size: var(--app-font-size-xs);
   font-weight: 700;
 }
 
 .resume-review-row,
 .resume-review-date-row {
   display: grid;
-  gap: 8px;
+  gap: var(--app-space-2);
 }
 
 .resume-review-date-row {
@@ -932,18 +1121,19 @@ onUnmounted(() => {
 .resume-review-row select,
 .resume-review-entry-form input,
 .resume-review-entry-form textarea {
+  width: 100%;
   border: 1px solid var(--app-border);
-  border-radius: 6px;
-  padding: 8px 10px;
+  border-radius: var(--app-radius-sm);
+  padding: var(--app-space-2) var(--app-space-3);
+  color: var(--app-text);
   font: inherit;
+  font-size: var(--app-font-size-sm);
+  background: var(--app-surface);
 }
 
 .resume-review-entry-preview {
   display: grid;
-  gap: 4px;
-  color: var(--app-text-secondary);
-  font-size: 13px;
-  line-height: 1.6;
+  gap: var(--app-space-1);
 }
 
 .resume-review-entry-preview strong {
@@ -956,18 +1146,63 @@ onUnmounted(() => {
 
 .resume-review-actions {
   display: flex;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: var(--app-space-2);
+}
+
+@media (max-width: 900px) {
+  .resume-library-shell {
+    display: block;
+  }
+
+  .resume-review-inspector {
+    position: static;
+    margin-top: var(--app-space-6);
+    border-top: 1px solid var(--app-border-strong);
+    border-left: 0;
+    padding: var(--app-space-5) 0 0;
+  }
 }
 
 @media (max-width: 760px) {
-  .resume-simple-upload,
-  .resume-simple-item {
+  .resume-upload-row {
     grid-template-columns: 1fr;
+    align-items: stretch;
   }
 
-  .resume-simple-upload .el-button,
-  .resume-file-picker {
+  .resume-file-picker,
+  .resume-upload-row .el-button {
     width: 100%;
+    max-width: none;
+  }
+
+  .resume-library-column-head {
+    display: none;
+  }
+
+  .resume-library-row {
+    grid-template-columns: 1fr;
+    gap: var(--app-space-3);
+    align-items: start;
+    padding: var(--app-space-4) 0;
+  }
+
+  .resume-library-actions {
+    justify-content: flex-start;
+    order: 4;
+  }
+
+  .resume-library-date {
+    order: 3;
+  }
+
+  .resume-library-error,
+  .resume-simple-error {
+    grid-column: auto;
+  }
+
+  .resume-review-date-row {
+    grid-template-columns: 1fr;
   }
 }
 </style>

@@ -1,48 +1,94 @@
 :root {
-  --app-bg: #f8f9fb;
-  --app-bg-soft: #f6f7f9;
-  --app-surface: #ffffff;
-  --app-surface-soft: #fafbfc;
-  --app-pdf-canvas: #e9edf3;
+  /* Workspace visual baseline: warm paper surfaces with a restrained Burnt Clay action color. */
+  --app-bg: #f3f0ea;
+  --app-bg-soft: #ece8e1;
+  --app-surface: #fffdf8;
+  --app-surface-soft: #f8f6f2;
+  --app-pdf-canvas: #ece8e1;
+  --app-stage: #ece8e1;
+  --app-document: #fffdf8;
 
-  --app-primary: #2563eb;
-  --app-primary-hover: #1d4ed8;
-  --app-primary-soft: #eff6ff;
-  --app-primary-subtle: #dbeafe;
+  --app-primary: #a85c48;
+  --app-primary-hover: #914b3b;
+  --app-primary-active: #7c4033;
+  --app-primary-soft: #f1e1da;
+  --app-primary-subtle: #dfc2b7;
 
-  --app-accent: #0f766e;
-  --app-accent-hover: #0f5f59;
-  --app-accent-soft: #ecfdf5;
+  --app-accent: #6f7c6b;
+  --app-accent-hover: #5e6a5a;
+  --app-accent-soft: #f0eee9;
 
-  --app-navy: #0f172a;
-  --app-text: #1e293b;
-  --app-text-secondary: #64748b;
-  --app-text-muted: #64748b;
+  --app-navy: #25231f;
+  --app-text: #25231f;
+  --app-text-secondary: #6f6a63;
+  --app-text-muted: #918b83;
 
-  --app-border: #e2e8f0;
-  --app-border-soft: #edf2f7;
+  --app-border: #ddd8d0;
+  --app-border-strong: #cfc8be;
+  --app-border-soft: #eeeae4;
+  --app-scroll-thumb: #c4beb5;
 
-  --app-success: #16a34a;
-  --app-success-soft: #ecfdf3;
-  --app-warning: #d97706;
-  --app-warning-soft: #fff7ed;
-  --app-danger: #dc2626;
-  --app-danger-soft: #fef2f2;
+  --app-success: #6f7c6b;
+  --app-success-soft: #f0eee9;
+  --app-warning: #9b7655;
+  --app-warning-soft: #f1eae2;
+  --app-danger: #a85c48;
+  --app-danger-soft: #f1e1da;
 
-  --app-radius-xl: 14px;
-  --app-radius-lg: 10px;
-  --app-radius-md: 8px;
-  --app-radius-sm: 6px;
+  --app-radius-xl: 12px;
+  --app-radius-lg: 8px;
+  --app-radius-md: 5px;
+  --app-radius-sm: 3px;
 
-  --app-shadow-card: 0 1px 2px rgba(15, 23, 42, 0.05);
-  --app-shadow-soft: 0 4px 16px rgba(15, 23, 42, 0.08);
+  --app-shadow-card: 0 1px 2px rgba(37, 35, 31, 0.05);
+  --app-shadow-soft: 0 4px 16px rgba(37, 35, 31, 0.1);
+  --app-shadow-page: 0 2px 12px rgba(37, 35, 31, 0.1), 0 1px 2px rgba(37, 35, 31, 0.06);
 
+  /* Product layout contract: standard app pages, reading surfaces, and focused task workspaces. */
+  --app-shell-header-height: 56px;
   --app-sidebar-width: 248px;
-  --app-content-max-width: 1360px;
-  --app-content-wide-max-width: 1480px;
-  --app-content-reading-max-width: 1040px;
-  --app-content-padding-y: 32px;
-  --app-content-padding-x: 32px;
+  --app-layout-standard-max-width: 1440px;
+  --app-layout-reading-max-width: 1040px;
+  --app-landing-max-width: 1180px;
+  --app-content-gutter: clamp(16px, 2.25vw, 32px);
+  --app-content-gutter-narrow: 16px;
+  --app-content-padding-block: 32px;
+  --app-section-spacing: 24px;
+
+  /* Shared workspace geometry; components consume these values instead of owning page widths. */
+  --app-workspace-requirements-width: clamp(240px, 20vw, 296px);
+  --app-workspace-inspector-width: clamp(320px, 24vw, 404px);
+  --app-workspace-requirements-width-tablet: 245px;
+  --app-workspace-inspector-width-tablet: 340px;
+
+  /* Shared spacing scale. */
+  --app-space-1: 4px;
+  --app-space-2: 8px;
+  --app-space-3: 12px;
+  --app-space-4: 16px;
+  --app-space-5: 20px;
+  --app-space-6: 24px;
+  --app-space-8: 32px;
+  --app-space-10: 40px;
+  --app-space-12: 48px;
+
+  /* Shared typography contract. */
+  --app-font-sans: Inter, 'Segoe UI', 'Microsoft YaHei', 'PingFang SC', 'Noto Sans CJK SC', system-ui, sans-serif;
+  --app-font-mono: 'IBM Plex Mono', 'SFMono-Regular', Consolas, monospace;
+  --app-font-size-xs: 12px;
+  --app-font-size-sm: 13px;
+  --app-font-size-md: 14px;
+  --app-font-size-lg: 16px;
+  --app-font-size-title: 24px;
+  --app-line-height-tight: 1.3;
+  --app-line-height-body: 1.7;
+
+  /* Compatibility aliases for unchanged page styles; new layout code uses the contract above. */
+  --app-content-max-width: var(--app-layout-standard-max-width);
+  --app-content-wide-max-width: var(--app-layout-standard-max-width);
+  --app-content-reading-max-width: var(--app-layout-reading-max-width);
+  --app-content-padding-y: var(--app-content-padding-block);
+  --app-content-padding-x: var(--app-content-gutter);
 
   --app-color-primary: var(--app-primary);
   --app-color-primary-soft: var(--app-primary-soft);

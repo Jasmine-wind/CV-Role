@@ -3,9 +3,8 @@
 @use './global';
 
 /* ---------------------------------------------------------------------------
- * 全局壳：sidebar（桌面固定 / 窄屏 Drawer）+ topbar（账号菜单）+ content。
- * 全局壳只承担 navigation / account / narrow-screen menu；
- * 页面标题与任务操作由各页面自身承担。
+ * 全局壳：desktop 由 Global Topbar 承担主导航，narrow screen 保留 Sidebar Drawer。
+ * 内容宽度遵循 standard / reading / focused 三种共享 contract。
  * ------------------------------------------------------------------------- */
 
 .app-shell {
@@ -16,7 +15,7 @@
 }
 
 .app-sidebar {
-  display: flex;
+  display: none;
   flex: 0 0 var(--app-sidebar-width);
   flex-direction: column;
   width: var(--app-sidebar-width);
@@ -100,8 +99,8 @@
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  min-height: 56px;
-  padding: 8px 24px;
+  min-height: var(--app-shell-header-height);
+  padding: var(--app-space-2) var(--app-content-gutter);
   border-bottom: 1px solid var(--app-border);
   background: var(--app-surface);
 }
@@ -114,12 +113,54 @@
 }
 
 .app-topbar-brand {
-  display: none;
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--app-space-2);
   color: var(--app-text);
   font-size: 15px;
   font-weight: 700;
+}
+
+.app-topbar-nav {
+  display: flex;
+  align-items: center;
+  gap: var(--app-space-1);
+  margin-left: var(--app-space-4);
+}
+
+.app-topbar-nav-link {
+  padding: 8px 10px;
+  border-radius: var(--app-radius-sm);
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-size-sm);
+  font-weight: 650;
+  transition: background-color 160ms ease, color 160ms ease;
+}
+
+.app-topbar-nav-link:hover,
+.app-topbar-nav-link:focus-visible {
+  color: var(--app-text);
+  background: var(--app-surface-soft);
+}
+
+.app-topbar-nav-link.router-link-active {
+  color: var(--app-primary-active);
+  background: var(--app-primary-soft);
+}
+
+.app-workspace-context {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin-left: 14px;
+  color: var(--app-text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.app-workspace-context span {
+  color: var(--app-border-strong);
 }
 
 .app-topbar-menu-button {
@@ -165,17 +206,31 @@
 
 .app-content {
   width: 100%;
-  max-width: var(--app-content-max-width);
   margin: 0 auto;
-  padding: var(--app-content-padding-y) var(--app-content-padding-x) 48px;
+  padding: var(--app-content-padding-block) var(--app-content-gutter) var(--app-space-12);
 }
 
-.app-content.is-wide {
-  max-width: var(--app-content-wide-max-width);
+.app-content.is-standard {
+  max-width: var(--app-layout-standard-max-width);
 }
 
 .app-content.is-reading {
-  max-width: var(--app-content-reading-max-width);
+  max-width: var(--app-layout-reading-max-width);
+}
+
+.app-content.is-focused {
+  width: 100%;
+  max-width: none;
+  height: calc(100dvh - var(--app-shell-header-height));
+  padding: 0;
+}
+
+.app-shell.is-task-layout .app-page {
+  width: 100%;
+}
+
+.app-shell.is-task-layout .app-topbar {
+  background: var(--app-surface-soft);
 }
 
 /* 窄屏：sidebar 变为 Drawer，主内容获得完整宽度。 */
@@ -185,6 +240,7 @@
 
 @media (max-width: 960px) {
   .app-sidebar {
+    display: flex;
     position: fixed;
     z-index: 40;
     top: 0;
@@ -210,15 +266,16 @@
   }
 
   .app-topbar {
-    padding: 8px 16px;
+    padding: var(--app-space-2) var(--app-content-gutter-narrow);
   }
 
   .app-topbar-menu-button {
     min-height: 40px;
   }
 
-  .app-topbar-brand {
-    display: inline-flex;
+  .app-topbar-nav,
+  .app-workspace-context {
+    display: none;
   }
 
   .app-topbar-menu-button {
@@ -226,7 +283,11 @@
   }
 
   .app-content {
-    padding: 20px 16px 40px;
+    padding: var(--app-space-5) var(--app-content-gutter-narrow) var(--app-space-10);
+  }
+
+  .app-content.is-focused {
+    padding: 0;
   }
 }
 
@@ -389,54 +450,21 @@
 }
 
 /* ---------------------------------------------------------------------------
- * 认证页（登录 / 注册）。
+ * 认证表单内容；页面壳与产品上下文由共享 AuthShell 承担。
  * ------------------------------------------------------------------------- */
-
-.auth-page {
-  display: grid;
-  min-height: 100vh;
-  place-items: center;
-  padding: 32px 16px;
-  background: var(--app-bg);
-}
-
-.auth-panel {
-  width: min(100%, 420px);
-  padding: 32px;
-  border: 1px solid var(--app-border);
-  border-radius: var(--app-radius-lg);
-  background: var(--app-surface);
-}
-
-.auth-brand {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 28px;
-  color: var(--app-text);
-  font-weight: 800;
-}
-
-.auth-brand span {
-  display: grid;
-  width: 32px;
-  height: 32px;
-  place-items: center;
-  border-radius: var(--app-radius-sm);
-  color: #fff;
-  font-size: 12px;
-  background: var(--app-primary);
-}
 
 .auth-title {
   margin: 0 0 8px;
   color: var(--app-text);
-  font-size: 24px;
-  font-weight: 700;
+  font-size: 28px;
+  font-weight: 750;
+  line-height: 1.25;
+  letter-spacing: -0.02em;
 }
 
 .auth-subtitle {
-  margin: 0 0 24px;
+  max-width: 42ch;
+  margin: 0 0 28px;
   color: var(--app-text-secondary);
   font-size: 14px;
   line-height: 1.7;
@@ -445,12 +473,19 @@
 .auth-actions {
   display: grid;
   gap: 14px;
-  margin-top: 8px;
+  margin-top: 10px;
+}
+
+.auth-actions .el-button {
+  width: 100%;
 }
 
 .auth-link {
   color: var(--app-primary);
-  font-weight: 600;
+  font-weight: 650;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
 }
 
 .auth-footer {

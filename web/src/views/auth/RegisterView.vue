@@ -4,6 +4,7 @@ import { ElMessage } from 'element-plus'
 import { reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { register } from '@/api/auth'
+import AuthShell from '@/components/auth/AuthShell.vue'
 
 interface RegisterForm {
   username: string
@@ -67,16 +68,11 @@ const handleSubmit = async () => {
 </script>
 
 <template>
-  <main class="auth-page">
-    <section class="auth-panel">
-      <RouterLink to="/" class="auth-brand">
-        <span>CV</span>
-        <strong>简历优化</strong>
-      </RouterLink>
-      <h1 class="auth-title">注册</h1>
-      <p class="auth-subtitle">创建账号后，上传简历并粘贴目标岗位 JD 即可开始分析。</p>
+  <AuthShell>
+    <h1 class="auth-title">注册</h1>
+    <p class="auth-subtitle">创建账号后，上传简历并粘贴目标岗位 JD 即可开始分析。</p>
 
-      <el-form ref="formRef" :model="form" :rules="rules" label-position="top" size="large">
+    <el-form ref="formRef" :model="form" :rules="rules" label-position="top" size="large">
         <el-form-item label="用户名" prop="username">
           <el-input
             v-model.trim="form.username"
@@ -112,7 +108,6 @@ const handleSubmit = async () => {
             <router-link class="auth-link" to="/login">去登录</router-link>
           </p>
         </div>
-      </el-form>
-    </section>
-  </main>
+    </el-form>
+  </AuthShell>
 </template>

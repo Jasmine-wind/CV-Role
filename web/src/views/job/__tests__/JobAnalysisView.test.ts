@@ -17,7 +17,7 @@ const elementPlusStubs = vi.hoisted(() => ({
 }))
 
 vi.mock('vue-router', () => ({
-  useRoute: () => ({ params: { optimizationTaskId: '7' } }),
+  useRoute: () => ({ params: { optimizationTaskId: '7' }, query: {} }),
   useRouter: () => ({ push }),
 }))
 
@@ -33,6 +33,7 @@ const requirement = (
   id: number,
   importance: string,
   matchLevel: string,
+  evidenceCount?: number,
 ): EvidenceRequirementItem => ({
   evidenceRequirementId: id,
   requirementText: `要求 ${id}`,
@@ -43,14 +44,12 @@ const requirement = (
   evidences:
     matchLevel === 'NO_EVIDENCE'
       ? []
-      : [
-          {
-            requirementEvidenceId: id,
-            sectionLabel: '工作经历',
-            evidenceText: `材料 ${id}`,
-            supportLevel: matchLevel === 'MATCHED' ? 'SUFFICIENT' : 'PARTIAL',
-          },
-        ],
+      : Array.from({ length: evidenceCount ?? 1 }, (_, index) => ({
+          requirementEvidenceId: id * 10 + index,
+          sectionLabel: '工作经历',
+          evidenceText: `材料 ${id}-${index + 1}`,
+          supportLevel: matchLevel === 'MATCHED' ? 'SUFFICIENT' : 'PARTIAL',
+        })),
 })
 
 const result = (requirements: EvidenceRequirementItem[]) => ({
@@ -78,10 +77,6 @@ const mountView = async (analysisResult: ReturnType<typeof result>) => {
   const wrapper = mount(JobAnalysisView, {
     global: {
       stubs: {
-        PageHeader: {
-          props: ['title', 'description'],
-          template: '<header><h2>{{ title }}</h2><slot name="actions" /></header>',
-        },
         ErrorState: { template: '<div><slot /></div>' },
         SkeletonBlock: { template: '<div />' },
       },
@@ -97,7 +92,7 @@ describe('JobAnalysisView', () => {
     push.mockClear()
   })
 
-  it('shows the fixed action order, expands only the first priority item, and keeps strengths readable', async () => {
+  it('shares the task shell, selects the first actionable requirement, and navigates by requirement', async () => {
     const wrapper = await mountView(
       result([
         requirement(1, 'BONUS', 'NO_EVIDENCE'),
@@ -108,38 +103,31 @@ describe('JobAnalysisView', () => {
       ]),
     )
 
-    const priorityItems = wrapper.findAll('.analysis-priority .analysis-item')
-    expect(priorityItems.map((item) => item.find('strong').text())).toEqual([
-      '要求 5',
-      '要求 4',
-      '要求 3',
-      '要求 1',
-    ])
-    expect(priorityItems[0]?.find('.analysis-item-detail').exists()).toBe(true)
-    expect(priorityItems.slice(1).some((item) => item.find('.analysis-item-detail').exists())).toBe(
-      false,
-    )
-    expect(wrapper.findAll('.analysis-strengths .analysis-item-detail')).toHaveLength(0)
-    expect(wrapper.find('.analysis-strengths .item-toggle-label').text()).toBe('查看依据')
+    expect(wrapper.find('.task-identity h1').text()).toBe('后端工程师')
+    expect(wrapper.find('.task-identity p').text()).toContain('我的简历')
+    expect(wrapper.find('.task-workflow-step.is-active').text()).toContain('证据')
+    expect(wrapper.find('.analysis-summary-item.is-matched').text()).toContain('1已匹配')
+    expect(wrapper.findAll('.requirement-item')).toHaveLength(5)
+    expect(wrapper.find('.requirement-item.is-selected').text()).toContain('要求 5')
+    expect(wrapper.find('.analysis-evidence-detail > h2').text()).toBe('要求 5')
+    expect(wrapper.findAll('.analysis-evidence-quote')).toHaveLength(1)
 
-    const noEvidenceItem = priorityItems[1]
-    await noEvidenceItem?.find('.analysis-item-toggle').trigger('click')
-    expect(noEvidenceItem?.find('.analysis-item-detail').text()).toContain('手动补充')
-    expect(noEvidenceItem?.find('.analysis-item-detail').text()).not.toContain('进入编辑器')
-    expect(noEvidenceItem?.find('.analysis-item-detail').text()).not.toContain('需要核对')
+    await wrapper.findAll('.requirement-item')[3]?.trigger('click')
+    expect(wrapper.find('.analysis-evidence-detail > h2').text()).toBe('要求 4')
+    expect(wrapper.text()).toContain('当前简历未找到支持该要求的证据。')
+    expect(wrapper.text()).toContain('不代表你没有这项能力')
 
-    await wrapper.find('.analysis-strengths .analysis-item-toggle').trigger('click')
-    expect(wrapper.find('.analysis-strengths .analysis-item-detail').text()).toContain('材料 2')
-    expect(wrapper.find('.analysis-strengths .analysis-conclusion').exists()).toBe(false)
-    expect(wrapper.text()).toContain('当前材料未体现')
+    await wrapper.find('.analysis-detail-actions button').trigger('click')
+    expect(push).toHaveBeenCalledWith({ path: '/workspace/7', query: { requirement: '4' } })
   })
 
-  it('uses a compact quiet line rather than a large empty card when no priority exists', async () => {
+  it('keeps a quiet detail view when every requirement is already matched', async () => {
     const wrapper = await mountView(result([requirement(1, 'REQUIRED', 'MATCHED')]))
 
-    expect(wrapper.find('.analysis-priority .analysis-list').exists()).toBe(false)
-    expect(wrapper.find('.analysis-priority .section-toggle').exists()).toBe(false)
-    expect(wrapper.text()).toContain('当前没有需要优先处理的岗位要求。')
-    expect(wrapper.find('.analysis-priority .ui-empty-state').exists()).toBe(false)
+    expect(wrapper.find('.analysis-summary-item.is-partial').text()).toContain('0部分证据')
+    expect(wrapper.find('.analysis-summary-item.is-missing').text()).toContain('0当前未体现')
+    expect(wrapper.find('.requirement-item.is-selected').text()).toContain('要求 1')
+    expect(wrapper.find('.analysis-evidence-detail').text()).toContain('已有支持')
+    expect(wrapper.find('.analysis-detail-empty').exists()).toBe(false)
   })
 })

@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute } from 'vue-router'
+import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
 import { getOptimizationAnalysisResult } from '@/api/job-analysis'
 import ErrorState from '@/components/common/ErrorState.vue'
 import SkeletonBlock from '@/components/common/SkeletonBlock.vue'
 import ResumeEditor from '@/components/workspace/ResumeEditor.vue'
 import WorkspacePreviewExport from '@/components/workspace/WorkspacePreviewExport.vue'
+import WorkspaceRequirements from '@/components/workspace/WorkspaceRequirements.vue'
 import WorkspaceSuggestions from '@/components/workspace/WorkspaceSuggestions.vue'
+import TaskHeader from '@/components/task/TaskHeader.vue'
 import type { OptimizationAnalysisResult } from '@/types/job-analysis'
 import { useBulletSuggest } from '@/utils/useBulletSuggest'
 import { useWorkspaceEditor } from '@/utils/useWorkspaceEditor'
@@ -23,6 +25,7 @@ const parsePositiveId = (value: unknown): number | null => {
 }
 
 const route = useRoute()
+const router = useRouter()
 const editor = useWorkspaceEditor(props.optimizationTaskId)
 const bulletSuggest = useBulletSuggest(props.optimizationTaskId, editor)
 
@@ -35,16 +38,19 @@ const previewPreparing = ref(false)
 const previewComponentMounted = ref(false)
 const workspaceMode = ref<'edit' | 'preview'>('edit')
 const initialRequirementId = parsePositiveId(route.query.requirement)
-const inspectorOpen = ref(initialRequirementId !== null)
+const inspectorOpen = ref(true)
 const mobilePanel = ref<'editor' | 'suggestions'>(
   initialRequirementId !== null ? 'suggestions' : 'editor',
 )
 const selectedRequirementId = ref<number | null>(initialRequirementId)
 
+// At 1120px, compact columns are 245px + 340px, leaving 535px for the Resume stage.
+// Below that threshold, the workspace becomes focused instead of preserving an unusable tri-column grid.
+const WORKSPACE_FOCUSED_MEDIA_QUERY = '(max-width: 1119px)'
 const initialNarrow = () =>
   typeof window !== 'undefined' &&
   typeof window.matchMedia === 'function' &&
-  window.matchMedia('(max-width: 720px)').matches
+  window.matchMedia(WORKSPACE_FOCUSED_MEDIA_QUERY).matches
 const isNarrowScreen = ref(initialNarrow())
 let narrowMediaQuery: MediaQueryList | null = null
 
@@ -54,6 +60,15 @@ const handleNarrowChange = (event: MediaQueryListEvent) => {
 }
 
 const jobTitle = computed(() => analysisResult.value?.jobTitle ?? '简历编辑')
+const resumeName = computed(() => analysisResult.value?.resumeName ?? '当前简历')
+const requirements = computed(() => analysisResult.value?.evidenceAnalysis?.requirements ?? [])
+const effectiveSelectedRequirementId = computed(() => {
+  const requested = selectedRequirementId.value
+  if (requested && requirements.value.some((item) => item.evidenceRequirementId === requested)) {
+    return requested
+  }
+  return requirements.value[0]?.evidenceRequirementId ?? null
+})
 const suggestionCount = computed(() => {
   const analysis = analysisResult.value?.evidenceAnalysis
   return analysis ? analysis.partialEvidenceCount + analysis.noEvidenceCount : 0
@@ -98,6 +113,42 @@ const loadAnalysis = async () => {
 
 const handleEditorChange = (document: Parameters<typeof editor.applyDocument>[0]) => {
   editor.applyDocument(document)
+}
+
+const goToAnalysis = () => {
+  void router.push({
+    path: `/job-analysis/${props.optimizationTaskId}`,
+    ...(effectiveSelectedRequirementId.value
+      ? { query: { requirement: String(effectiveSelectedRequirementId.value) } }
+      : {}),
+  })
+}
+
+const selectRequirement = (requirementId: number) => {
+  selectedRequirementId.value = requirementId
+  inspectorOpen.value = true
+  if (isNarrowScreen.value) mobilePanel.value = 'suggestions'
+  void router.replace({
+    query: { ...route.query, requirement: String(requirementId) },
+  })
+}
+
+const setReviewStep = (step: 'match' | 'evidence' | 'edit' | 'preview') => {
+  if (step === 'match' || step === 'evidence') {
+    void router.push({
+      path: `/job-analysis/${props.optimizationTaskId}`,
+      ...(effectiveSelectedRequirementId.value
+        ? { query: { requirement: String(effectiveSelectedRequirementId.value) } }
+        : {}),
+    })
+    return
+  }
+  if (step === 'preview') {
+    void openPreviewMode()
+    return
+  }
+  workspaceMode.value = 'edit'
+  if (isNarrowScreen.value) mobilePanel.value = 'editor'
 }
 
 const confirmRestore = async () => {
@@ -186,15 +237,11 @@ watch(routeRequirementId, (requirementId) => {
   if (requirementId) {
     inspectorOpen.value = true
     if (isNarrowScreen.value) mobilePanel.value = 'suggestions'
-  } else {
-    inspectorOpen.value = false
-    mobilePanel.value = 'editor'
   }
 })
 
 // Preview / Export 发现服务端 revision 已变化：同步线上最新版本，杜绝静默渲染旧内容。
 const handlePreviewStale = async () => {
-  // Preview / Export 的过期响应绝不能覆盖已出现的本地草稿。
   if (editor.hasUnsavedChanges.value) {
     ElMessage.warning('当前草稿仍在，未自动替换。请先完成保存或处理冲突后重新预览。')
     return
@@ -209,7 +256,6 @@ const handlePreviewStale = async () => {
 const beforeUnloadHandler = (event: BeforeUnloadEvent) => {
   if (editor.hasUnsavedChanges.value) {
     event.preventDefault()
-    // 部分浏览器（如 Safari）只认 returnValue，不设则不弹确认框。
     event.returnValue = ''
   }
 }
@@ -219,7 +265,7 @@ onMounted(() => {
   void loadAnalysis()
   window.addEventListener('beforeunload', beforeUnloadHandler)
   if (typeof window.matchMedia === 'function') {
-    narrowMediaQuery = window.matchMedia('(max-width: 720px)')
+    narrowMediaQuery = window.matchMedia(WORKSPACE_FOCUSED_MEDIA_QUERY)
     narrowMediaQuery.addEventListener('change', handleNarrowChange)
   }
 })
@@ -245,61 +291,92 @@ const confirmDiscardUnsavedChanges = async () => {
   }
 }
 
-// 普通离开和 /workspace/A → /workspace/B 参数切换都必须显式处理未保存内容。
 onBeforeRouteLeave(confirmDiscardUnsavedChanges)
 onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
 </script>
 
 <template>
-  <section class="workspace-panel" :class="{ 'is-preview-mode': workspaceMode === 'preview' }">
-    <header class="workspace-header">
-      <div class="workspace-title">
-        <h1>{{ jobTitle }}</h1>
-        <span :class="saveStatusClass" role="status">{{ saveStatusText }}</span>
+  <section
+    class="workspace-panel"
+    :class="{ 'is-preview-mode': workspaceMode === 'preview' }"
+    aria-label="优化工作区"
+  >
+    <!--
+      THESIS: 岗位要求不是分数，而是一条可回到简历原文的证据线；工作区拒绝 Dashboard。
+      OWN-WORLD: 暖中性纸面、清晰分隔线、Slate ink 与克制 Burnt Clay 标注组成证据账本。
+      STORY: 用户选择要求，核对冻结材料中的证据与缺口，在同一份简历上编辑，再预览或导出。
+      FIRST VIEWPORT: shared task header and contextual editor toolbar lead into a three-column workspace where requirements, resume, and inspector remain visible together.
+      FORM: Redline evidence ledger；正式项目数据、编辑状态和 API 保持唯一真实链路。
+      FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, DESIGN.md, and every shipping raster carrying its provenance
+    -->
+    <TaskHeader
+      :job-title="jobTitle"
+      :resume-name="resumeName"
+      :active-step="workspaceMode === 'preview' ? 'preview' : 'edit'"
+      back-label="返回证据审阅"
+      :status-text="saveStatusText"
+      :status-tone="saveStatusClass"
+      interactive
+      @back="goToAnalysis()"
+      @step="setReviewStep"
+    >
+      <template #actions>
+        <el-button v-if="workspaceMode === 'edit'" type="primary" :loading="previewPreparing" @click="openPreviewMode">
+          {{ previewPreparing ? '准备预览…' : '预览 →' }}
+        </el-button>
+        <el-button v-else @click="setReviewStep('edit')">返回编辑</el-button>
+      </template>
+    </TaskHeader>
+
+    <div v-if="workspaceMode === 'edit'" class="workspace-toolbar" aria-label="编辑工具">
+      <div class="workspace-toolbar-context">
+        <span>编辑工作区</span>
+        <strong>{{ resumeName }}</strong>
+        <span v-if="effectiveSelectedRequirementId" class="workspace-selected-requirement">
+          要求 {{ requirements.findIndex((item) => item.evidenceRequirementId === effectiveSelectedRequirementId) + 1 }}：{{ requirements.find((item) => item.evidenceRequirementId === effectiveSelectedRequirementId)?.requirementText }}
+        </span>
       </div>
-      <div class="workspace-toolbar">
-        <div class="workspace-mode-switch" role="tablist" aria-label="工作区模式">
-          <button
-            type="button"
-            role="tab"
-            :aria-selected="workspaceMode === 'edit'"
-            :class="{ 'is-active': workspaceMode === 'edit' }"
-            @click="workspaceMode = 'edit'"
-          >
-            编辑
-          </button>
-          <button
-            type="button"
-            role="tab"
-            :aria-selected="workspaceMode === 'preview'"
-            :class="{ 'is-active': workspaceMode === 'preview' }"
-            :disabled="previewPreparing"
-            @click="openPreviewMode"
-          >
-            {{ previewPreparing ? '准备预览…' : '预览' }}
-          </button>
-        </div>
-        <template v-if="workspaceMode === 'edit'">
-          <el-button :disabled="!editor.canUndo.value" @click="editor.undo()">撤销</el-button>
-          <el-button :disabled="!editor.canRedo.value" @click="editor.redo()">重做</el-button>
-          <el-button class="inspector-open-button" @click="openInspector">
-            优化建议<span v-if="suggestionCount" class="toolbar-count">{{ suggestionCount }}</span>
-          </el-button>
-          <details class="workspace-more">
-            <summary>更多</summary>
-            <div class="workspace-more-menu">
-              <button
-                type="button"
-                :disabled="editor.status.value === 'saving'"
-                @click="confirmRestore"
-              >
-                {{ restoring ? '正在恢复…' : '恢复优化前版本' }}
-              </button>
-            </div>
-          </details>
-        </template>
+      <div class="workspace-toolbar-actions">
+        <button
+          v-if="workspaceMode === 'edit'"
+          type="button"
+          class="toolbar-button"
+          :disabled="!editor.canUndo.value"
+          @click="editor.undo()"
+        >
+          撤销
+        </button>
+        <button
+          v-if="workspaceMode === 'edit'"
+          type="button"
+          class="toolbar-button"
+          :disabled="!editor.canRedo.value"
+          @click="editor.redo()"
+        >
+          重做
+        </button>
+        <button
+          v-if="workspaceMode === 'edit' && !inspectorOpen"
+          type="button"
+          class="toolbar-button toolbar-button-accent"
+          @click="openInspector"
+        >
+          优化建议<span v-if="suggestionCount" class="toolbar-count">{{ suggestionCount }}</span>
+        </button>
+        <details v-if="workspaceMode === 'edit'" class="workspace-more">
+          <summary>更多</summary>
+          <div class="workspace-more-menu">
+            <button
+              type="button"
+              :disabled="editor.status.value === 'saving'"
+              @click="confirmRestore"
+            >
+              {{ restoring ? '正在恢复…' : '恢复优化前版本' }}
+            </button>
+          </div>
+        </details>
       </div>
-    </header>
+    </div>
 
     <div v-if="editor.status.value === 'conflict'" class="workspace-conflict" role="alert">
       <p>线上已有更新，你的本地修改尚未保存。请选择保留哪一份内容：</p>
@@ -349,38 +426,55 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
           >
             优化建议<span v-if="suggestionCount" class="toolbar-count">{{ suggestionCount }}</span>
           </button>
+          <details class="workspace-mobile-more">
+            <summary>更多</summary>
+            <div class="workspace-more-menu">
+              <button type="button" :disabled="editor.status.value === 'saving'" @click="editor.undo()">
+                撤销
+              </button>
+              <button type="button" :disabled="editor.status.value === 'saving'" @click="editor.redo()">
+                重做
+              </button>
+              <button type="button" :disabled="editor.status.value === 'saving'" @click="confirmRestore">
+                {{ restoring ? '正在恢复…' : '恢复优化前版本' }}
+              </button>
+            </div>
+          </details>
         </div>
-        <div class="workspace-body" :class="{ 'is-inspector-open': inspectorOpen }">
-          <div v-if="!isNarrowScreen || mobilePanel === 'editor'" class="workspace-editor-column">
-            <ResumeEditor
-              :document="editor.draft.value"
-              :suggest="bulletSuggest"
-              :suggest-enabled="suggestEnabled"
-              :suggest-locked="suggestLocked"
-              @change="handleEditorChange"
-            />
-          </div>
+
+        <div class="workspace-layout" :class="{ 'is-inspector-closed': !inspectorOpen }">
+          <WorkspaceRequirements
+            :requirements="requirements"
+            :selected-requirement-id="effectiveSelectedRequirementId"
+            :job-title="jobTitle"
+            @select="selectRequirement"
+          />
+
+          <section v-if="!isNarrowScreen || mobilePanel === 'editor'" class="resume-stage" aria-label="简历编辑器">
+            <div class="resume-stage-scroll">
+              <ResumeEditor
+                :document="editor.draft.value"
+                :suggest="bulletSuggest"
+                :suggest-enabled="suggestEnabled"
+                :suggest-locked="suggestLocked"
+                @change="handleEditorChange"
+              />
+            </div>
+          </section>
+
           <WorkspaceSuggestions
-            v-if="
-              (!isNarrowScreen && inspectorOpen) ||
-              (isNarrowScreen && mobilePanel === 'suggestions')
-            "
+            v-if="(!isNarrowScreen && inspectorOpen) || (isNarrowScreen && mobilePanel === 'suggestions')"
             :result="analysisResult"
             :loading="analysisLoading"
             :error="analysisError"
-            :selected-requirement-id="selectedRequirementId"
+            :selected-requirement-id="effectiveSelectedRequirementId"
             @retry-load="loadAnalysis"
             @close="closeInspector"
           />
         </div>
       </div>
 
-      <div
-        v-if="previewComponentMounted"
-        v-show="workspaceMode === 'preview'"
-        class="workspace-preview-mode"
-      >
-        <!-- 任务 ID 作为 key：任务切换时预览 / 导出状态整体重建，旧凭证不会跨任务残留。 -->
+      <div v-if="previewComponentMounted" v-show="workspaceMode === 'preview'" class="workspace-preview-mode">
         <WorkspacePreviewExport
           :key="optimizationTaskId"
           :optimization-task-id="optimizationTaskId"
@@ -403,123 +497,136 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
 
 <style scoped>
 .workspace-panel {
-  display: grid;
-  gap: 18px;
-  min-width: 0;
-}
-
-.workspace-header {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 18px;
+  flex-direction: column;
+  height: 100%;
   min-width: 0;
-}
-
-.workspace-title {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  min-width: 0;
-}
-
-.workspace-title h1 {
   overflow: hidden;
-  margin: 0;
   color: var(--app-text);
-  font-size: 22px;
-  line-height: 1.4;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  background: var(--app-stage);
 }
 
 .workspace-toolbar {
   display: flex;
+  min-height: 48px;
   align-items: center;
+  justify-content: space-between;
+  gap: var(--app-space-4);
+  padding: 0 var(--app-content-gutter);
+  background: var(--app-stage);
+  border-bottom: 1px solid var(--app-border-strong);
+}
+
+.workspace-toolbar-context,
+.workspace-toolbar-actions {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+}
+
+.workspace-toolbar-context {
+  gap: var(--app-space-2);
+  overflow: hidden;
+  color: var(--app-text-muted);
+  font-size: var(--app-font-size-xs);
+  white-space: nowrap;
+}
+
+.workspace-toolbar-context strong {
+  overflow: hidden;
+  color: var(--app-text);
+  font-weight: 700;
+  text-overflow: ellipsis;
+}
+
+.workspace-selected-requirement {
+  overflow: hidden;
+  max-width: min(420px, 32vw);
+  border-left: 1px solid var(--app-border-strong);
+  padding-left: var(--app-space-2);
+  color: var(--app-text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-toolbar-actions {
+  flex: 0 0 auto;
   justify-content: flex-end;
-  gap: 8px;
+  gap: var(--app-space-2);
   flex-wrap: wrap;
 }
 
-.workspace-mode-switch,
 .workspace-mobile-switch {
-  display: inline-flex;
-  border: 1px solid var(--app-border);
-  border-radius: var(--app-radius-md);
+  display: none;
+  border: 1px solid var(--app-border-strong);
+  border-radius: var(--app-radius-sm);
   padding: 2px;
   background: var(--app-surface-soft);
 }
 
-.workspace-mode-switch button,
 .workspace-mobile-switch button {
-  min-height: 30px;
+  min-height: 28px;
   border: 0;
-  border-radius: 5px;
-  padding: 0 12px;
+  border-radius: var(--app-radius-sm);
+  padding: 0 var(--app-space-3);
   color: var(--app-text-secondary);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--app-font-size-xs);
   font-weight: 700;
   background: transparent;
   cursor: pointer;
 }
 
-.workspace-mode-switch button:hover,
-.workspace-mode-switch button:focus-visible,
 .workspace-mobile-switch button:hover,
 .workspace-mobile-switch button:focus-visible {
   color: var(--app-text);
 }
 
-.workspace-mode-switch button.is-active,
 .workspace-mobile-switch button.is-active {
-  color: var(--app-primary);
+  color: var(--app-text);
   background: var(--app-surface);
   box-shadow: var(--app-shadow-card);
 }
 
-.workspace-mode-switch button:disabled {
+.toolbar-button {
+  min-height: 30px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  padding: 0 9px;
+  color: var(--app-text-secondary);
+  font-size: 11px;
+  font-weight: 650;
+  background: transparent;
+  cursor: pointer;
+}
+
+.toolbar-button:hover:not(:disabled),
+.toolbar-button:focus-visible:not(:disabled) {
+  color: var(--app-text);
+  border-color: var(--app-border);
+  background: var(--app-surface-soft);
+}
+
+.toolbar-button:disabled {
   color: var(--app-text-muted);
-  cursor: wait;
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.toolbar-button-accent {
+  color: var(--app-primary-active);
 }
 
 .toolbar-count {
   display: inline-grid;
-  min-width: 18px;
-  height: 18px;
-  margin-left: 6px;
+  min-width: 17px;
+  height: 17px;
+  margin-left: 5px;
   place-items: center;
   border-radius: 50%;
-  color: var(--app-primary);
-  font-size: 11px;
+  color: var(--app-primary-active);
+  font-size: 10px;
   background: var(--app-primary-soft);
-}
-
-.save-status {
-  flex: 0 0 auto;
-  color: var(--app-text-muted);
-  font-size: 12px;
-  white-space: nowrap;
-}
-
-.save-status.is-saved {
-  color: var(--app-text-muted);
-}
-
-.save-status.is-dirty,
-.save-status.is-saving {
-  color: var(--app-primary);
-  font-weight: 700;
-}
-
-.save-status.is-failed,
-.save-status.is-conflict {
-  color: var(--app-danger);
-  font-weight: 700;
-}
-
-.save-status.is-conflict {
-  color: var(--app-warning);
 }
 
 .workspace-more,
@@ -529,12 +636,11 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
 
 .workspace-more summary {
   list-style: none;
-  min-height: 32px;
-  padding: 7px 10px;
-  border-radius: var(--app-radius-md);
+  min-height: 30px;
+  padding: 7px 9px;
   color: var(--app-text-secondary);
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 11px;
+  font-weight: 650;
   cursor: pointer;
 }
 
@@ -545,7 +651,7 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
 .workspace-more summary:hover,
 .workspace-more summary:focus-visible {
   color: var(--app-text);
-  background: var(--app-bg-soft);
+  background: var(--app-surface-soft);
 }
 
 .workspace-more-menu {
@@ -577,7 +683,7 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
 .workspace-more-menu button:hover,
 .workspace-more-menu button:focus-visible {
   color: var(--app-text);
-  background: var(--app-surface-soft);
+  background: var(--app-bg-soft);
 }
 
 .workspace-more-menu button:disabled {
@@ -592,105 +698,210 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
   justify-content: space-between;
   gap: 16px;
   flex-wrap: wrap;
-  border-radius: var(--app-radius-md);
-  padding: 14px 16px;
+  padding: 11px 30px;
+  border-bottom: 1px solid var(--app-border-strong);
 }
 
 .workspace-conflict {
-  border: 1px solid var(--el-color-warning-light-7);
-  background: var(--el-color-warning-light-9);
+  background: var(--app-warning-soft);
 }
 
 .workspace-failed {
-  border: 1px solid var(--el-color-danger-light-7);
-  background: var(--el-color-danger-light-9);
+  background: var(--app-danger-soft);
 }
 
 .workspace-conflict p,
 .workspace-failed p {
   margin: 0;
   color: var(--app-text);
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1.6;
 }
 
 .workspace-edit-mode,
 .workspace-preview-mode {
   min-width: 0;
+  min-height: 0;
+  height: 100%;
+  flex: 1 1 auto;
 }
 
 .workspace-mobile-switch {
   display: none;
-  margin-bottom: 16px;
 }
 
-.workspace-body {
+.workspace-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 28px;
-  align-items: start;
+  grid-template-columns:
+    var(--app-workspace-requirements-width)
+    minmax(0, 1fr)
+    var(--app-workspace-inspector-width);
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.workspace-layout.is-inspector-closed {
+  grid-template-columns: var(--app-workspace-requirements-width) minmax(0, 1fr);
+}
+
+.resume-stage {
+  display: flex;
   min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  background: var(--app-stage);
 }
 
-.workspace-body.is-inspector-open {
-  grid-template-columns: minmax(0, 1fr) minmax(300px, 320px);
+.resume-stage-scroll {
+  min-height: 0;
+  overflow: auto;
+  scrollbar-color: var(--app-scroll-thumb) transparent;
+  scrollbar-width: thin;
 }
 
-.workspace-editor-column {
+.workspace-preview-mode {
+  display: flex;
   min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  flex: 1 1 auto;
+  background: var(--app-stage);
 }
 
-@media (max-width: 1040px) and (min-width: 721px) {
-  .workspace-body.is-inspector-open {
-    grid-template-columns: minmax(0, 1fr) minmax(260px, 300px);
-    gap: 20px;
-  }
+.workspace-preview-mode :deep(.preview-document) {
+  border-radius: var(--app-radius-md);
 }
 
-@media (max-width: 720px) {
-  .workspace-panel {
-    gap: 16px;
+@media (max-width: 1250px) and (min-width: 1120px) {
+  .workspace-layout {
+    grid-template-columns:
+      var(--app-workspace-requirements-width-tablet)
+      minmax(0, 1fr)
+      var(--app-workspace-inspector-width-tablet);
   }
 
-  .workspace-header {
-    display: grid;
-    align-items: start;
-    gap: 12px;
-  }
-
-  .workspace-title h1 {
-    font-size: 20px;
+  .workspace-layout.is-inspector-closed {
+    grid-template-columns: var(--app-workspace-requirements-width-tablet) minmax(0, 1fr);
   }
 
   .workspace-toolbar {
-    justify-content: flex-start;
+    padding-right: var(--app-space-5);
+    padding-left: var(--app-space-5);
+  }
+}
+
+@media (max-width: 1119px) {
+  .workspace-panel {
+    height: auto;
+    min-height: 100%;
+    overflow: visible;
   }
 
-  .workspace-toolbar .el-button {
-    min-height: 32px;
+  .workspace-toolbar {
+    min-height: 52px;
+    align-items: flex-start;
+    flex-direction: column;
+    gap: var(--app-space-2);
+    padding: var(--app-space-3) var(--app-content-gutter-narrow);
+  }
+
+  .workspace-toolbar-context {
+    width: 100%;
+  }
+
+  .workspace-selected-requirement {
+    max-width: 45vw;
+  }
+
+  .workspace-toolbar-actions {
+    width: 100%;
+    justify-content: flex-start;
   }
 
   .workspace-mobile-switch {
     display: inline-flex;
-    width: 100%;
+    width: calc(100% - 32px);
+    margin: 8px 16px;
   }
 
   .workspace-mobile-switch button {
-    width: 50%;
-    min-height: 40px;
+    flex: 1 1 auto;
+    width: auto;
+    min-height: 34px;
   }
 
-  .workspace-toolbar .el-button {
-    min-height: 40px;
+  .workspace-layout {
+    display: flex;
+    height: auto;
+    min-height: 0;
+    overflow: visible;
+    flex-direction: column;
   }
 
-  .workspace-mode-switch button {
-    min-height: 40px;
+  .resume-stage {
+    min-height: 700px;
   }
 
-  .workspace-body,
-  .workspace-body.is-inspector-open {
-    display: block;
+  .workspace-layout :deep(.workspace-inspector) {
+    border-top: 1px solid var(--app-border-strong);
+  }
+
+  .workspace-preview-mode {
+    height: auto;
+    overflow: visible;
+    padding: 0;
+  }
+
+  .workspace-conflict,
+  .workspace-failed {
+    align-items: flex-start;
+    padding: var(--app-space-3) var(--app-content-gutter-narrow);
+  }
+}
+
+@media (max-width: 640px) {
+  .workspace-toolbar {
+    display: none;
+  }
+
+  .workspace-mobile-switch {
+    align-items: center;
+    gap: 2px;
+    padding: 2px;
+  }
+
+  .workspace-mobile-more {
+    position: relative;
+    flex: 0 0 auto;
+    align-self: stretch;
+  }
+
+  .workspace-mobile-more summary {
+    display: inline-flex;
+    min-height: 34px;
+    align-items: center;
+    padding: 0 var(--app-space-2);
+    color: var(--app-text-secondary);
+    font-size: var(--app-font-size-xs);
+    font-weight: 700;
+    cursor: pointer;
+    list-style: none;
+  }
+
+  .workspace-mobile-more summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .workspace-mobile-more[open] summary {
+    color: var(--app-text);
+    background: var(--app-surface);
+  }
+
+  .workspace-mobile-more .workspace-more-menu {
+    right: 0;
+    left: auto;
+    min-width: 156px;
   }
 }
 </style>

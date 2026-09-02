@@ -112,3 +112,4 @@ temp/
 /storage/
 /minio-data/
 /postgres-data/
+.design-reference/

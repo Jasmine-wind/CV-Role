@@ -372,11 +372,13 @@ const handleSuggestCommand = (bulletId: string, command: BulletSuggestIntent | '
 
 <template>
   <div class="resume-editor">
+    <div class="resume-paper">
+      <div class="resume-page-meta"><span>岗位定向简历 · 可编辑文档</span><span>内容来自当前简历</span></div>
     <section class="editor-block editor-basics">
       <header class="editor-block-header">
         <div>
-          <h2>个人信息</h2>
-          <p>投递时会展示在简历顶部。</p>
+          <h2>{{ document.basics.name || '未命名简历' }}</h2>
+          <p>投递时会展示在简历顶部 · 点击字段即可编辑</p>
         </div>
       </header>
       <div class="basics-grid">
@@ -830,6 +832,8 @@ const handleSuggestCommand = (bulletId: string, command: BulletSuggestIntent | '
         }}</el-button>
       </div>
     </section>
+    <div class="resume-page-footer"><span>当前版本由你确认</span><span>编辑内容会自动保存</span></div>
+    </div>
   </div>
 </template>
 
@@ -1178,6 +1182,219 @@ const handleSuggestCommand = (bulletId: string, command: BulletSuggestIntent | '
 
 .danger-action {
   color: var(--app-danger) !important;
+}
+
+/* The editor keeps every structured field and action, but presents them as one document of record. */
+.resume-editor {
+  display: block;
+  min-width: 0;
+  padding: 14px 12px 38px;
+  background: var(--app-stage);
+}
+
+.resume-paper {
+  position: relative;
+  width: min(760px, 100%);
+  min-height: 850px;
+  margin: 0 auto;
+  padding: 30px 49px 58px;
+  background: var(--app-document);
+  border: 1px solid var(--app-border);
+  box-shadow: var(--app-shadow-page);
+}
+
+.resume-page-meta,
+.resume-page-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  color: var(--app-text-muted);
+  font-family: 'IBM Plex Mono', 'SFMono-Regular', Consolas, monospace;
+  font-size: 8px;
+  font-weight: 650;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.resume-page-meta {
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--app-text);
+}
+
+.resume-page-footer {
+  position: absolute;
+  right: 49px;
+  bottom: 20px;
+  left: 49px;
+  padding-top: 8px;
+  border-top: 1px solid var(--app-border);
+}
+
+.editor-block {
+  gap: 14px;
+  padding-bottom: 24px;
+  border-bottom-color: var(--app-border);
+}
+
+.editor-basics {
+  padding-top: 24px;
+}
+
+.editor-block-header h2 {
+  color: var(--app-text);
+}
+
+.editor-basics .editor-block-header {
+  align-items: flex-end;
+}
+
+.editor-basics .editor-block-header h2 {
+  margin-bottom: 6px;
+  font-family: Georgia, 'Songti SC', serif;
+  font-size: 34px;
+  font-weight: 650;
+  line-height: 1;
+  letter-spacing: -0.05em;
+}
+
+.editor-basics .editor-block-header p {
+  color: var(--app-accent);
+  font-size: 11px;
+}
+
+.editor-field > span,
+.contact-type-field > span,
+.entry-bullets-label {
+  color: var(--app-text-muted);
+  font-family: 'IBM Plex Mono', 'SFMono-Regular', Consolas, monospace;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+:deep(.el-input__wrapper) {
+  min-height: 30px;
+  border-radius: 0;
+  padding: 0;
+  background: transparent;
+  box-shadow: 0 1px 0 var(--app-border) !important;
+}
+
+:deep(.el-input__wrapper:hover),
+:deep(.el-input__wrapper.is-focus) {
+  box-shadow: 0 2px 0 var(--app-primary) !important;
+}
+
+:deep(.el-input__inner) {
+  color: var(--app-text);
+  font-size: 12px;
+}
+
+:deep(.el-textarea__inner) {
+  min-height: 31px;
+  border: 0;
+  border-radius: 0;
+  padding: 6px 7px;
+  color: var(--app-text);
+  font-size: 12px;
+  line-height: 1.55;
+  background: transparent;
+  box-shadow: 0 1px 0 var(--app-border) !important;
+  resize: vertical;
+}
+
+:deep(.el-textarea__inner:hover),
+:deep(.el-textarea__inner:focus) {
+  box-shadow: 0 2px 0 var(--app-primary) !important;
+}
+
+.contact-type {
+  height: 30px;
+  border-color: var(--app-border);
+  border-radius: 0;
+  padding: 0 7px;
+  color: var(--app-text);
+  font-size: 11px;
+  background: transparent;
+}
+
+.section-title-display {
+  color: var(--app-text);
+  font-family: 'IBM Plex Mono', 'SFMono-Regular', Consolas, monospace;
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.section-title-display:hover {
+  color: var(--app-primary-active);
+}
+
+.section-kind {
+  color: var(--app-text-muted);
+  font-family: 'IBM Plex Mono', 'SFMono-Regular', Consolas, monospace;
+  font-size: 9px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.editor-entry {
+  gap: 12px;
+  padding-top: 17px;
+  border-top-color: var(--app-border-soft);
+}
+
+.entry-grid,
+.skill-grid {
+  column-gap: 18px;
+  row-gap: 11px;
+}
+
+.entry-bullets-label {
+  margin-top: 4px;
+}
+
+.bullet-line {
+  gap: 8px;
+}
+
+.bullet-field {
+  position: relative;
+  padding-left: 14px;
+}
+
+.bullet-field::before {
+  position: absolute;
+  top: 10px;
+  left: 3px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--app-text-muted);
+  content: '';
+}
+
+.bullet-actions {
+  min-height: 30px;
+}
+
+.bullet-suggest-button {
+  color: var(--app-primary-active);
+}
+
+.entry-actions,
+.section-footer {
+  padding-top: 3px;
+}
+
+.add-control,
+.add-field-control,
+.section-footer :deep(.el-button),
+.entry-actions :deep(.el-button) {
+  color: var(--app-text-secondary);
 }
 
 @media (max-width: 760px) {
