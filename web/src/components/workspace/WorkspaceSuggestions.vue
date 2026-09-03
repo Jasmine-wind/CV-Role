@@ -86,7 +86,7 @@ const evidenceLocation = (sectionLabel: string | null) => sectionLabel || '简�
     <div class="inspector-scroll">
       <header class="inspector-header">
         <div class="inspector-ref">
-          <span v-if="selected">要求 {{ String(requirements.indexOf(selected) + 1).padStart(2, '0') }}</span>
+          <span v-if="selected">当前修改上下文 · {{ String(requirements.indexOf(selected) + 1).padStart(2, '0') }}</span>
           <span class="inspector-ref-dot" aria-hidden="true" />
           <span v-if="selected" :class="['inspector-status', statusClass(selected.matchLevel)]">
             {{ statusLabel(selected.matchLevel) }}
@@ -107,17 +107,18 @@ const evidenceLocation = (sectionLabel: string | null) => sectionLabel || '简�
 
       <template v-else-if="result?.evidenceAnalysis && selected">
         <div class="inspector-detail">
+        <p class="inspector-context-label">岗位要求</p>
         <h2>{{ selected.requirementText }}</h2>
 
         <section class="inspector-block jd-block">
-          <span class="block-label">岗位要求</span>
+          <span class="block-label">要求原文</span>
           <blockquote>“{{ selected.requirementText }}”</blockquote>
           <p class="inspector-note">这条结论来自本次岗位分析时冻结的 JD。</p>
         </section>
 
         <section class="inspector-block evidence-block">
           <div class="block-heading">
-            <h3>简历中的证据</h3>
+            <h3>来自简历</h3>
             <span class="block-count">{{ selected.evidences.length }} 条关联</span>
           </div>
           <div v-if="selected.evidences.length" class="evidence-list">
@@ -186,32 +187,41 @@ const evidenceLocation = (sectionLabel: string | null) => sectionLabel || '简�
 <style scoped>
 .workspace-inspector {
   display: flex;
+  height: 100%;
   min-width: 0;
   min-height: 0;
   flex-direction: column;
+  overflow: hidden;
   background: var(--app-surface-soft);
   border-left: 1px solid var(--app-border-strong);
 }
 
 .inspector-scroll {
+  height: 0;
   min-height: 0;
-  overflow: auto;
+  flex: 1 1 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
   scrollbar-color: var(--app-scroll-thumb) transparent;
+  scrollbar-gutter: stable;
   scrollbar-width: thin;
 }
 
 .inspector-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 14px;
-  padding: 20px 23px 0;
+  gap: 10px;
+  padding: 18px 18px 0;
 }
 
 .inspector-ref {
   display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 5px 7px;
   color: var(--app-text-secondary);
   font-family: 'IBM Plex Mono', 'SFMono-Regular', Consolas, monospace;
   font-size: 9px;
@@ -271,8 +281,18 @@ const evidenceLocation = (sectionLabel: string | null) => sectionLabel || '简�
   text-underline-offset: 3px;
 }
 
-.inspector-scroll > h2 {
-  margin: 16px 23px 18px;
+.inspector-context-label {
+  margin: 15px 18px 5px;
+  color: var(--app-text-muted);
+  font-family: var(--app-font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.inspector-detail > h2 {
+  margin: 0 18px 16px;
   color: var(--app-text);
   font-size: 20px;
   font-weight: 750;
@@ -281,7 +301,7 @@ const evidenceLocation = (sectionLabel: string | null) => sectionLabel || '简�
 }
 
 .inspector-block {
-  padding: 14px 23px 15px;
+  padding: 13px 18px 14px;
   border-top: 1px solid var(--app-border-strong);
 }
 
@@ -494,7 +514,8 @@ const evidenceLocation = (sectionLabel: string | null) => sectionLabel || '简�
     padding-left: 18px;
   }
 
-  .inspector-scroll > h2 {
+  .inspector-context-label,
+  .inspector-detail > h2 {
     margin-right: 18px;
     margin-left: 18px;
   }
@@ -508,7 +529,8 @@ const evidenceLocation = (sectionLabel: string | null) => sectionLabel || '简�
   }
 
   .inspector-scroll {
-    overflow: visible;
+    overflow-x: hidden;
+    overflow-y: auto;
   }
 
   .inspector-footer {

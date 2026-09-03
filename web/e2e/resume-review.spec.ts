@@ -1,0 +1,309 @@
+import { expect, test, type Page } from '@playwright/test'
+
+const reviewResume = {
+  id: 2,
+  originalFilename: 'product-analytics-review.docx',
+  fileType: 'DOCX',
+  fileSize: 456789,
+  uploadStatus: 'SUCCESS',
+  parseStatus: 'SUCCESS',
+  qualityStatus: 'NEEDS_REVIEW',
+  canonicalReady: true,
+  parseErrorMessage: null,
+  createdAt: '2025-12-18T12:00:00Z',
+}
+
+const readyResume = {
+  ...reviewResume,
+  qualityStatus: 'READY',
+  originalFilename: 'product-analytics-ready.docx',
+}
+
+const response = (data: unknown) => ({
+  status: 200,
+  contentType: 'application/json',
+  body: JSON.stringify({ code: 200, message: 'success', data }),
+})
+
+const contactItem = {
+  id: 'contact-1',
+  kind: 'CONTACT_CANDIDATE',
+  canonicalDraft: JSON.stringify({ type: 'EMAIL', label: '邮箱', value: 'candidate@example.com' }),
+  reason: '邮箱格式需要你核对。',
+}
+
+const requiredContactItem = {
+  id: 'required-contact-1',
+  kind: 'REQUIRED_CONTACT_CANDIDATE',
+  canonicalDraft: JSON.stringify({ type: 'PHONE', label: '电话', value: '13800138000' }),
+  reason: null,
+}
+
+const nameItem = {
+  id: 'name-1',
+  kind: 'NAME_CANDIDATE',
+  canonicalDraft: JSON.stringify({ text: '林然' }),
+  reason: null,
+}
+
+const fragmentItem = {
+  id: 'fragment-1',
+  kind: 'TEXT_FRAGMENT',
+  canonicalDraft: JSON.stringify({ text: '负责跨团队项目推进' }),
+  reason: null,
+}
+
+const experienceItem = {
+  id: 'experience-1',
+  kind: 'ENTRY_CANDIDATE',
+  canonicalDraft: JSON.stringify({
+    kind: 'EXPERIENCE',
+    organization: '示例科技',
+    role: '后端工程师',
+    startDate: '2022',
+    endDate: '至今',
+    bullets: [
+      { id: 'bullet-1', text: '负责服务端接口开发与维护' },
+      { id: 'bullet-2', text: '推动跨团队协作交付' },
+    ],
+  }),
+  reason: '请核对这段工作经历的归属。',
+}
+
+const educationItem = {
+  id: 'education-1',
+  kind: 'ENTRY_CANDIDATE',
+  canonicalDraft: JSON.stringify({
+    kind: 'EDUCATION',
+    school: '示例大学',
+    degree: '本科',
+    major: '计算机科学与技术',
+    startDate: '2018',
+    endDate: '2022',
+    bullets: [{ id: 'education-bullet', text: '主修软件工程' }],
+  }),
+  reason: '请核对这段教育经历。',
+}
+
+const reviewPayload = (items: unknown[], qualityStatus = 'NEEDS_REVIEW') => ({
+  resumeId: 2,
+  qualityStatus,
+  qualityIssues: null,
+  unresolvedItems: JSON.stringify(items),
+  canonicalDocument: '{"basics":{"name":"测试用户"}}',
+})
+
+async function mockReviewShell(page: Page, resumes: unknown[] = [reviewResume]) {
+  await page.addInitScript(() => {
+    window.localStorage.setItem('ai-resume-token', 'resume-review-test-token')
+  })
+  await page.route('**/api/users/me', (route) => route.fulfill(response({
+    id: 1,
+    username: 'review-test',
+    email: 'review@example.invalid',
+    nickname: '确认测试用户',
+    createdAt: '2026-01-01T00:00:00Z',
+  })))
+  await page.route('**/api/resumes', (route) => route.fulfill(response(resumes)))
+}
+
+async function openReview(page: Page) {
+  await page.goto('/resumes')
+  await page.getByRole('button', { name: /确认 product-analytics-review/ }).click()
+  await expect(page.getByRole('heading', { name: '内容确认' })).toBeVisible()
+}
+
+const browserIssues = new WeakMap<Page, string[]>()
+
+test.beforeEach(({ page }) => {
+  const issues: string[] = []
+  browserIssues.set(page, issues)
+  page.on('console', (message) => {
+    if (message.type() === 'error' || message.type() === 'warning') {
+      issues.push(`${message.type()}: ${message.text()}`)
+    }
+  })
+  page.on('pageerror', (error) => issues.push(`pageerror: ${error.message}`))
+})
+
+test.afterEach(({ page }) => {
+  expect(browserIssues.get(page) ?? []).toEqual([])
+})
+
+test.describe('Resume Review Workspace', () => {
+  test('opens a Chinese task workspace with progress and contact labels', async ({ page }) => {
+    await mockReviewShell(page)
+    await page.route('**/api/resumes/2/review', (route) => route.fulfill(response(reviewPayload([
+      contactItem,
+      fragmentItem,
+      experienceItem,
+    ]))))
+    await openReview(page)
+
+    await expect(page.locator('.resume-review-label')).toHaveText('内容审阅')
+    await expect(page.getByRole('heading', { name: '内容确认' })).toBeVisible()
+    await expect(page.locator('.resume-review-header-description')).toContainText('无法安全判断')
+    await expect(page.locator('.resume-review-progress-meta')).toContainText('第 1 项 / 共 3 项')
+    await expect(page.locator('.resume-review-progress-item')).toHaveCount(3)
+    await expect(page.getByText('联系方式类型', { exact: true })).toBeVisible()
+    await expect(page.getByText('联系方式内容', { exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: '保留这项联系方式' })).toBeVisible()
+    await expect(page.getByRole('button', { name: '不加入简历' })).toBeVisible()
+    await expect(page.locator('.resume-review-inspector')).not.toContainText('CONTEXTUAL REVIEW')
+  })
+
+  test('navigates by stable progress item id and renders education fields comfortably', async ({ page }) => {
+    await page.setViewportSize({ width: 1366, height: 768 })
+    await mockReviewShell(page)
+    await page.route('**/api/resumes/2/review', (route) => route.fulfill(response(reviewPayload([
+      contactItem,
+      educationItem,
+    ]))))
+    await openReview(page)
+
+    await page.locator('.resume-review-progress-item').nth(1).click()
+    await expect(page.getByRole('heading', { name: '教育经历' })).toBeVisible()
+    await expect(page.getByText('学校名', { exact: true })).toBeVisible()
+    await expect(page.getByText('学历', { exact: true })).toBeVisible()
+    await expect(page.getByText('专业', { exact: true })).toBeVisible()
+    await expect(page.getByText('开始时间', { exact: true })).toBeVisible()
+    await expect(page.getByText('结束时间', { exact: true })).toBeVisible()
+    await expect(page.getByText('描述 1', { exact: true })).toBeVisible()
+    await expect(page.locator('.resume-review-field-pair')).toHaveCount(2)
+  })
+
+  test('keeps reject and accept payloads, then moves to the next item and completes', async ({ page }) => {
+    let listReady = false
+    await mockReviewShell(page, [reviewResume])
+    await page.unroute('**/api/resumes')
+    await page.route('**/api/resumes', (route) => route.fulfill(response(listReady ? [readyResume] : [reviewResume])))
+    await page.route('**/api/resumes/2/review', (route) => route.fulfill(response(reviewPayload([
+      contactItem,
+      fragmentItem,
+    ]))))
+    const payloads: Array<Record<string, unknown>> = []
+    await page.route('**/api/resumes/2/review/resolve', async (route) => {
+      const payload = route.request().postDataJSON() as Record<string, unknown>
+      payloads.push(payload)
+      if (payload.action === 'DELETE') {
+        await route.fulfill(response(reviewPayload([fragmentItem])))
+      } else {
+        listReady = true
+        await route.fulfill(response(reviewPayload([], 'READY')))
+      }
+    })
+    await openReview(page)
+
+    await page.getByRole('button', { name: '不加入简历' }).click()
+    await expect(page.getByRole('heading', { name: '未归类内容' })).toBeVisible()
+    await expect(page.locator('.resume-review-progress-meta')).toContainText('第 1 项 / 共 1 项')
+    await page.getByRole('button', { name: '保留这段内容' }).click()
+    await expect(page.locator('.resume-review-workspace')).toBeHidden()
+    await expect(page.locator('.resume-library-row')).toContainText('可用于岗位分析')
+    expect(await page.evaluate(() => document.activeElement?.getAttribute('data-resume-row'))).toBe('2')
+    expect(payloads).toEqual([
+      { itemId: 'contact-1', action: 'DELETE', name: '测试用户' },
+      { itemId: 'fragment-1', action: 'ACCEPT', text: '负责跨团队项目推进', name: '测试用户' },
+    ])
+  })
+
+  test('uses constrained contact options and does not offer reject for name candidates', async ({ page }) => {
+    await mockReviewShell(page)
+    await page.route('**/api/resumes/2/review', (route) => route.fulfill(response(reviewPayload([
+      requiredContactItem,
+      nameItem,
+    ]))))
+    await openReview(page)
+
+    await expect(page.locator('#resume-contact-type-required-contact-1 option')).toHaveCount(2)
+    await expect(page.getByRole('button', { name: '保存这项联系方式' })).toBeVisible()
+    await expect(page.getByRole('button', { name: '不加入简历' })).toBeHidden()
+    await page.locator('.resume-review-progress-item').nth(1).click()
+    await expect(page.getByRole('heading', { name: '姓名' })).toBeVisible()
+    await expect(page.getByRole('button', { name: '使用这个姓名' })).toBeVisible()
+    await expect(page.getByRole('button', { name: '不加入简历' })).toBeHidden()
+  })
+
+  test('returns focus to the triggering row after closing the workspace', async ({ page }) => {
+    await mockReviewShell(page)
+    await page.route('**/api/resumes/2/review', (route) => route.fulfill(response(reviewPayload([contactItem]))))
+    await page.goto('/resumes')
+    const trigger = page.getByRole('button', { name: /确认 product-analytics-review/ })
+    await trigger.click()
+    await page.getByRole('heading', { name: '内容确认' }).waitFor()
+    await page.getByRole('button', { name: '收起' }).click()
+    await expect.poll(() => page.evaluate(() => document.activeElement?.getAttribute('data-resume-row'))).toBe('2')
+  })
+
+  test('keeps edited candidate content after resolve failure and offers retry', async ({ page }) => {
+    await mockReviewShell(page)
+    await page.route('**/api/resumes/2/review', (route) => route.fulfill(response(reviewPayload([fragmentItem]))))
+    let attempts = 0
+    await page.route('**/api/resumes/2/review/resolve', async (route) => {
+      attempts += 1
+      if (attempts === 1) {
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ code: 500, message: '保存服务暂时不可用', data: null }) })
+        return
+      }
+      await route.fulfill(response(reviewPayload([], 'READY')))
+    })
+    await openReview(page)
+
+    const editor = page.locator('#resume-fragment-fragment-1')
+    await editor.fill('用户核对后的内容')
+    await page.getByRole('button', { name: '保留这段内容' }).click()
+    await expect(page.locator('.resume-review-action-error')).toContainText('本次确认没有保存')
+    await expect(editor).toHaveValue('用户核对后的内容')
+    await page.getByRole('button', { name: '重试当前操作' }).click()
+    await expect(page.locator('.resume-review-workspace')).toBeHidden()
+  })
+
+  test('keeps load failure inside the workspace and supports rereading', async ({ page }) => {
+    await mockReviewShell(page)
+    let attempts = 0
+    await page.route('**/api/resumes/2/review', async (route) => {
+      attempts += 1
+      if (attempts === 1) {
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ code: 500, message: '读取服务暂时不可用', data: null }) })
+        return
+      }
+      await route.fulfill(response(reviewPayload([contactItem])))
+    })
+    await openReview(page)
+
+    await expect(page.getByText('暂时无法读取待确认内容。', { exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: '重新读取' })).toBeVisible()
+    await page.getByRole('button', { name: '重新读取' }).click()
+    await expect(page.getByText('联系方式类型', { exact: true })).toBeVisible()
+  })
+
+  test('shows a safe recovery state when review has no candidate and can open upload replacement', async ({ page }) => {
+    await mockReviewShell(page)
+    await page.route('**/api/resumes/2/review', (route) => route.fulfill(response(reviewPayload([]))))
+    await openReview(page)
+
+    await expect(page.getByText('当前没有可安全确认的候选内容', { exact: true })).toBeVisible()
+    await expect(page.locator('.resume-review-workspace')).not.toContainText('当前没有可直接确认的候选内容')
+    await expect(page.locator('.resume-review-workspace')).not.toContainText('需要确认')
+    await page.getByRole('button', { name: '上传更清晰的版本' }).click()
+    await expect(page.getByRole('heading', { name: '上传一份真实简历' })).toBeVisible()
+    await expect(page.locator('.resume-review-workspace')).toBeHidden()
+  })
+
+  test('moves the mobile review workspace into view without horizontal overflow', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 })
+    await mockReviewShell(page)
+    await page.route('**/api/resumes/2/review', (route) => route.fulfill(response(reviewPayload([experienceItem]))))
+    await openReview(page)
+
+    const layout = await page.evaluate(() => ({
+      scrollWidth: document.documentElement.scrollWidth,
+      clientWidth: document.documentElement.clientWidth,
+      reviewTop: document.querySelector('.resume-review-workspace')?.getBoundingClientRect().top ?? 0,
+    }))
+    expect(layout.scrollWidth).toBeLessThanOrEqual(layout.clientWidth)
+    expect(layout.reviewTop).toBeLessThanOrEqual(90)
+    await expect(page.getByRole('heading', { name: '工作经历' })).toBeVisible()
+    await expect(page.getByRole('button', { name: '保留这段工作经历' })).toBeVisible()
+  })
+})

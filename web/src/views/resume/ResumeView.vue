@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import PageHeader from '@/components/common/PageHeader.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import ErrorState from '@/components/common/ErrorState.vue'
@@ -18,7 +18,25 @@ import { startAsyncTaskPolling } from '@/utils/asyncTaskPolling'
 import type { AsyncTaskPollingController } from '@/utils/asyncTaskPolling'
 import type { AsyncTaskVO } from '@/types/task'
 import type { ResumeListItem } from '@/types/resume'
-import type { ResumeDocument, ResumeDocumentBullet } from '@/types/resume-document'
+import type { ResumeDocument } from '@/types/resume-document'
+import ResumeReviewWorkspace from '@/components/resume/review/ResumeReviewWorkspace.vue'
+import {
+  getInitialReviewItemId,
+  selectReviewItemAfterResolve,
+} from './resumeReviewPresentation'
+import type {
+  ReviewDraftContact,
+  ReviewDraftEntry,
+  ReviewDraftFragment,
+  ReviewItemState,
+} from './resumeReviewPresentation'
+import {
+  canRetryResumePreparation,
+  formatResumeDate,
+  formatResumeFileSize,
+  getResumeLibraryStatus,
+  getResumeLibrarySummary,
+} from './resumeLibraryPresentation'
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024
 const ACCEPTED_EXTENSIONS = ['pdf', 'doc', 'docx']
@@ -32,115 +50,77 @@ const uploadOpen = ref(false)
 const deletingId = ref<number | null>(null)
 const selectedFile = ref<File | null>(null)
 const fileInput = ref<HTMLInputElement | null>(null)
+const uploadPanel = ref<HTMLElement | null>(null)
 const activeTasks = ref<Record<number, AsyncTaskVO>>({})
 const pollingControllers = new Map<number, AsyncTaskPollingController>()
 
-const selectedFileText = computed(() => {
-  if (!selectedFile.value) {
-    return '支持 PDF、DOC、DOCX，单份最大 10 MB'
-  }
-  return `${selectedFile.value.name} · ${formatFileSize(selectedFile.value.size)}`
+const selectedFileType = computed(() => selectedFile.value?.name.split('.').pop()?.toUpperCase() || '')
+const librarySummary = computed(() => getResumeLibrarySummary(resumes.value, activeTasks.value))
+const librarySummaryText = computed(() => {
+  const summary = librarySummary.value
+  const parts = [`${summary.total} 份简历`, `${summary.usable} 份可用于岗位分析`]
+  if (summary.needsAction) parts.push(`${summary.needsAction} 份需要处理`)
+  return parts.join(' · ')
 })
 
-const formatFileSize = (size: number) => {
-  if (size >= 1024 * 1024) {
-    return `${(size / 1024 / 1024).toFixed(2)} MB`
-  }
-  return `${Math.max(size / 1024, 0.1).toFixed(1)} KB`
+const statusFor = (resume: ResumeListItem) =>
+  getResumeLibraryStatus(resume, activeTasks.value[resume.id])
+
+const clearSelectedFile = () => {
+  selectedFile.value = null
+  if (fileInput.value) fileInput.value.value = ''
 }
 
-const statusFor = (resume: ResumeListItem) => {
-  const task = activeTasks.value[resume.id]
-  if (task?.status === 'PENDING' || task?.status === 'RUNNING') {
-    return {
-      label: task.message || '正在准备简历',
-      tone: 'warning' as const,
-    }
+const closeUpload = () => {
+  if (uploading.value) return
+  uploadOpen.value = false
+  clearSelectedFile()
+}
+
+const toggleUpload = () => {
+  if (uploadOpen.value) {
+    closeUpload()
+    return
   }
-  if (resume.parseStatus === 'SUCCESS') {
-    if (resume.qualityStatus === 'PENDING') {
-      return {
-        label: '正在准备简历',
-        tone: 'warning' as const,
-      }
-    }
-    if (resume.canonicalReady === false) {
-      return {
-        label: '需要重新解析',
-        tone: 'warning' as const,
-      }
-    }
-    if (resume.qualityStatus === 'NEEDS_REVIEW') {
-      return {
-        label: '需要确认',
-        tone: 'warning' as const,
-      }
-    }
-    if (resume.qualityStatus === 'FAILED') {
-      return {
-        label: '无法使用',
-        tone: 'danger' as const,
-      }
-    }
-    return {
-      label: '已准备好',
-      tone: 'success' as const,
-    }
-  }
-  if (resume.parseStatus === 'FAILED') {
-    return {
-      label: '准备失败',
-      tone: 'danger' as const,
-    }
-  }
-  return {
-    label: '等待准备',
-    tone: 'info' as const,
-  }
+  uploadOpen.value = true
+}
+
+const focusUploadTitle = () => {
+  const title = document.querySelector('#resume-upload-title') as HTMLElement | null
+  title?.focus()
+}
+
+const openUploadFromEmpty = async () => {
+  uploadOpen.value = true
+  await nextTick()
+  uploadPanel.value?.scrollIntoView({ behavior: 'auto', block: 'start' })
+  focusUploadTitle()
+}
+
+const openUploadFromReview = async () => {
+  await closeReview(false)
+  uploadOpen.value = true
+  await nextTick()
+  uploadPanel.value?.scrollIntoView({ behavior: 'auto', block: 'start' })
+  focusUploadTitle()
 }
 
 /** Slice A 确认面板：只展示 canonical 层候选内容，不暴露解析内部结构。 */
-interface ReviewDraftContact {
-  type?: string
-  label?: string | null
-  value?: string
-}
-
-interface ReviewDraftFragment {
-  text?: string
-}
-
-interface ReviewDraftEntry {
-  kind?: string
-  organization?: string | null
-  role?: string | null
-  school?: string | null
-  degree?: string | null
-  major?: string | null
-  startDate?: string | null
-  endDate?: string | null
-  group?: string | null
-  skillItems?: string[] | null
-  bullets: ResumeDocumentBullet[]
-}
-
-interface ReviewItemState {
-  item: ResumeReviewUnresolvedItem
-  contact: ReviewDraftContact
-  entry: ReviewDraftEntry
-  text: string
-}
-
 const reviewResumeId = ref<number | null>(null)
 const reviewResume = computed(
   () => resumes.value.find((resume) => resume.id === reviewResumeId.value) ?? null,
 )
 const reviewLoading = ref(false)
+const reviewLoadError = ref<string | null>(null)
+const reviewActionError = ref<string | null>(null)
 const reviewQualityStatus = ref<string | null>(null)
 const reviewName = ref('')
 const reviewNameMissing = ref(false)
 const reviewItems = ref<ReviewItemState[]>([])
+const activeReviewItemId = ref<string | null>(null)
 const resolvingItemId = ref<string | null>(null)
+const reviewTrigger = ref<HTMLElement | null>(null)
+const lastReviewAction = ref<{ resumeId: number; itemId: string; action: 'ACCEPT' | 'DELETE' } | null>(null)
 
 const CONTACT_TYPE_OPTIONS = [
   { value: 'PHONE', label: '电话' },
@@ -165,31 +145,11 @@ const parseDraft = <T,>(draft: string): T => {
   }
 }
 
-const entryDraftSummary = (draft: string) => {
-  const entry = parseDraft<ReviewDraftEntry>(draft)
-  const title = entry.organization || entry.school || entry.group || '待确认条目'
-  const details = [
-    entry.role,
-    entry.degree,
-    entry.major,
-    [entry.startDate, entry.endDate].filter(Boolean).join(' - '),
-    entry.skillItems?.filter(Boolean).join('、'),
-  ].filter((value): value is string => Boolean(value && value.trim()))
-  const bullets = (entry.bullets ?? [])
-    .map((bullet) => bullet.text?.trim())
-    .filter((value): value is string => Boolean(value))
-  return { title, details, bullets }
-}
-
-const updateReviewState = (review: Awaited<ReturnType<typeof getResumeReview>>) => {
-  reviewQualityStatus.value = review.qualityStatus
-  const document = parseDraft<Partial<ResumeDocument>>(review.canonicalDocument ?? '{}')
-  reviewName.value = document.basics?.name?.trim() ?? ''
-  reviewNameMissing.value = !reviewName.value
+const buildReviewItems = (review: Awaited<ReturnType<typeof getResumeReview>>) => {
   const items = review.unresolvedItems
     ? (JSON.parse(review.unresolvedItems) as ResumeReviewUnresolvedItem[])
     : []
-  reviewItems.value = items.map((item) => {
+  return items.map((item) => {
     const contact = parseDraft<ReviewDraftContact>(item.canonicalDraft)
     const entry = parseDraft<ReviewDraftEntry>(item.canonicalDraft)
     const fragment = parseDraft<ReviewDraftFragment>(item.canonicalDraft)
@@ -212,44 +172,116 @@ const updateReviewState = (review: Awaited<ReturnType<typeof getResumeReview>>) 
   })
 }
 
-const openReview = async (resumeId: number) => {
-  reviewResumeId.value = resumeId
+const updateReviewState = (
+  review: Awaited<ReturnType<typeof getResumeReview>>,
+  resolvedItemId?: string,
+) => {
+  reviewQualityStatus.value = review.qualityStatus
+  const document = parseDraft<Partial<ResumeDocument>>(review.canonicalDocument ?? '{}')
+  reviewName.value = document.basics?.name?.trim() ?? ''
+  reviewNameMissing.value = !reviewName.value
+  const previousItems = reviewItems.value
+  const nextItems = buildReviewItems(review)
+  reviewItems.value = nextItems
+  activeReviewItemId.value = resolvedItemId
+    ? selectReviewItemAfterResolve({
+        previousItems,
+        nextItems,
+        resolvedItemId,
+        previousActiveItemId: activeReviewItemId.value,
+      })
+    : (nextItems.some((item) => item.item.id === activeReviewItemId.value)
+        ? activeReviewItemId.value
+        : getInitialReviewItemId(nextItems))
+}
+
+const loadReview = async (resumeId: number, reset = false) => {
   reviewLoading.value = true
-  reviewItems.value = []
+  reviewLoadError.value = null
+  if (reset) {
+    reviewItems.value = []
+    activeReviewItemId.value = null
+  }
   try {
     const review = await getResumeReview(resumeId)
     updateReviewState(review)
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '获取待确认内容失败')
-    reviewResumeId.value = null
+    reviewLoadError.value = error instanceof Error ? error.message : '获取待确认内容失败'
+    ElMessage.error(reviewLoadError.value)
   } finally {
     reviewLoading.value = false
   }
 }
 
-const closeReview = () => {
-  reviewResumeId.value = null
-  reviewItems.value = []
+const openReview = async (resumeId: number) => {
+  reviewTrigger.value = document.activeElement instanceof HTMLElement ? document.activeElement : null
+  reviewResumeId.value = resumeId
+  reviewLoadError.value = null
+  reviewActionError.value = null
   reviewQualityStatus.value = null
   reviewName.value = ''
   reviewNameMissing.value = false
+  await nextTick()
+  if (window.matchMedia('(max-width: 900px)').matches) {
+    document.querySelector('.resume-review-workspace')?.scrollIntoView({ behavior: 'auto', block: 'start' })
+  }
+  await loadReview(resumeId, true)
+}
+
+const focusReviewRow = (resumeId: number) => {
+  const row = document.querySelector(`[data-resume-row="${resumeId}"]`) as HTMLElement | null
+  row?.focus()
+}
+
+const clearReviewState = () => {
+  reviewResumeId.value = null
+  reviewItems.value = []
+  activeReviewItemId.value = null
+  reviewLoadError.value = null
+  reviewActionError.value = null
+  reviewQualityStatus.value = null
+  reviewName.value = ''
+  reviewNameMissing.value = false
+  resolvingItemId.value = null
+  lastReviewAction.value = null
+}
+
+const closeReview = async (restoreFocus = true) => {
+  const resumeId = reviewResumeId.value
+  const trigger = reviewTrigger.value
+  clearReviewState()
+  reviewTrigger.value = null
+  if (restoreFocus) {
+    await nextTick()
+    if (trigger?.isConnected) trigger.focus()
+    else if (resumeId !== null) focusReviewRow(resumeId)
+  }
+}
+
+const finishReview = async (resumeId: number) => {
+  await closeReview(false)
+  await loadResumes()
+  await nextTick()
+  focusReviewRow(resumeId)
 }
 
 const applyReview = async (resumeId: number, payload: ResumeReviewResolveRequest) => {
   resolvingItemId.value = payload.itemId
+  reviewActionError.value = null
   try {
     const review = await resolveResumeReview(resumeId, {
       ...payload,
       ...(reviewName.value.trim() ? { name: reviewName.value.trim() } : {}),
     })
-    updateReviewState(review)
+    lastReviewAction.value = null
+    updateReviewState(review, payload.itemId)
     if (review.qualityStatus === 'READY' && reviewItems.value.length === 0) {
       ElMessage.success('确认完成，简历已可用于岗位分析')
-      closeReview()
-      await loadResumes()
+      await finishReview(resumeId)
     }
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '确认操作失败')
+    reviewActionError.value = error instanceof Error ? error.message : '确认操作失败'
+    ElMessage.error(reviewActionError.value)
   } finally {
     resolvingItemId.value = null
   }
@@ -262,6 +294,7 @@ const editableEntryPayload = (entry: ReviewDraftEntry): ResumeReviewResolveReque
 }
 
 const acceptReviewItem = (resumeId: number, state: ReviewItemState) => {
+  lastReviewAction.value = { resumeId, itemId: state.item.id, action: 'ACCEPT' }
   if (state.item.kind === 'CONTACT_CANDIDATE' || state.item.kind === 'REQUIRED_CONTACT_CANDIDATE') {
     void applyReview(resumeId, {
       itemId: state.item.id,
@@ -299,7 +332,49 @@ const acceptReviewItem = (resumeId: number, state: ReviewItemState) => {
 }
 
 const deleteReviewItem = (resumeId: number, state: ReviewItemState) => {
+  lastReviewAction.value = { resumeId, itemId: state.item.id, action: 'DELETE' }
   void applyReview(resumeId, { itemId: state.item.id, action: 'DELETE' })
+}
+
+const retryReviewAction = () => {
+  const action = lastReviewAction.value
+  const state = reviewItems.value.find((item) => item.item.id === action?.itemId)
+  if (!action || !state || resolvingItemId.value) return
+  if (action.action === 'DELETE') deleteReviewItem(action.resumeId, state)
+  else acceptReviewItem(action.resumeId, state)
+}
+
+const selectReviewItem = (itemId: string) => {
+  if (resolvingItemId.value || !reviewItems.value.some((item) => item.item.id === itemId)) return
+  activeReviewItemId.value = itemId
+  reviewActionError.value = null
+}
+
+const moveReviewItem = (offset: number) => {
+  if (resolvingItemId.value) return
+  const index = reviewItems.value.findIndex((item) => item.item.id === activeReviewItemId.value)
+  const nextIndex = Math.min(Math.max(index + offset, 0), reviewItems.value.length - 1)
+  const next = reviewItems.value[nextIndex]
+  if (next) selectReviewItem(next.item.id)
+}
+
+const updateReviewItem = (nextState: ReviewItemState) => {
+  const index = reviewItems.value.findIndex((item) => item.item.id === nextState.item.id)
+  if (index >= 0) reviewItems.value[index] = nextState
+}
+
+const acceptActiveReviewItem = () => {
+  const state = reviewItems.value.find((item) => item.item.id === activeReviewItemId.value)
+  if (reviewResumeId.value !== null && state && !resolvingItemId.value) {
+    acceptReviewItem(reviewResumeId.value, state)
+  }
+}
+
+const deleteActiveReviewItem = () => {
+  const state = reviewItems.value.find((item) => item.item.id === activeReviewItemId.value)
+  if (reviewResumeId.value !== null && state && !resolvingItemId.value) {
+    deleteReviewItem(reviewResumeId.value, state)
+  }
 }
 
 const loadResumes = async () => {
@@ -487,38 +562,90 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <section class="resume-page resume-simple-page">
+  <section class="resume-page resume-library-page">
     <PageHeader
       title="我的简历"
-      description="管理用于岗位优化的真实基础简历。上传后系统会自动读取并准备内容。"
+      description="保存用于岗位定向的真实材料。上传后系统会自动准备；无法确定的内容会交给你确认。"
     >
       <template #actions>
-        <el-button type="primary" @click="uploadOpen = !uploadOpen">
-          {{ uploadOpen ? '收起上传' : '+ 上传简历' }}
+        <el-button
+          :plain="uploadOpen"
+          :type="uploadOpen ? 'default' : 'primary'"
+          :aria-expanded="uploadOpen"
+          aria-controls="resume-upload-panel"
+          @click="toggleUpload"
+        >
+          {{ uploadOpen ? '取消上传' : '上传简历' }}
         </el-button>
       </template>
     </PageHeader>
 
-    <section v-if="uploadOpen" class="resume-upload-row" aria-label="上传简历">
-      <div class="resume-upload-copy">
-        <strong>上传一份新的真实简历</strong>
-        <span>{{ selectedFileText }}</span>
-      </div>
-      <label class="resume-file-picker">
-        <span>{{ selectedFile ? '重新选择' : '选择文件' }}</span>
-        <input ref="fileInput" type="file" accept=".pdf,.doc,.docx" @change="handleFileChange" />
+    <section
+      v-if="uploadOpen"
+      id="resume-upload-panel"
+      ref="uploadPanel"
+      class="resume-upload-panel"
+      aria-labelledby="resume-upload-title"
+    >
+      <header class="resume-upload-header">
+        <div>
+          <span class="resume-section-label">新增简历</span>
+          <h2 id="resume-upload-title">上传一份真实简历</h2>
+          <p>
+            支持 PDF、DOC、DOCX，单份最大 10 MB。上传后系统会自动准备；无法确认的内容会交给你核对。
+          </p>
+        </div>
+        <button type="button" class="resume-upload-cancel" :disabled="uploading" @click="closeUpload">
+          取消上传
+        </button>
+      </header>
+
+      <label class="resume-file-picker" :class="{ 'has-file': selectedFile }">
+        <span class="resume-file-picker-label">{{ selectedFile ? '重新选择' : '选择简历文件' }}</span>
+        <strong v-if="selectedFile" :title="selectedFile.name">{{ selectedFile.name }}</strong>
+        <strong v-else>点击选择一份简历</strong>
+        <small>
+          {{ selectedFile ? `${selectedFileType} · ${formatResumeFileSize(selectedFile.size)}` : 'PDF、DOC、DOCX · 最大 10 MB' }}
+        </small>
+        <input
+          ref="fileInput"
+          type="file"
+          accept=".pdf,.doc,.docx"
+          :disabled="uploading"
+          @change="handleFileChange"
+        />
       </label>
-      <el-button
-        type="primary"
-        :loading="uploading"
-        :disabled="!selectedFile"
-        @click="handleUpload"
-      >
-        上传
-      </el-button>
+
+      <div v-if="selectedFile" class="resume-selected-file" aria-live="polite">
+        <span>文件已准备上传</span>
+        <button type="button" :disabled="uploading" @click="clearSelectedFile">移除</button>
+      </div>
+
+      <div class="resume-upload-actions">
+        <button type="button" class="resume-upload-secondary" :disabled="uploading" @click="closeUpload">
+          取消
+        </button>
+        <el-button
+          type="primary"
+          :loading="uploading"
+          :disabled="!selectedFile"
+          @click="handleUpload"
+        >
+          {{ uploading ? '正在上传…' : '上传并准备' }}
+        </el-button>
+      </div>
     </section>
 
-    <SkeletonBlock v-if="loading && !resumes.length" title :rows="5" />
+    <div v-if="loading && resumes.length" class="resume-library-refreshing" role="status">
+      <span class="resume-loading-indicator" aria-hidden="true" /> 正在更新简历库…
+    </div>
+
+    <section v-if="loading && !resumes.length" class="resume-library-loading" aria-label="正在加载简历列表">
+      <div class="resume-library-loading-heading"><SkeletonBlock title :rows="1" compact /></div>
+      <div v-for="index in 4" :key="index" class="resume-library-loading-row">
+        <SkeletonBlock :rows="2" compact />
+      </div>
+    </section>
 
     <ErrorState
       v-else-if="loadFailed"
@@ -528,220 +655,131 @@ onUnmounted(() => {
       @action="loadResumes()"
     />
 
-    <section v-else-if="resumes.length" class="resume-library-shell">
+    <section
+      v-else-if="resumes.length"
+      class="resume-library-shell"
+      :class="{ 'has-review-inspector': reviewResumeId && reviewResume }"
+    >
       <div class="resume-library-main">
-      <header class="resume-library-heading">
-        <div>
-          <h2>已保存的简历</h2>
-          <p>选择简历并粘贴岗位 JD，即可在首页开始分析。</p>
-        </div>
-        <strong>{{ resumes.length }} 份</strong>
-      </header>
-
-      <div class="resume-library-column-head" aria-hidden="true">
-        <span>文件</span>
-        <span>状态</span>
-        <span>上传时间</span>
-        <span>操作</span>
-      </div>
-      <div class="resume-library-list" role="list">
-      <article v-for="resume in resumes" :key="resume.id" class="resume-library-row" role="listitem">
-        <div class="resume-simple-file">
-          <span>{{ resume.fileType }}</span>
+        <header class="resume-library-heading">
           <div>
-            <strong>{{ resume.originalFilename }}</strong>
-            <small>{{ formatFileSize(resume.fileSize) }}</small>
+            <span class="resume-section-label">材料库</span>
+            <h2>简历库</h2>
+            <p>确认完成的简历，可以在开始优化页用于新的岗位分析。</p>
           </div>
-        </div>
-        <div class="resume-library-status">
-          <span class="resume-status-dot" :class="`is-${statusFor(resume).tone}`" aria-hidden="true" />
-          <span>{{ statusFor(resume).label }}</span>
-        </div>
-        <time class="resume-library-date" :datetime="resume.createdAt">
-          {{ resume.createdAt.slice(0, 10) }}
-        </time>
-        <p v-if="resume.parseStatus === 'FAILED'" class="resume-simple-error">
-          {{ resume.parseErrorMessage || '未能读取这份简历，请重试。' }}
-        </p>
-        <p v-if="resume.qualityStatus === 'NEEDS_REVIEW'" class="resume-simple-error">
-          部分内容无法自动确认，需要你核对后才能用于岗位分析与导出。
-        </p>
-        <p v-if="resume.canonicalReady === false" class="resume-simple-error">
-          这份简历来自旧版本解析，需重新准备后才能开始新的岗位分析。
-        </p>
-        <div class="resume-simple-actions">
-          <el-button
-            v-if="resume.qualityStatus === 'NEEDS_REVIEW'"
-            type="warning"
-            plain
-            @click="reviewResumeId === resume.id ? closeReview() : openReview(resume.id)"
-          >
-            {{ reviewResumeId === resume.id ? '收起确认' : '确认 →' }}
-          </el-button>
-          <el-button
-            v-if="
-              (resume.parseStatus !== 'SUCCESS' ||
-                resume.qualityStatus === 'FAILED' ||
-                resume.canonicalReady === false) &&
-              !activeTasks[resume.id]
-            "
-            plain
-            @click="prepareResume(resume)"
-          >
-            重试
-          </el-button>
-          <details class="resume-item-more">
-            <summary>更多</summary>
-            <div class="resume-item-more-menu">
-              <el-button
-                type="danger"
-                text
-                :loading="deletingId === resume.id"
-                :disabled="Boolean(activeTasks[resume.id])"
-                @click="handleDelete(resume)"
-              >
-                删除简历
-              </el-button>
-            </div>
-          </details>
-        </div>
-
-      </article>
-      </div>
-      </div>
-
-      <aside v-if="reviewResumeId && reviewResume" class="resume-review-inspector">
-        <header class="resume-review-header">
-          <div>
-            <span class="resume-review-label">CONTEXTUAL REVIEW</span>
-            <h2>需要确认</h2>
-            <p>{{ reviewResume.originalFilename }}</p>
-          </div>
-          <button type="button" class="resume-review-close" @click="closeReview">收起</button>
+          <p class="resume-library-summary" aria-live="polite">{{ librarySummaryText }}</p>
         </header>
-        <p v-if="reviewLoading" class="resume-review-loading">正在读取待确认内容…</p>
-        <template v-else>
-          <div v-if="reviewNameMissing" class="resume-review-name">
-            <label>
-              <span>姓名（请确认）</span>
-              <input v-model="reviewName" placeholder="请输入姓名" />
-            </label>
-          </div>
-          <p v-if="reviewItems.length === 0 && reviewQualityStatus === 'READY'">
-            已全部确认完成。
-          </p>
-          <p v-else-if="reviewItems.length === 0" class="resume-review-reason">
-            当前没有可直接确认的候选内容，请重新准备一份排版更清晰的简历后再试。
-          </p>
-          <article v-for="state in reviewItems" :key="state.item.id" class="resume-review-item">
-            <p class="resume-review-reason">{{ state.item.reason || '请确认以下内容' }}</p>
-            <div
-              v-if="
-                state.item.kind === 'CONTACT_CANDIDATE' ||
-                state.item.kind === 'REQUIRED_CONTACT_CANDIDATE'
-              "
-              class="resume-review-row"
-            >
-              <select v-model="state.contact.type" aria-label="联系方式类型">
-                <option
-                  v-for="option in state.item.kind === 'REQUIRED_CONTACT_CANDIDATE'
-                    ? REQUIRED_CONTACT_TYPE_OPTIONS
-                    : CONTACT_TYPE_OPTIONS"
-                  :key="option.value"
-                  :value="option.value"
-                >
-                  {{ option.label }}
-                </option>
-              </select>
-              <input v-model="state.contact.value" placeholder="联系方式内容" />
-            </div>
-            <div v-else-if="state.item.kind === 'NAME_CANDIDATE'" class="resume-review-row">
-              <input v-model="state.text" aria-label="确认姓名" placeholder="姓名" />
-            </div>
-            <div v-else-if="state.item.kind === 'TEXT_FRAGMENT'" class="resume-review-row">
-              <textarea v-model="state.text" rows="2" placeholder="内容"></textarea>
-            </div>
-            <div
-              v-else-if="state.item.kind === 'ENTRY_CANDIDATE'"
-              class="resume-review-entry-form"
-            >
-              <input
-                v-if="state.entry.kind === 'EDUCATION'"
-                v-model="state.entry.school"
-                placeholder="学校名（必填）"
-              />
-              <input
-                v-else
-                v-model="state.entry.organization"
-                placeholder="公司或项目名（必填）"
-              />
-              <input v-model="state.entry.role" placeholder="职位或角色（可选）" />
-              <input
-                v-if="state.entry.kind === 'EDUCATION'"
-                v-model="state.entry.degree"
-                placeholder="学历（可选）"
-              />
-              <input
-                v-if="state.entry.kind === 'EDUCATION'"
-                v-model="state.entry.major"
-                placeholder="专业（可选）"
-              />
-              <div class="resume-review-date-row">
-                <input v-model="state.entry.startDate" placeholder="开始时间（可选）" />
-                <input v-model="state.entry.endDate" placeholder="结束时间（可选）" />
+
+        <div class="resume-library-column-head" role="row" aria-hidden="true">
+          <span>简历文件</span>
+          <span>当前状态</span>
+          <span>添加时间</span>
+          <span>操作</span>
+        </div>
+        <div class="resume-library-list" role="list" aria-label="简历库">
+          <article
+            v-for="resume in resumes"
+            :key="resume.id"
+            class="resume-library-row"
+            :class="{ 'is-reviewing': reviewResumeId === resume.id }"
+            :data-resume-row="resume.id"
+            role="listitem"
+            tabindex="-1"
+            :aria-current="reviewResumeId === resume.id ? 'true' : undefined"
+          >
+            <div class="resume-simple-file">
+              <span class="resume-file-type" aria-hidden="true">{{ resume.fileType }}</span>
+              <div>
+                <strong :title="resume.originalFilename">{{ resume.originalFilename }}</strong>
+                <small>{{ formatResumeFileSize(resume.fileSize) }}</small>
               </div>
-              <textarea
-                v-for="(bullet, index) in state.entry.bullets"
-                :key="`${state.item.id}-bullet-${index}`"
-                v-model="bullet.text"
-                rows="2"
-                placeholder="内容"
-              ></textarea>
             </div>
-            <div v-else class="resume-review-entry-preview">
-              <strong>{{ entryDraftSummary(state.item.canonicalDraft).title }}</strong>
-              <span v-if="entryDraftSummary(state.item.canonicalDraft).details.length">
-                {{ entryDraftSummary(state.item.canonicalDraft).details.join(' · ') }}
-              </span>
-              <p
-                v-for="bullet in entryDraftSummary(state.item.canonicalDraft).bullets"
-                :key="bullet"
-              >
-                {{ bullet }}
+            <div class="resume-library-status">
+              <div class="resume-status-line">
+                <span class="resume-status-dot" :class="`is-${statusFor(resume).tone}`" aria-hidden="true" />
+                <strong>{{ reviewResumeId === resume.id ? '正在确认' : statusFor(resume).label }}</strong>
+              </div>
+              <p :title="reviewResumeId === resume.id ? '当前确认工作区已打开。' : statusFor(resume).description">
+                {{ reviewResumeId === resume.id ? '当前确认工作区已打开。' : statusFor(resume).description }}
               </p>
             </div>
-            <div class="resume-review-actions">
+            <time class="resume-library-date" :datetime="resume.createdAt">
+              {{ formatResumeDate(resume.createdAt) }}
+            </time>
+            <div class="resume-simple-actions">
               <el-button
-                size="small"
-                type="primary"
-                :loading="resolvingItemId === state.item.id"
-                @click="acceptReviewItem(reviewResume.id, state)"
-              >
-                接受
-              </el-button>
-              <el-button
-                v-if="
-                  state.item.kind !== 'REQUIRED_CONTACT_CANDIDATE' &&
-                  state.item.kind !== 'NAME_CANDIDATE'
-                "
-                size="small"
-                type="danger"
+                v-if="statusFor(resume).primaryAction === 'review' && reviewResumeId !== resume.id"
+                type="warning"
                 plain
-                :loading="resolvingItemId === state.item.id"
-                @click="deleteReviewItem(reviewResume.id, state)"
+                :aria-label="`确认 ${resume.originalFilename} 的内容`"
+                @click="openReview(resume.id)"
               >
-                删除
+                确认内容 →
               </el-button>
+              <el-button
+                v-if="canRetryResumePreparation(resume, activeTasks[resume.id])"
+                plain
+                :aria-label="`${statusFor(resume).primaryAction === 'prepare' ? '重新准备' : '重试'} ${resume.originalFilename}`"
+                @click="prepareResume(resume)"
+              >
+                {{ statusFor(resume).primaryAction === 'prepare' ? '重新准备' : '重试' }}
+              </el-button>
+              <details class="resume-item-more">
+                <summary :aria-label="`打开 ${resume.originalFilename} 的更多操作`">更多</summary>
+                <div class="resume-item-more-menu">
+                  <el-button
+                    type="danger"
+                    text
+                    :loading="deletingId === resume.id"
+                    :disabled="!statusFor(resume).canDelete || Boolean(activeTasks[resume.id])"
+                    @click="handleDelete(resume)"
+                  >
+                    删除简历
+                  </el-button>
+                </div>
+              </details>
             </div>
           </article>
-        </template>
-      </aside>
+        </div>
+      </div>
+
+      <ResumeReviewWorkspace
+        v-if="reviewResumeId && reviewResume"
+        class="resume-review-inspector"
+        :filename="reviewResume.originalFilename"
+        :loading="reviewLoading"
+        :load-error="reviewLoadError"
+        :action-error="reviewActionError"
+        :quality-status="reviewQualityStatus"
+        :review-name="reviewName"
+        :review-name-missing="reviewNameMissing"
+        :items="reviewItems"
+        :active-item-id="activeReviewItemId"
+        :resolving-item-id="resolvingItemId"
+        :contact-type-options="CONTACT_TYPE_OPTIONS"
+        :required-contact-type-options="REQUIRED_CONTACT_TYPE_OPTIONS"
+        @close="closeReview()"
+        @retry-load="reviewResumeId && loadReview(reviewResumeId)"
+        @retry-action="retryReviewAction"
+        @upload-replacement="openUploadFromReview"
+        @back-to-library="closeReview()"
+        @select-item="selectReviewItem"
+        @previous-item="moveReviewItem(-1)"
+        @next-item="moveReviewItem(1)"
+        @accept="acceptActiveReviewItem"
+        @reject="deleteActiveReviewItem"
+        @update:review-name="reviewName = $event"
+        @update:state="updateReviewItem"
+      />
     </section>
 
     <EmptyState
       v-else
+      eyebrow="简历库"
       title="还没有简历"
-      description="上传一份真实简历，系统会自动准备后续岗位分析需要的内容。"
+      description="上传一份真实简历。系统会先准备内容，无法确定的部分会交给你确认。"
+      action-text="上传第一份简历"
+      @action="openUploadFromEmpty"
     />
   </section>
 </template>
@@ -752,76 +790,191 @@ onUnmounted(() => {
   gap: var(--app-section-spacing);
 }
 
-.resume-upload-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  gap: var(--app-space-4);
-  align-items: center;
-  border-top: 1px solid var(--app-border);
-  border-bottom: 1px solid var(--app-border);
-  padding: var(--app-space-4) 0;
+.resume-section-label {
+  display: block;
+  margin-bottom: var(--app-space-2);
+  color: var(--app-primary);
+  font-family: var(--app-font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
 }
 
-.resume-upload-copy {
+.resume-upload-panel {
   display: grid;
-  gap: var(--app-space-1);
-  min-width: 0;
+  gap: var(--app-space-5);
+  border: 1px solid var(--app-border-strong);
+  border-radius: var(--app-radius-lg);
+  padding: var(--app-space-6);
+  background: var(--app-surface);
 }
 
-.resume-upload-copy strong {
+.resume-upload-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--app-space-6);
+}
+
+.resume-upload-header h2 {
+  margin: 0;
   color: var(--app-text);
-  font-size: var(--app-font-size-md);
+  font-size: 20px;
+  line-height: var(--app-line-height-tight);
 }
 
-.resume-upload-copy span,
-.resume-library-heading p {
+.resume-upload-header p {
+  max-width: 72ch;
+  margin: var(--app-space-2) 0 0;
   color: var(--app-text-secondary);
   font-size: var(--app-font-size-sm);
   line-height: var(--app-line-height-body);
 }
 
-.resume-file-picker {
-  display: inline-flex;
-  min-height: 40px;
-  align-items: center;
-  justify-content: center;
-  max-width: 260px;
-  min-width: 0;
-  padding: 0 var(--app-space-4);
-  border: 1px solid var(--app-border);
-  border-radius: var(--app-radius-sm);
-  color: var(--app-text);
+.resume-upload-cancel,
+.resume-upload-secondary,
+.resume-selected-file button {
+  border: 0;
+  border-bottom: 1px solid var(--app-border-strong);
+  padding: 4px 0;
+  color: var(--app-text-secondary);
+  font: inherit;
   font-size: var(--app-font-size-sm);
   font-weight: 700;
+  background: transparent;
   cursor: pointer;
-  background: var(--app-surface);
 }
 
-.resume-file-picker span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.resume-upload-cancel:hover,
+.resume-upload-cancel:focus-visible,
+.resume-upload-secondary:hover,
+.resume-upload-secondary:focus-visible,
+.resume-selected-file button:hover,
+.resume-selected-file button:focus-visible {
+  color: var(--app-primary-active);
+  border-color: var(--app-primary);
 }
 
-.resume-file-picker input {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  opacity: 0;
+.resume-upload-cancel:disabled,
+.resume-upload-secondary:disabled,
+.resume-selected-file button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.resume-file-picker {
+  position: relative;
+  display: grid;
+  min-height: 92px;
+  align-content: center;
+  gap: var(--app-space-1);
+  padding: var(--app-space-4) var(--app-space-5);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-md);
+  color: var(--app-text);
+  cursor: pointer;
+  background: var(--app-surface-soft);
+  transition: border-color 160ms ease, background-color 160ms ease;
+}
+
+.resume-file-picker:hover,
+.resume-file-picker.has-file {
+  border-color: var(--app-primary-subtle);
+  background: var(--app-primary-soft);
 }
 
 .resume-file-picker:focus-within {
   outline: 2px solid var(--app-primary);
-  outline-offset: 2px;
+  outline-offset: 3px;
+}
+
+.resume-file-picker-label {
+  color: var(--app-primary);
+  font-size: var(--app-font-size-xs);
+  font-weight: 700;
+}
+
+.resume-file-picker strong {
+  overflow: hidden;
+  max-width: 100%;
+  color: var(--app-text);
+  font-size: var(--app-font-size-md);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resume-file-picker small {
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-size-xs);
+}
+
+.resume-file-picker input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.resume-selected-file {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--app-space-4);
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-size-xs);
+}
+
+.resume-upload-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--app-space-5);
+}
+
+.resume-library-refreshing {
+  display: flex;
+  align-items: center;
+  gap: var(--app-space-2);
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-size-xs);
+}
+
+.resume-loading-indicator {
+  width: 9px;
+  height: 9px;
+  border: 1px solid var(--app-border-strong);
+  border-top-color: var(--app-primary);
+  border-radius: 50%;
+  animation: resume-spin 700ms linear infinite;
+}
+
+.resume-library-loading {
+  display: grid;
+  gap: var(--app-space-3);
+}
+
+.resume-library-loading-heading {
+  max-width: 320px;
+}
+
+.resume-library-loading-row {
+  min-height: 74px;
+  border-bottom: 1px solid var(--app-border);
+  padding: var(--app-space-4) var(--app-space-3);
 }
 
 .resume-library-shell {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(320px, 0.36fr);
-  gap: var(--app-space-8);
+  display: block;
   border-top: 1px solid var(--app-border-strong);
   padding-top: var(--app-space-5);
+}
+
+.resume-library-shell.has-review-inspector {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(340px, 0.42fr);
+  gap: var(--app-space-8);
 }
 
 .resume-library-main {
@@ -832,31 +985,38 @@ onUnmounted(() => {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: var(--app-space-4);
+  gap: var(--app-space-6);
   padding-bottom: var(--app-space-5);
 }
 
 .resume-library-heading h2 {
   margin: 0;
   color: var(--app-text);
-  font-size: 20px;
+  font-size: 22px;
   line-height: var(--app-line-height-tight);
 }
 
 .resume-library-heading p {
-  margin: var(--app-space-1) 0 0;
+  max-width: 72ch;
+  margin: var(--app-space-2) 0 0;
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-size-sm);
+  line-height: var(--app-line-height-body);
 }
 
-.resume-library-heading > strong {
+.resume-library-summary {
   flex: 0 0 auto;
-  color: var(--app-text-muted);
-  font-size: var(--app-font-size-sm);
+  margin: var(--app-space-1) 0 0;
+  color: var(--app-text-muted) !important;
+  font-size: var(--app-font-size-sm) !important;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .resume-library-column-head,
 .resume-library-row {
   display: grid;
-  grid-template-columns: minmax(0, 2fr) minmax(110px, 0.8fr) minmax(90px, 0.75fr) auto;
+  grid-template-columns: minmax(220px, 1.7fr) minmax(230px, 1.2fr) minmax(130px, 0.65fr) minmax(170px, auto);
   gap: var(--app-space-4);
   align-items: center;
 }
@@ -874,16 +1034,18 @@ onUnmounted(() => {
 
 .resume-library-row {
   position: relative;
+  min-height: 78px;
   padding: var(--app-space-4) var(--app-space-3);
   border-bottom: 1px solid var(--app-border);
+  transition: background-color 160ms ease;
 }
 
 .resume-library-row:hover,
-.resume-library-row.is-selected {
+.resume-library-row.is-reviewing {
   background: var(--app-surface-soft);
 }
 
-.resume-library-row.is-selected {
+.resume-library-row.is-reviewing {
   box-shadow: inset 3px 0 var(--app-primary);
 }
 
@@ -894,12 +1056,15 @@ onUnmounted(() => {
   gap: var(--app-space-3);
 }
 
-.resume-simple-file > span {
+.resume-file-type {
   display: inline-flex;
   flex: 0 0 auto;
-  min-width: 34px;
+  min-width: 40px;
   justify-content: center;
-  color: var(--app-text-muted);
+  border: 1px solid var(--app-border-strong);
+  border-radius: var(--app-radius-sm);
+  padding: 5px 4px;
+  color: var(--app-text-secondary);
   font-family: var(--app-font-mono);
   font-size: 10px;
   font-weight: 700;
@@ -925,11 +1090,34 @@ onUnmounted(() => {
 }
 
 .resume-library-status {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.resume-status-line {
   display: flex;
-  gap: var(--app-space-2);
+  min-width: 0;
   align-items: center;
+  gap: var(--app-space-2);
+  color: var(--app-text);
+  font-size: var(--app-font-size-sm);
+}
+
+.resume-status-line strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resume-library-status p {
+  overflow: hidden;
+  margin: 0;
   color: var(--app-text-secondary);
   font-size: var(--app-font-size-xs);
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .resume-status-dot {
@@ -955,27 +1143,21 @@ onUnmounted(() => {
 .resume-library-date {
   color: var(--app-text-muted);
   font-size: var(--app-font-size-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
-.resume-library-error,
-.resume-simple-error {
-  grid-column: 1 / -1;
-  margin: 0;
-  color: var(--app-danger);
-  font-size: var(--app-font-size-xs);
-  line-height: var(--app-line-height-body);
-}
-
-.resume-simple-actions,
-.resume-library-actions {
+.resume-simple-actions {
   display: flex;
   align-items: center;
   justify-content: flex-end;
   gap: var(--app-space-2);
+  min-width: 0;
 }
 
 .resume-item-more {
   position: relative;
+  flex: 0 0 auto;
 }
 
 .resume-item-more summary {
@@ -1016,164 +1198,38 @@ onUnmounted(() => {
   justify-content: flex-start;
 }
 
+@keyframes resume-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .resume-review-inspector {
-  display: grid;
-  align-content: start;
-  gap: var(--app-space-4);
   min-width: 0;
   align-self: start;
   position: sticky;
   top: calc(var(--app-shell-header-height) + var(--app-space-4));
   border-left: 1px solid var(--app-border-strong);
-  padding: var(--app-space-3) 0 var(--app-space-5) var(--app-space-6);
-  background: var(--app-surface-soft);
-}
-
-.resume-review-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--app-space-3);
-}
-
-.resume-review-label {
-  color: var(--app-text-muted);
-  font-family: var(--app-font-mono);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-}
-
-.resume-review-header h2 {
-  margin: var(--app-space-1) 0 0;
-  color: var(--app-text);
-  font-size: 20px;
-  line-height: var(--app-line-height-tight);
-}
-
-.resume-review-header p {
-  margin: var(--app-space-1) 0 0;
-  color: var(--app-text-secondary);
-  font-size: var(--app-font-size-sm);
-}
-
-.resume-review-close {
-  border: 0;
-  border-bottom: 1px solid var(--app-text);
-  padding: 3px 0;
-  color: var(--app-text);
-  font: inherit;
-  font-size: var(--app-font-size-xs);
-  font-weight: 700;
-  background: transparent;
-  cursor: pointer;
-}
-
-.resume-review-close:hover,
-.resume-review-close:focus-visible {
-  color: var(--app-primary-active);
-  border-color: var(--app-primary);
-}
-
-.resume-review-loading,
-.resume-review-reason,
-.resume-review-entry-preview {
-  margin: 0;
-  color: var(--app-text-secondary);
-  font-size: var(--app-font-size-xs);
-  line-height: var(--app-line-height-body);
-}
-
-.resume-review-item {
-  display: grid;
-  gap: var(--app-space-3);
-  border-top: 1px solid var(--app-border);
-  padding-top: var(--app-space-4);
-}
-
-.resume-review-name,
-.resume-review-entry-form {
-  display: grid;
-  gap: var(--app-space-2);
-}
-
-.resume-review-name label {
-  display: grid;
-  gap: var(--app-space-1);
-  color: var(--app-text-secondary);
-  font-size: var(--app-font-size-xs);
-  font-weight: 700;
-}
-
-.resume-review-row,
-.resume-review-date-row {
-  display: grid;
-  gap: var(--app-space-2);
-}
-
-.resume-review-date-row {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.resume-review-name input,
-.resume-review-row input,
-.resume-review-row textarea,
-.resume-review-row select,
-.resume-review-entry-form input,
-.resume-review-entry-form textarea {
-  width: 100%;
-  border: 1px solid var(--app-border);
-  border-radius: var(--app-radius-sm);
-  padding: var(--app-space-2) var(--app-space-3);
-  color: var(--app-text);
-  font: inherit;
-  font-size: var(--app-font-size-sm);
-  background: var(--app-surface);
-}
-
-.resume-review-entry-preview {
-  display: grid;
-  gap: var(--app-space-1);
-}
-
-.resume-review-entry-preview strong {
-  color: var(--app-text);
-}
-
-.resume-review-entry-preview p {
-  margin: 0;
-}
-
-.resume-review-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--app-space-2);
+  padding-left: var(--app-space-8);
 }
 
 @media (max-width: 900px) {
-  .resume-library-shell {
+  .resume-upload-header {
+    flex-direction: column;
+    gap: var(--app-space-3);
+  }
+
+  .resume-upload-cancel {
+    align-self: flex-start;
+  }
+
+  .resume-upload-actions {
+    justify-content: space-between;
+  }
+
+  .resume-library-shell,
+  .resume-library-shell.has-review-inspector {
     display: block;
-  }
-
-  .resume-review-inspector {
-    position: static;
-    margin-top: var(--app-space-6);
-    border-top: 1px solid var(--app-border-strong);
-    border-left: 0;
-    padding: var(--app-space-5) 0 0;
-  }
-}
-
-@media (max-width: 760px) {
-  .resume-upload-row {
-    grid-template-columns: 1fr;
-    align-items: stretch;
-  }
-
-  .resume-file-picker,
-  .resume-upload-row .el-button {
-    width: 100%;
-    max-width: none;
   }
 
   .resume-library-column-head {
@@ -1187,22 +1243,49 @@ onUnmounted(() => {
     padding: var(--app-space-4) 0;
   }
 
-  .resume-library-actions {
-    justify-content: flex-start;
-    order: 4;
+  .resume-library-status p {
+    white-space: normal;
   }
 
   .resume-library-date {
     order: 3;
   }
 
-  .resume-library-error,
-  .resume-simple-error {
-    grid-column: auto;
+  .resume-simple-actions {
+    justify-content: flex-start;
+    order: 4;
+    flex-wrap: wrap;
+  }
+
+  .resume-review-inspector {
+    position: static;
+    margin-top: var(--app-space-6);
+    border-top: 1px solid var(--app-border-strong);
+    border-left: 0;
+    padding: 0;
   }
 
   .resume-review-date-row {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 560px) {
+  .resume-upload-panel {
+    padding: var(--app-space-5) var(--app-space-4);
+  }
+
+  .resume-library-heading {
+    display: grid;
+    gap: var(--app-space-3);
+  }
+
+  .resume-library-summary {
+    white-space: normal;
+  }
+
+  .resume-upload-actions {
+    padding-bottom: env(safe-area-inset-bottom);
   }
 }
 </style>

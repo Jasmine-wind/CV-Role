@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
+import { diffText } from '@/utils/diffText'
 
 const props = defineProps<{
   mode: 'composing' | 'requesting' | 'ready' | 'stale' | 'rejected' | 'error'
@@ -19,6 +20,9 @@ const emit = defineEmits<{
 }>()
 
 const customInstruction = ref('')
+const diffSegments = computed(() =>
+  props.suggestedText ? diffText(props.originalText, props.suggestedText) : [],
+)
 
 const submitCustom = () => {
   const instruction = customInstruction.value.trim()
@@ -66,6 +70,16 @@ const submitCustom = () => {
       <div class="suggestion-copy-block is-proposed">
         <span class="suggestion-label">建议版本</span>
         <p>{{ props.suggestedText }}</p>
+      </div>
+      <div class="suggestion-copy-block is-diff">
+        <span class="suggestion-label">差异</span>
+        <p aria-label="原文与建议表达的差异">
+          <span
+            v-for="(segment, index) in diffSegments"
+            :key="`${segment.type}-${index}`"
+            :class="`diff-${segment.type}`"
+          >{{ segment.text }}</span>
+        </p>
       </div>
       <div class="suggestion-copy-block is-reason">
         <span class="suggestion-label">为什么这样改</span>
@@ -169,8 +183,31 @@ const submitCustom = () => {
   background: var(--app-success-soft);
 }
 
+.suggestion-copy-block.is-diff {
+  border-color: var(--app-border);
+  background: var(--app-document);
+}
+
 .suggestion-copy-block.is-reason {
   background: transparent;
+}
+
+.diff-added {
+  color: var(--app-success);
+  background: var(--app-success-soft);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+.diff-removed {
+  color: var(--app-primary-active);
+  background: var(--app-primary-soft);
+  text-decoration: line-through;
+}
+
+.diff-equal {
+  color: var(--app-text-secondary);
 }
 
 .suggestion-label {

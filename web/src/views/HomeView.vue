@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import PageHeader from '@/components/common/PageHeader.vue'
@@ -13,11 +13,21 @@ import type { AsyncTaskPollingController } from '@/utils/asyncTaskPolling'
 import type { ActiveJobAnalysis, JobAnalysisStartResult } from '@/types/job-analysis'
 import type { AsyncTaskVO } from '@/types/task'
 import type { ResumeListItem } from '@/types/resume'
+import {
+  getResumeFileValidationError,
+  getResumeStatus,
+  getStartBlockMessage,
+  getStartBlockReason,
+  pickInitialResumeId,
+} from './homeComposer'
 
 const ACTIVE_ANALYSIS_STORAGE_KEY = 'cv-role:active-job-analysis'
-const MAX_FILE_SIZE = 10 * 1024 * 1024
-const ACCEPTED_EXTENSIONS = ['pdf', 'doc', 'docx']
 const ANALYSIS_TIMEOUT_MS = 8 * 60 * 1000
+
+type StoredActiveJobAnalysis = ActiveJobAnalysis & {
+  resumeId?: number
+  jobDescription?: string
+}
 
 const router = useRouter()
 const resumes = ref<ResumeListItem[]>([])
@@ -43,19 +53,6 @@ const preparationPolling = new Map<number, AsyncTaskPollingController>()
 const selectedResume = computed(
   () => resumes.value.find((item) => item.id === selectedResumeId.value) ?? null,
 )
-const otherResumes = computed(() =>
-  resumes.value.filter((item) => item.id !== selectedResumeId.value),
-)
-const resumeStatusLabel = (resume: ResumeListItem | null) => {
-  if (!resume) return '请选择简历'
-  if (resume.qualityStatus === 'PENDING') return '正在准备'
-  if (resume.qualityStatus === 'NEEDS_REVIEW') return '需要确认'
-  if (resume.parseStatus === 'SUCCESS' && resume.canonicalReady === false) return '需要重新解析'
-  if (resume.parseStatus === 'SUCCESS' && resume.qualityStatus === 'READY') return '已准备好'
-  if (resume.parseStatus === 'FAILED' || resume.qualityStatus === 'FAILED') return '准备失败'
-  return '等待准备'
-}
-const selectedResumeStatus = computed(() => resumeStatusLabel(selectedResume.value))
 const preparationTaskId = computed(() =>
   selectedResumeId.value == null
     ? null
@@ -66,27 +63,56 @@ const preparationMessage = computed(() =>
     ? null
     : (preparationMessages.value[selectedResumeId.value] ?? null),
 )
-const selectedResumeReady = computed(
-  () =>
-    selectedResume.value?.parseStatus === 'SUCCESS' &&
-    selectedResume.value.qualityStatus === 'READY' &&
-    selectedResume.value.canonicalReady !== false,
+const selectedResumeStatus = computed(() =>
+  getResumeStatus(
+    selectedResume.value,
+    preparationTaskId.value,
+    preparationMessage.value,
+  ),
 )
 const analysisRunning = computed(() => {
   const status = analysisTask.value?.status
   return Boolean(activeAnalysis.value && (!status || status === 'PENDING' || status === 'RUNNING'))
 })
-const canStart = computed(() =>
-  Boolean(
-    selectedResumeId.value &&
-    jobDescription.value.trim() &&
-    selectedResumeReady.value &&
-    !analysisRunning.value &&
-    !startingAnalysis.value &&
-    !preparationTaskId.value,
-  ),
+const startBlockReason = computed(() =>
+  getStartBlockReason({
+    resume: selectedResume.value,
+    jobDescription: jobDescription.value,
+    preparationTaskId: preparationTaskId.value,
+    analysisRunning: analysisRunning.value,
+    startingAnalysis: startingAnalysis.value,
+  }),
 )
+const canStart = computed(() => !startBlockReason.value)
 const currentStage = computed(() => analysisTask.value?.message || '正在保存你的简历和目标岗位')
+const analysisStateTitle = computed(() => {
+  if (analysisTimedOut.value) return '岗位分析仍在后台进行'
+  if (analysisTask.value?.status === 'CANCELLED') return '任务已取消'
+  return '岗位分析没有完成'
+})
+const selectedResumeFilename = computed(() => selectedResume.value?.originalFilename || '当前简历')
+const composerActionLabel = computed(() => (canStart.value ? '本次核对' : '下一步'))
+const composerActionText = computed(() => {
+  if (canStart.value) return `将使用「${selectedResumeFilename.value}」核对这份岗位描述。`
+  if (analysisRunning.value) return '当前岗位分析正在进行。'
+  if (activeAnalysis.value && analysisError.value) return `${analysisStateTitle.value}。`
+  return getStartBlockMessage(startBlockReason.value)
+})
+const composerActionDetail = computed(() => {
+  if (canStart.value) return '只依据当前简历材料，不自动添加未经确认的经历。'
+  if (analysisRunning.value) return currentStage.value
+  if (activeAnalysis.value && analysisError.value) {
+    return analysisTimedOut.value ? '可以继续等待，或稍后回到首页查看。' : '当前任务已保留，可以直接重试。'
+  }
+  if (selectedResumeStatus.value.kind === 'needs-review') return '前往确认后，这份简历才能用于岗位分析。'
+  if (selectedResumeStatus.value.kind === 'failed' || selectedResumeStatus.value.kind === 'reparse') {
+    return '可以前往我的简历处理，完成后再回来。'
+  }
+  if (selectedResumeStatus.value.kind === 'preparing' || selectedResumeStatus.value.kind === 'pending') {
+    return selectedResumeStatus.value.description
+  }
+  return '完成这一步后，开始核对岗位要求。'
+})
 
 const loadInsightAvailability = async () => {
   try {
@@ -102,14 +128,11 @@ const loadResumes = async (preferredResumeId?: number) => {
   loadFailed.value = false
   try {
     resumes.value = await getResumeList()
-    if (preferredResumeId && resumes.value.some((item) => item.id === preferredResumeId)) {
-      selectedResumeId.value = preferredResumeId
-    } else if (
-      !selectedResumeId.value ||
-      !resumes.value.some((item) => item.id === selectedResumeId.value)
-    ) {
-      selectedResumeId.value = resumes.value[0]?.id ?? null
-    }
+    selectedResumeId.value = pickInitialResumeId(
+      resumes.value,
+      selectedResumeId.value,
+      preferredResumeId,
+    )
   } catch {
     // 区分真正的加载失败与空数据：失败提供重试，而不是当成没有简历。
     loadFailed.value = true
@@ -119,13 +142,9 @@ const loadResumes = async (preferredResumeId?: number) => {
 }
 
 const validateFile = (file: File) => {
-  const extension = file.name.split('.').pop()?.toLowerCase() || ''
-  if (!ACCEPTED_EXTENSIONS.includes(extension)) {
-    ElMessage.error('仅支持 PDF、DOC、DOCX 简历文件')
-    return false
-  }
-  if (file.size > MAX_FILE_SIZE) {
-    ElMessage.error('简历文件大小不能超过 10 MB')
+  const validationError = getResumeFileValidationError(file)
+  if (validationError) {
+    ElMessage.error(validationError)
     return false
   }
   return true
@@ -139,6 +158,23 @@ const handleFileChange = (event: Event) => {
     input.value = ''
   }
 }
+
+const clearJobDescription = async () => {
+  if (!jobDescription.value.trim()) return
+  try {
+    await ElMessageBox.confirm('清空后，这份岗位描述将无法恢复。', '确认清空岗位描述？', {
+      type: 'warning',
+      confirmButtonText: '清空',
+      cancelButtonText: '保留',
+    })
+    jobDescription.value = ''
+  } catch {
+    // Cancelling the confirmation is an intentional no-op.
+  }
+}
+
+const statusForResume = (resume: ResumeListItem) =>
+  getResumeStatus(resume, preparationTaskIds.value[resume.id], preparationMessages.value[resume.id])
 
 const clearPreparationState = (resumeId: number) => {
   const nextTaskIds = { ...preparationTaskIds.value }
@@ -219,8 +255,10 @@ const handleUpload = async () => {
 }
 
 const saveActiveAnalysis = (analysis: JobAnalysisStartResult) => {
-  const stored: ActiveJobAnalysis = {
+  const stored: StoredActiveJobAnalysis = {
     ...analysis,
+    resumeId: selectedResumeId.value ?? undefined,
+    jobDescription: jobDescription.value.trim(),
     startedAt: new Date().toISOString(),
   }
   window.sessionStorage.setItem(ACTIVE_ANALYSIS_STORAGE_KEY, JSON.stringify(stored))
@@ -338,7 +376,7 @@ const restoreActiveAnalysis = () => {
     return
   }
   try {
-    const stored = JSON.parse(raw) as ActiveJobAnalysis
+    const stored = JSON.parse(raw) as StoredActiveJobAnalysis
     if (
       stored.taskId &&
       stored.optimizationTaskId &&
@@ -346,6 +384,12 @@ const restoreActiveAnalysis = () => {
       stored.targetResumeVersionId &&
       stored.jobTargetId
     ) {
+      if (stored.resumeId && resumes.value.some((resume) => resume.id === stored.resumeId)) {
+        selectedResumeId.value = stored.resumeId
+      }
+      if (typeof stored.jobDescription === 'string') {
+        jobDescription.value = stored.jobDescription
+      }
       startAnalysisPolling(stored)
       return
     }
@@ -384,10 +428,10 @@ onUnmounted(() => {
 <template>
   <section class="home-page">
     <PageHeader
-      title="开始岗位优化"
-      description="选择一份真实简历，提供目标岗位 JD，系统会完成准备并给出逐条可核对的分析结果。"
+      eyebrow="新建岗位任务"
+      title="开始一次岗位定向"
+      description="选择一份已确认的简历，粘贴目标岗位 JD。系统会先拆解岗位要求，再回到当前材料逐条核对。"
     />
-
     <SkeletonBlock v-if="loading && !resumes.length" title :rows="5" />
 
     <ErrorState
@@ -398,65 +442,78 @@ onUnmounted(() => {
       @action="loadResumes()"
     />
 
-    <section v-else class="home-composer" aria-label="岗位优化输入">
+    <section v-else class="home-composer" aria-label="岗位任务创建工作区">
       <div class="home-composer-grid">
         <section class="home-source-column" aria-labelledby="home-source-title">
           <header class="home-section-heading">
-            <span class="home-section-label">RESUME SOURCE</span>
-            <h3 id="home-source-title">我的简历</h3>
-            <p>选择一份真实材料作为本次岗位分析的基础。</p>
+            <div>
+              <span class="home-section-index">01</span>
+              <span class="home-section-label">真实简历材料</span>
+            </div>
+            <RouterLink class="home-management-link" to="/resumes">管理简历 <span aria-hidden="true">→</span></RouterLink>
+            <h3 id="home-source-title">选择用于本次核对的简历</h3>
+            <p>本次分析只使用这里选中的简历内容。</p>
           </header>
 
-          <div v-if="selectedResume" class="home-source-current">
-            <span class="home-source-indicator" aria-hidden="true" />
+          <div v-if="resumes.length" class="home-resume-list" role="radiogroup" aria-labelledby="home-source-title">
+            <label
+              v-for="resume in resumes"
+              :key="resume.id"
+              class="home-resume-option"
+              :class="{ 'is-selected': selectedResumeId === resume.id }"
+              :title="resume.originalFilename"
+            >
+              <input
+                v-model="selectedResumeId"
+                type="radio"
+                name="home-resume"
+                :value="resume.id"
+                :disabled="analysisRunning || startingAnalysis"
+              />
+              <span class="home-option-radio" aria-hidden="true" />
+              <span class="home-option-copy">
+                <strong>{{ resume.originalFilename }}</strong>
+                <small>{{ resume.fileType }} · {{ statusForResume(resume).label }}</small>
+              </span>
+              <span v-if="selectedResumeId === resume.id" class="home-option-check">已选</span>
+            </label>
+          </div>
+
+          <div v-else class="home-empty-source">
+            <span class="home-empty-mark" aria-hidden="true">＋</span>
+            <strong>还没有可用简历</strong>
+            <p>先上传一份真实简历，系统会自动读取并准备内容。</p>
+          </div>
+
+          <div v-if="selectedResume && selectedResumeStatus.kind !== 'ready'" class="home-resume-state" role="status" aria-live="polite">
+            <span class="home-state-mark" :class="`is-${selectedResumeStatus.kind}`" aria-hidden="true" />
             <div>
-              <strong>{{ selectedResume.originalFilename }}</strong>
-              <span>{{ selectedResume.fileType }} · {{ selectedResumeStatus }}</span>
+              <strong>{{ selectedResumeStatus.label }}</strong>
+              <p>{{ selectedResumeStatus.description }}</p>
+              <RouterLink
+                v-if="selectedResumeStatus.kind === 'needs-review' || selectedResumeStatus.kind === 'failed' || selectedResumeStatus.kind === 'reparse'"
+                class="home-inline-link"
+                to="/resumes"
+              >
+                {{ selectedResumeStatus.kind === 'needs-review' ? '前往确认' : '前往我的简历处理' }} <span aria-hidden="true">→</span>
+              </RouterLink>
             </div>
           </div>
 
-          <div
-            v-if="otherResumes.length"
-            class="home-resume-options"
-            role="listbox"
-            aria-label="选择其他简历"
-          >
-            <span class="home-options-label">其他简历</span>
-            <button
-              v-for="resume in otherResumes"
-              :key="resume.id"
-              type="button"
-              class="home-resume-option"
-              :class="{ 'is-selected': selectedResumeId === resume.id }"
-              :aria-selected="selectedResumeId === resume.id"
-              :disabled="analysisRunning"
-              role="option"
-              @click="selectedResumeId = resume.id"
-            >
-              <span class="home-option-dot" aria-hidden="true" />
-              <span class="home-option-copy">
-                <strong>{{ resume.originalFilename }}</strong>
-                <small>{{ resume.fileType }} · {{ resumeStatusLabel(resume) }}</small>
-              </span>
-              <span v-if="selectedResumeId === resume.id" class="home-option-check">当前</span>
-            </button>
-          </div>
-
           <button
-            v-if="resumes.length"
             type="button"
             class="home-upload-trigger"
-            :disabled="analysisRunning"
+            :disabled="analysisRunning || startingAnalysis"
             @click="uploadRowVisible = !uploadRowVisible"
           >
             <span aria-hidden="true">＋</span>
-            {{ uploadRowVisible ? '收起上传' : '上传另一份简历' }}
+            {{ uploadRowVisible ? '收起上传' : resumes.length ? '上传一份简历' : '上传第一份简历' }}
           </button>
 
           <div v-if="!resumes.length || uploadRowVisible" class="home-inline-upload">
-            <p v-if="!resumes.length">先上传一份真实简历。上传后系统会自动读取内容。</p>
+            <p>支持 PDF、DOC、DOCX，单份最大 10 MB。</p>
             <label class="home-file-picker">
-              <span>{{ selectedFile?.name || '选择 PDF、DOC 或 DOCX' }}</span>
+              <span>{{ selectedFile?.name || '选择简历文件' }}</span>
               <input
                 ref="fileInput"
                 data-testid="home-resume-upload"
@@ -474,146 +531,114 @@ onUnmounted(() => {
               上传简历
             </el-button>
           </div>
-
-          <div v-if="preparationTaskId" class="home-analysis-state is-running" role="status">
-            <span class="home-state-dot" />
-            <div>
-              <strong>正在准备简历</strong>
-              <p>{{ preparationMessage }}</p>
-            </div>
-          </div>
         </section>
 
         <section class="home-target-column" aria-labelledby="home-target-title">
           <header class="home-section-heading">
-            <span class="home-section-label">TARGET JOB</span>
-            <h3 id="home-target-title">目标岗位 JD</h3>
-            <p>粘贴完整岗位描述，包含职责、要求和加分项。</p>
+            <div>
+              <span class="home-section-index">02</span>
+              <span class="home-section-label">目标岗位</span>
+            </div>
+            <button
+              v-if="jobDescription.trim()"
+              type="button"
+              class="home-clear-link"
+              @click="clearJobDescription"
+            >
+              清空
+            </button>
+            <h3 id="home-target-title">粘贴完整岗位描述</h3>
+            <p>包含职责、要求和加分项，系统会逐条回到当前简历核对。</p>
           </header>
 
-          <div v-if="resumes.length" class="home-jd-field">
+          <div class="home-jd-field">
+            <label class="home-jd-label home-sr-only" for="home-jd">目标岗位 JD</label>
             <el-input
               id="home-jd"
               v-model="jobDescription"
               type="textarea"
-              :rows="11"
+              :rows="14"
               maxlength="10000"
               show-word-limit
               resize="vertical"
-              placeholder="粘贴完整的岗位描述，包括职责、要求和加分项……"
-              :disabled="analysisRunning"
+              aria-describedby="home-jd-boundary"
+              placeholder="在这里粘贴完整岗位描述……
+
+建议包含：
+岗位职责
+任职要求
+加分项"
+              :disabled="analysisRunning || startingAnalysis"
             />
-            <p class="home-field-boundary">分析只依据你提供的简历材料，不会为匹配岗位编造经历。</p>
-          </div>
-          <p v-else class="home-target-empty">上传并准备一份简历后，再提供目标岗位 JD。</p>
-
-          <div
-            v-if="analysisError && !activeAnalysis"
-            class="home-analysis-state is-error"
-            role="alert"
-          >
-            <span class="home-state-dot" />
-            <div>
-              <strong>岗位分析没有开始</strong>
-              <p>{{ analysisError }}</p>
-              <p>当前选择和岗位 JD 仍保留在本页，可以直接重试。</p>
-              <div class="home-state-actions">
-                <el-button
-                  type="primary"
-                  plain
-                  :loading="startingAnalysis"
-                  @click="handleStartAnalysis"
-                >
-                  重新开始分析
-                </el-button>
-              </div>
-            </div>
-          </div>
-
-          <div
-            v-else-if="activeAnalysis"
-            class="home-analysis-state"
-            :class="analysisError ? 'is-error' : 'is-running'"
-            role="status"
-          >
-            <span class="home-state-dot" />
-            <div>
-              <strong>{{ analysisError ? '岗位分析没有完成' : '正在分析岗位' }}</strong>
-              <p v-if="analysisError">
-                {{ analysisError }}
-                <template v-if="!analysisTimedOut"
-                  >你的简历和目标岗位信息已保存，可以直接重试，无需重新填写。</template
-                >
-              </p>
-              <p v-else>{{ currentStage }}</p>
-              <div v-if="analysisError" class="home-state-actions">
-                <el-button
-                  v-if="analysisTimedOut"
-                  plain
-                  :loading="startingAnalysis"
-                  @click="continueWaiting()"
-                >
-                  继续等待
-                </el-button>
-                <el-button
-                  v-else
-                  type="primary"
-                  plain
-                  :loading="startingAnalysis"
-                  @click="retryAnalysis()"
-                >
-                  重试分析
-                </el-button>
-              </div>
-            </div>
+            <p id="home-jd-boundary" class="home-field-boundary">只保存你提供的岗位描述，不会自动改写或补充内容。</p>
           </div>
         </section>
       </div>
 
-      <footer v-if="resumes.length" class="home-task-bar">
-        <div class="home-task-boundary">
-          <span class="home-state-dot is-static" aria-hidden="true" />
-          <span>基于真实简历材料分析，系统不会为了匹配岗位编造经历。</span>
+      <footer class="home-task-bar">
+        <div id="home-start-status" class="home-action-summary" aria-live="polite">
+          <span class="home-action-label">{{ composerActionLabel }}</span>
+          <strong>{{ composerActionText }}</strong>
+          <span>{{ composerActionDetail }}</span>
         </div>
         <div class="home-start-actions-buttons">
-          <el-button
-            v-if="selectedResume?.qualityStatus === 'NEEDS_REVIEW'"
-            plain
-            type="warning"
-            @click="router.push('/resumes')"
-          >
-            先确认简历
-          </el-button>
           <el-button
             data-testid="home-start-analysis"
             type="primary"
             size="large"
             :loading="startingAnalysis || analysisRunning"
             :disabled="!canStart"
+            aria-describedby="home-start-status"
             @click="handleStartAnalysis"
           >
-            开始分析
+            {{ startingAnalysis ? '正在启动…' : analysisRunning ? '正在核对…' : '开始核对岗位要求 →' }}
           </el-button>
         </div>
       </footer>
-    </section>
 
-    <section v-if="!loadFailed && resumes.length" class="home-library-link">
-      <div>
-        <strong>简历库</strong>
-        <span>已有 {{ resumes.length }} 份简历，可随时用于新的岗位分析。</span>
+      <div v-if="analysisError && !activeAnalysis" class="home-analysis-state is-error" role="alert">
+        <span class="home-state-mark is-failed" aria-hidden="true" />
+        <div>
+          <strong>岗位分析启动失败</strong>
+          <p>{{ analysisError }} 当前选择和岗位 JD 仍保留，可以直接重试。</p>
+          <div class="home-state-actions">
+            <el-button type="primary" plain :loading="startingAnalysis" @click="handleStartAnalysis">
+              重新开始
+            </el-button>
+          </div>
+        </div>
       </div>
-      <el-button text type="primary" @click="router.push('/resumes')">管理简历 →</el-button>
+
+      <div
+        v-else-if="activeAnalysis"
+        class="home-analysis-state"
+        :class="analysisError ? 'is-error' : 'is-running'"
+        :role="analysisError ? 'alert' : 'status'"
+        aria-live="polite"
+      >
+        <span class="home-state-mark" :class="analysisError ? 'is-failed' : 'is-running'" aria-hidden="true" />
+        <div>
+          <strong>{{ analysisError ? analysisStateTitle : '岗位分析正在后台进行' }}</strong>
+          <p>{{ analysisError || currentStage }}</p>
+          <p v-if="analysisError && !analysisTimedOut">简历和岗位信息已保存，无需重新填写。</p>
+          <div v-if="analysisError" class="home-state-actions">
+            <el-button v-if="analysisTimedOut" plain :loading="startingAnalysis" @click="continueWaiting">
+              继续等待
+            </el-button>
+            <el-button v-else type="primary" plain :loading="startingAnalysis" @click="retryAnalysis">
+              重试分析
+            </el-button>
+          </div>
+        </div>
+      </div>
     </section>
 
-    <section v-if="hasJobDirectionInsight" class="home-insight-row">
+    <section v-if="hasJobDirectionInsight" class="home-insight-row" aria-label="岗位方向洞察">
       <div>
         <strong>岗位方向洞察</strong>
-        <span>基于这份简历的历史岗位分析，查看重复出现的岗位要求。</span>
+        <span>查看这份简历在近期岗位中反复遇到的要求。</span>
       </div>
-      <el-button text type="primary" @click="router.push('/job-direction-insights')"
-        >查看 →</el-button
-      >
+      <RouterLink class="home-insight-link" to="/job-direction-insights">查看洞察 <span aria-hidden="true">→</span></RouterLink>
     </section>
   </section>
 </template>
@@ -1039,6 +1064,640 @@ onUnmounted(() => {
 
   .home-start-actions-buttons .el-button {
     flex: 1 1 auto;
+  }
+}
+
+/* Job Target Composer: local page treatment, intentionally scoped to Home. */
+.home-page {
+  width: min(100%, 1280px);
+  min-height: calc(100dvh - var(--app-shell-header-height) - 56px);
+  margin: 0 auto;
+  align-content: start;
+  gap: 18px;
+}
+
+.home-page :deep(.ui-page-header) {
+  margin-bottom: 0;
+}
+
+.home-page :deep(.ui-page-header h2) {
+  font-size: clamp(28px, 2.4vw, 34px);
+  letter-spacing: -0.035em;
+}
+
+.home-page :deep(.ui-page-header p:not(.ui-page-eyebrow)) {
+  max-width: 650px;
+}
+
+.home-composer {
+  overflow: hidden;
+  border: 1px solid var(--app-border-strong);
+  border-radius: var(--app-radius-md);
+  background: var(--app-surface);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--app-text) 7%, transparent);
+}
+
+.home-composer-grid {
+  grid-template-columns: minmax(300px, 0.38fr) minmax(0, 0.62fr);
+  min-height: 470px;
+}
+
+.home-source-column,
+.home-target-column {
+  gap: 20px;
+  padding: 30px 32px;
+}
+
+.home-source-column {
+  border-right: 1px solid var(--app-border);
+}
+
+.home-target-column {
+  background: color-mix(in srgb, var(--app-surface) 92%, var(--app-bg-soft));
+}
+
+.home-section-heading {
+  position: relative;
+  gap: 7px;
+}
+
+.home-section-heading > div:first-child {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+}
+
+.home-section-index {
+  color: var(--app-primary);
+  font-family: var(--app-font-mono);
+  font-size: 13px;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+}
+
+.home-section-label {
+  color: var(--app-text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.home-section-heading h3 {
+  max-width: 24ch;
+  font-size: 21px;
+  letter-spacing: -0.02em;
+}
+
+.home-section-heading p {
+  max-width: 42ch;
+}
+
+.home-management-link,
+.home-clear-link,
+.home-inline-link,
+.home-insight-link {
+  color: var(--app-primary-active);
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.home-management-link {
+  position: absolute;
+  top: 1px;
+  right: 0;
+}
+
+.home-management-link:hover,
+.home-management-link:focus-visible,
+.home-clear-link:hover,
+.home-clear-link:focus-visible,
+.home-inline-link:hover,
+.home-inline-link:focus-visible,
+.home-insight-link:hover,
+.home-insight-link:focus-visible {
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
+.home-clear-link {
+  position: absolute;
+  top: 1px;
+  right: 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.home-resume-list {
+  display: grid;
+  gap: 8px;
+  max-height: 210px;
+  overflow-y: auto;
+  padding: 2px 3px 2px 2px;
+}
+
+.home-resume-option {
+  position: relative;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  gap: 12px;
+  min-height: 62px;
+  box-sizing: border-box;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-sm);
+  padding: 12px 13px;
+  background: var(--app-surface);
+  transition: border-color 160ms ease, background-color 160ms ease, box-shadow 160ms ease;
+}
+
+.home-resume-option input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+.home-resume-option:has(input:focus-visible) {
+  outline: 2px solid var(--app-primary);
+  outline-offset: 2px;
+}
+
+.home-resume-option:hover {
+  border-color: var(--app-border-strong);
+  background: var(--app-surface-soft);
+}
+
+.home-resume-option.is-selected {
+  border-color: var(--app-primary-subtle);
+  box-shadow: inset 3px 0 var(--app-primary);
+  background: color-mix(in srgb, var(--app-primary-soft) 52%, var(--app-surface));
+}
+
+.home-option-radio {
+  width: 17px;
+  height: 17px;
+  box-sizing: border-box;
+  border: 1px solid var(--app-border-strong);
+  border-radius: 50%;
+  background: var(--app-surface);
+}
+
+.home-resume-option.is-selected .home-option-radio {
+  border: 5px solid var(--app-primary);
+}
+
+.home-option-copy strong {
+  font-size: 14px;
+}
+
+.home-option-copy small {
+  font-size: 11px;
+}
+
+.home-option-check {
+  align-self: center;
+  color: var(--app-primary-active);
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.home-empty-source {
+  display: grid;
+  justify-items: start;
+  align-content: center;
+  min-height: 150px;
+  border: 1px dashed var(--app-border-strong);
+  border-radius: var(--app-radius-sm);
+  padding: 20px;
+  background: var(--app-surface-soft);
+}
+
+.home-empty-mark {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid var(--app-primary);
+  border-radius: 50%;
+  color: var(--app-primary);
+  font-size: 18px;
+}
+
+.home-empty-source strong {
+  margin-top: 12px;
+  color: var(--app-text);
+  font-size: 15px;
+}
+
+.home-empty-source p {
+  margin: 5px 0 0;
+  color: var(--app-text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.home-resume-state {
+  display: flex;
+  gap: 11px;
+  align-items: flex-start;
+  padding: 12px 13px;
+  border-top: 1px solid var(--app-border);
+  background: var(--app-surface-soft);
+}
+
+.home-resume-state > div {
+  display: grid;
+  gap: 4px;
+}
+
+.home-resume-state strong {
+  color: var(--app-text);
+  font-size: 12px;
+}
+
+.home-resume-state p {
+  margin: 0;
+  color: var(--app-text-secondary);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.home-state-mark {
+  width: 9px;
+  height: 9px;
+  margin-top: 4px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--app-primary);
+}
+
+.home-state-mark.is-ready { background: var(--app-success); }
+.home-state-mark.is-needs-review,
+.home-state-mark.is-preparing,
+.home-state-mark.is-pending,
+.home-state-mark.is-reparse { background: var(--app-warning); }
+.home-state-mark.is-failed { background: var(--app-danger); }
+.home-state-mark.is-running { animation: home-pulse 1.4s ease-in-out infinite; }
+
+.home-upload-trigger {
+  justify-self: start;
+  min-height: 30px;
+  color: var(--app-primary-active);
+  font-size: 12px;
+}
+
+.home-inline-upload {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  padding: 13px;
+  border: 1px dashed var(--app-border-strong);
+  border-radius: var(--app-radius-sm);
+}
+
+.home-inline-upload p {
+  grid-column: 1 / -1;
+  font-size: 11px;
+}
+
+.home-file-picker {
+  min-width: 0;
+  font-size: 12px;
+}
+
+.home-inline-upload .el-button {
+  min-height: 38px;
+}
+
+.home-jd-field {
+  flex: 1;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  min-height: 0;
+  gap: 9px;
+}
+
+.home-jd-label {
+  color: var(--app-text);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.home-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  margin: -1px;
+  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.home-jd-field :deep(.el-textarea),
+.home-jd-field :deep(.el-textarea__inner) {
+  height: 100%;
+  min-height: 330px !important;
+}
+
+.home-jd-field :deep(.el-textarea__inner) {
+  border-color: var(--app-border-strong);
+  border-radius: var(--app-radius-sm);
+  padding: 18px 44px 28px 20px;
+  color: var(--app-text);
+  font-size: 14px;
+  line-height: 1.75;
+  background: color-mix(in srgb, var(--app-bg-soft) 48%, var(--app-surface));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--app-border) 45%, transparent);
+}
+
+.home-jd-field :deep(.el-textarea__inner)::placeholder {
+  color: var(--app-text-muted);
+  opacity: 1;
+}
+
+.home-jd-field :deep(.el-textarea__inner):focus {
+  border-color: var(--app-primary);
+  box-shadow: inset 0 0 0 1px var(--app-primary);
+}
+
+.home-jd-field :deep(.el-input__count) {
+  right: 13px;
+  bottom: 9px;
+  padding-left: 6px;
+  background: transparent;
+}
+
+.home-field-boundary {
+  font-size: 11px;
+}
+
+.home-task-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 28px;
+  padding: 18px 32px;
+  border-top: 1px solid var(--app-border-strong);
+  background: var(--app-surface-soft);
+}
+
+.home-action-summary {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.home-action-label {
+  color: var(--app-primary-active);
+  font-family: var(--app-font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+.home-action-summary strong {
+  overflow: hidden;
+  color: var(--app-text);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home-action-summary > span:last-child {
+  color: var(--app-text-muted);
+  font-size: 11px;
+}
+
+.home-start-actions-buttons {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 7px;
+}
+
+.home-start-actions-buttons .el-button {
+  min-height: 46px;
+  padding-right: 22px;
+  padding-left: 22px;
+}
+
+.home-composer > .home-analysis-state {
+  border-top: 1px solid var(--app-border-strong);
+  border-radius: 0;
+  padding: 16px 32px;
+}
+
+.home-analysis-state {
+  gap: 11px;
+}
+
+.home-analysis-state > div {
+  gap: 5px;
+}
+
+.home-analysis-state strong {
+  font-size: 12px;
+}
+
+.home-analysis-state p {
+  font-size: 11px;
+}
+
+.home-insight-row {
+  border-bottom: 1px solid var(--app-border);
+  padding: 13px 0;
+}
+
+.home-insight-row > div {
+  display: grid;
+  gap: 3px;
+}
+
+.home-insight-row strong {
+  font-size: 13px;
+}
+
+.home-insight-row span {
+  font-size: 11px;
+}
+
+@media (max-width: 760px) {
+  .home-page {
+    min-height: 0;
+    align-content: start;
+    gap: 16px;
+  }
+
+  .home-page :deep(.ui-page-header h2) {
+    font-size: 28px;
+  }
+
+  .home-composer-grid {
+    grid-template-columns: 1fr;
+    min-height: 0;
+  }
+
+  .home-source-column,
+  .home-target-column {
+    gap: 18px;
+    padding: 22px 18px;
+  }
+
+  .home-source-column {
+    border-right: 0;
+    border-bottom: 1px solid var(--app-border);
+  }
+
+  .home-resume-list {
+    max-height: none;
+  }
+
+  .home-jd-field :deep(.el-textarea),
+  .home-jd-field :deep(.el-textarea__inner) {
+    min-height: 290px !important;
+  }
+
+  .home-task-bar {
+    grid-template-columns: 1fr;
+    gap: 15px;
+    padding: 17px 18px;
+  }
+
+  .home-action-summary strong {
+    white-space: normal;
+  }
+
+  .home-resume-option {
+    grid-template-columns: 18px minmax(0, 1fr);
+  }
+
+  .home-option-check {
+    grid-column: 2;
+    grid-row: 2;
+    justify-self: start;
+    margin-top: -5px;
+  }
+
+  .home-start-actions-buttons {
+    align-items: stretch;
+  }
+
+  .home-start-actions-buttons .el-button {
+    width: 100%;
+  }
+
+  .home-composer > .home-analysis-state {
+    padding: 16px 18px;
+  }
+
+  .home-insight-row {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+  }
+}
+
+@media (min-width: 761px) and (max-height: 820px) {
+  .home-page {
+    min-height: 0;
+    gap: 10px;
+  }
+
+  .home-composer-grid {
+    min-height: 0;
+  }
+
+  .home-source-column,
+  .home-target-column {
+    gap: 14px;
+    padding-top: 22px;
+    padding-bottom: 22px;
+  }
+
+  .home-target-column {
+    min-height: 0;
+  }
+
+  .home-jd-field {
+    flex: none;
+  }
+
+  .home-jd-field :deep(.el-textarea),
+  .home-jd-field :deep(.el-textarea__inner) {
+    height: 230px;
+    min-height: 230px !important;
+  }
+
+  .home-task-bar {
+    gap: 16px;
+    padding-top: 14px;
+    padding-bottom: 14px;
+  }
+}
+
+@media (max-width: 900px) {
+  .home-page {
+    min-height: 0;
+    align-content: start;
+    gap: 16px;
+  }
+
+  .home-composer-grid {
+    grid-template-columns: 1fr;
+    min-height: 0;
+  }
+
+  .home-source-column,
+  .home-target-column {
+    gap: 18px;
+    padding: 22px 18px;
+  }
+
+  .home-source-column {
+    border-right: 0;
+    border-bottom: 1px solid var(--app-border);
+  }
+
+  .home-jd-field :deep(.el-textarea),
+  .home-jd-field :deep(.el-textarea__inner) {
+    height: auto;
+    min-height: 290px !important;
+  }
+
+  .home-task-bar {
+    grid-template-columns: 1fr;
+    gap: 15px;
+    padding: 17px 18px;
+  }
+
+  .home-action-summary strong {
+    white-space: normal;
+  }
+
+  .home-resume-option {
+    grid-template-columns: 18px minmax(0, 1fr);
+  }
+
+  .home-option-check {
+    grid-column: 2;
+    grid-row: 2;
+    justify-self: start;
+    margin-top: -5px;
+  }
+
+  .home-start-actions-buttons {
+    align-items: stretch;
+  }
+
+  .home-start-actions-buttons .el-button {
+    width: 100%;
+  }
+
+  .home-composer > .home-analysis-state {
+    padding: 16px 18px;
   }
 }
 </style>

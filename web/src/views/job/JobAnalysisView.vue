@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import ErrorState from '@/components/common/ErrorState.vue'
 import SkeletonBlock from '@/components/common/SkeletonBlock.vue'
@@ -16,6 +16,7 @@ const loading = ref(false)
 const error = ref<string | null>(null)
 const optimizationResult = ref<OptimizationAnalysisResult | null>(null)
 const selectedRequirementId = ref<number | null>(null)
+const evidenceDetailRef = ref<HTMLElement | null>(null)
 
 const parsePositiveId = (value: unknown) => {
   const raw = Array.isArray(value) ? value[0] : value
@@ -127,6 +128,17 @@ const selectRequirement = (requirementId: number) => {
   selectedRequirementId.value = requirementId
 }
 
+watch(selectedRequirementId, async () => {
+  await nextTick()
+  const detail = evidenceDetailRef.value
+  if (!detail) return
+  if (detail.scrollTo) {
+    detail.scrollTo({ top: 0, behavior: 'auto' })
+  } else {
+    detail.scrollTop = 0
+  }
+})
+
 const goToWorkspace = (requirementId = selectedRequirement.value?.evidenceRequirementId) => {
   if (!optimizationTaskId.value) return
   router.push({
@@ -218,7 +230,14 @@ onMounted(loadResult)
             @select="selectRequirement"
           />
 
-          <article v-if="selectedRequirement" class="analysis-evidence-detail">
+          <article
+            v-if="selectedRequirement"
+            ref="evidenceDetailRef"
+            class="analysis-evidence-detail"
+            role="region"
+            tabindex="0"
+            aria-label="当前岗位要求的证据详情，可滚动"
+          >
             <header class="analysis-detail-header">
               <div>
                 <span class="analysis-detail-eyebrow">EVIDENCE REVIEW</span>
@@ -369,19 +388,40 @@ onMounted(loadResult)
 <style scoped>
 .analysis-task-page {
   display: flex;
-  min-height: 100%;
+  width: 100%;
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
+  box-sizing: border-box;
   flex-direction: column;
+  overflow: hidden;
   color: var(--app-text);
   background: var(--app-stage);
 }
 
 .analysis-task-content {
   display: flex;
+  min-width: 0;
   min-height: 0;
-  flex: 1 1 auto;
+  height: 0;
+  box-sizing: border-box;
+  flex: 1 1 0;
   flex-direction: column;
-  gap: var(--app-space-5);
-  padding: var(--app-space-5) var(--app-content-gutter) var(--app-space-8);
+  gap: var(--app-space-3);
+  overflow: hidden;
+  padding: var(--app-space-3) var(--app-content-gutter) var(--app-space-3);
+}
+
+.analysis-task-content > .ui-skeleton-block,
+.analysis-task-content > .ui-error-state,
+.analysis-task-content > .ui-empty-state {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 0;
+  align-content: center;
+  overflow: auto;
+  box-sizing: border-box;
 }
 
 .analysis-summary-strip {
@@ -446,24 +486,49 @@ onMounted(loadResult)
 
 .analysis-review-layout {
   display: grid;
+  min-width: 0;
   min-height: 0;
-  flex: 1 1 auto;
+  height: 0;
+  box-sizing: border-box;
+  flex: 1 1 0;
   grid-template-columns: var(--app-workspace-requirements-width) minmax(0, 1fr);
   overflow: hidden;
+  overscroll-behavior: contain;
   border-top: 1px solid var(--app-border-strong);
+  border-bottom: 1px solid var(--app-border-strong);
   background: var(--app-surface);
 }
 
 .analysis-review-layout :deep(.requirements-rail) {
+  height: 100%;
+  min-height: 0;
   overflow: hidden;
+  box-sizing: border-box;
+}
+
+.analysis-review-layout :deep(.requirement-list) {
+  min-height: 0;
+  overscroll-behavior-y: contain;
+  scrollbar-gutter: stable;
 }
 
 .analysis-evidence-detail {
+  width: 100%;
+  height: 100%;
   min-width: 0;
   min-height: 0;
-  overflow: auto;
+  box-sizing: border-box;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
   scrollbar-color: var(--app-scroll-thumb) transparent;
+  scrollbar-gutter: stable;
   scrollbar-width: thin;
+}
+
+.analysis-evidence-detail:focus-visible {
+  outline: 2px solid var(--app-primary);
+  outline-offset: -2px;
 }
 
 .analysis-detail-header {
@@ -663,12 +728,17 @@ onMounted(loadResult)
 
 .analysis-legacy-layout {
   display: grid;
+  min-width: 0;
   min-height: 0;
-  flex: 1 1 auto;
+  height: 0;
+  box-sizing: border-box;
+  flex: 1 1 0;
   grid-template-columns: minmax(240px, 0.34fr) minmax(0, 1fr);
   gap: var(--app-space-8);
+  overflow: hidden;
   border-top: 1px solid var(--app-border-strong);
-  padding-top: var(--app-space-5);
+  border-bottom: 1px solid var(--app-border-strong);
+  padding-top: var(--app-space-3);
 }
 
 .legacy-warning {
@@ -691,8 +761,12 @@ onMounted(loadResult)
 
 .legacy-detail-list {
   min-width: 0;
-  overflow: auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
   scrollbar-color: var(--app-scroll-thumb) transparent;
+  scrollbar-gutter: stable;
   scrollbar-width: thin;
 }
 
@@ -766,18 +840,16 @@ onMounted(loadResult)
 }
 
 @media (max-width: 1119px) {
-  .analysis-task-page {
-    min-height: 100%;
-  }
-
   .analysis-task-content {
-    padding: var(--app-space-4) var(--app-content-gutter-narrow) var(--app-space-8);
+    padding: var(--app-space-3) var(--app-content-gutter-narrow) var(--app-space-3);
   }
 
   .analysis-summary-strip {
     align-items: flex-start;
     flex-direction: column;
     gap: var(--app-space-3);
+    padding-top: var(--app-space-2);
+    padding-bottom: var(--app-space-2);
   }
 
   .analysis-summary-strip > p {
@@ -786,32 +858,37 @@ onMounted(loadResult)
   }
 
   .analysis-review-layout {
-    display: block;
-    overflow: visible;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
   }
 
   .analysis-review-layout :deep(.requirements-rail) {
-    overflow: visible;
+    height: auto;
+    overflow: hidden;
   }
 
   .analysis-evidence-detail {
-    overflow: visible;
+    height: auto;
     border-top: 1px solid var(--app-border-strong);
+    grid-row: 2;
   }
 
   .analysis-legacy-layout {
-    display: block;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    gap: var(--app-space-4);
+    padding-top: var(--app-space-3);
   }
 
   .legacy-warning {
-    margin-bottom: var(--app-space-5);
-    padding: 0 0 var(--app-space-5);
+    margin-bottom: 0;
+    padding: 0 0 var(--app-space-4);
     border-right: 0;
     border-bottom: 1px solid var(--app-border-strong);
   }
 
   .legacy-detail-list {
-    overflow: visible;
+    height: auto;
   }
 }
 

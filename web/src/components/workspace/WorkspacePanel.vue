@@ -39,9 +39,7 @@ const previewComponentMounted = ref(false)
 const workspaceMode = ref<'edit' | 'preview'>('edit')
 const initialRequirementId = parsePositiveId(route.query.requirement)
 const inspectorOpen = ref(true)
-const mobilePanel = ref<'editor' | 'suggestions'>(
-  initialRequirementId !== null ? 'suggestions' : 'editor',
-)
+const mobilePanel = ref<'editor' | 'suggestions'>('editor')
 const selectedRequirementId = ref<number | null>(initialRequirementId)
 
 // At 1120px, compact columns are 245px + 340px, leaving 535px for the Resume stage.
@@ -82,11 +80,11 @@ const saveStatusText = computed(() => {
     case 'dirty':
       return '未保存'
     case 'saving':
-      return '正在保存'
+      return '保存中'
     case 'saved':
-      return '已保存'
+      return '✓ 已保存'
     case 'failed':
-      return '保存失败'
+      return '保存失败 · 重新保存'
     case 'conflict':
       return '存在冲突'
     default:
@@ -127,7 +125,6 @@ const goToAnalysis = () => {
 const selectRequirement = (requirementId: number) => {
   selectedRequirementId.value = requirementId
   inspectorOpen.value = true
-  if (isNarrowScreen.value) mobilePanel.value = 'suggestions'
   void router.replace({
     query: { ...route.query, requirement: String(requirementId) },
   })
@@ -236,7 +233,6 @@ watch(routeRequirementId, (requirementId) => {
   selectedRequirementId.value = requirementId
   if (requirementId) {
     inspectorOpen.value = true
-    if (isNarrowScreen.value) mobilePanel.value = 'suggestions'
   }
 })
 
@@ -330,10 +326,10 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
 
     <div v-if="workspaceMode === 'edit'" class="workspace-toolbar" aria-label="编辑工具">
       <div class="workspace-toolbar-context">
-        <span>编辑工作区</span>
+        <span class="workspace-toolbar-kicker">岗位定向编辑</span>
         <strong>{{ resumeName }}</strong>
         <span v-if="effectiveSelectedRequirementId" class="workspace-selected-requirement">
-          要求 {{ requirements.findIndex((item) => item.evidenceRequirementId === effectiveSelectedRequirementId) + 1 }}：{{ requirements.find((item) => item.evidenceRequirementId === effectiveSelectedRequirementId)?.requirementText }}
+          当前优化：{{ requirements.find((item) => item.evidenceRequirementId === effectiveSelectedRequirementId)?.requirementText }}
         </span>
       </div>
       <div class="workspace-toolbar-actions">
@@ -388,7 +384,7 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
 
     <div v-else-if="editor.status.value === 'failed'" class="workspace-failed" role="alert">
       <p>{{ editor.saveError.value ?? '保存失败' }}。草稿仍在，不会丢失。</p>
-      <el-button type="primary" @click="handleRetry">重试保存</el-button>
+      <el-button type="primary" @click="handleRetry">重新保存</el-button>
     </div>
 
     <SkeletonBlock v-if="editor.loading.value" title :rows="10" />
@@ -498,9 +494,13 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
 <style scoped>
 .workspace-panel {
   display: flex;
-  flex-direction: column;
+  width: 100%;
   height: 100%;
+  max-height: 100%;
   min-width: 0;
+  min-height: 0;
+  box-sizing: border-box;
+  flex-direction: column;
   overflow: hidden;
   color: var(--app-text);
   background: var(--app-stage);
@@ -508,6 +508,7 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
 
 .workspace-toolbar {
   display: flex;
+  flex: 0 0 auto;
   min-height: 48px;
   align-items: center;
   justify-content: space-between;
@@ -530,6 +531,11 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
   color: var(--app-text-muted);
   font-size: var(--app-font-size-xs);
   white-space: nowrap;
+}
+
+.workspace-toolbar-kicker {
+  color: var(--app-text-muted);
+  font-weight: 700;
 }
 
 .workspace-toolbar-context strong {
@@ -722,8 +728,13 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
 .workspace-preview-mode {
   min-width: 0;
   min-height: 0;
-  height: 100%;
-  flex: 1 1 auto;
+  height: 0;
+  flex: 1 1 0;
+}
+
+.workspace-edit-mode {
+  display: flex;
+  flex-direction: column;
 }
 
 .workspace-mobile-switch {
@@ -732,17 +743,33 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
 
 .workspace-layout {
   display: grid;
-  grid-template-columns:
-    var(--app-workspace-requirements-width)
-    minmax(0, 1fr)
-    var(--app-workspace-inspector-width);
+  grid-template-columns: 20% minmax(0, 60%) 20%;
+  height: 0;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 0;
+  overflow: hidden;
+}
+
+.workspace-layout.is-inspector-closed {
+  grid-template-columns: 20% minmax(0, 80%);
+}
+
+.workspace-layout :deep(.requirements-rail) {
   height: 100%;
   min-height: 0;
   overflow: hidden;
 }
 
-.workspace-layout.is-inspector-closed {
-  grid-template-columns: var(--app-workspace-requirements-width) minmax(0, 1fr);
+.workspace-layout :deep(.requirement-list) {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  scrollbar-gutter: stable;
+}
+
+.workspace-layout :deep(.requirement-copy) {
+  display: none;
 }
 
 .resume-stage {
@@ -750,13 +777,19 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
   min-width: 0;
   min-height: 0;
   flex-direction: column;
+  overflow: hidden;
   background: var(--app-stage);
 }
 
 .resume-stage-scroll {
+  height: 0;
   min-height: 0;
-  overflow: auto;
+  flex: 1 1 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
   scrollbar-color: var(--app-scroll-thumb) transparent;
+  scrollbar-gutter: stable;
   scrollbar-width: thin;
 }
 
@@ -765,7 +798,6 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  flex: 1 1 auto;
   background: var(--app-stage);
 }
 
@@ -774,15 +806,8 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
 }
 
 @media (max-width: 1250px) and (min-width: 1120px) {
-  .workspace-layout {
-    grid-template-columns:
-      var(--app-workspace-requirements-width-tablet)
-      minmax(0, 1fr)
-      var(--app-workspace-inspector-width-tablet);
-  }
-
   .workspace-layout.is-inspector-closed {
-    grid-template-columns: var(--app-workspace-requirements-width-tablet) minmax(0, 1fr);
+    grid-template-columns: 20% minmax(0, 80%);
   }
 
   .workspace-toolbar {
@@ -792,18 +817,9 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
 }
 
 @media (max-width: 1119px) {
-  .workspace-panel {
-    height: auto;
-    min-height: 100%;
-    overflow: visible;
-  }
-
   .workspace-toolbar {
-    min-height: 52px;
-    align-items: flex-start;
-    flex-direction: column;
-    gap: var(--app-space-2);
-    padding: var(--app-space-3) var(--app-content-gutter-narrow);
+    min-height: 46px;
+    padding: 0 var(--app-content-gutter-narrow);
   }
 
   .workspace-toolbar-context {
@@ -815,14 +831,14 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
   }
 
   .workspace-toolbar-actions {
-    width: 100%;
-    justify-content: flex-start;
+    flex-wrap: nowrap;
   }
 
   .workspace-mobile-switch {
     display: inline-flex;
     width: calc(100% - 32px);
     margin: 8px 16px;
+    flex: 0 0 auto;
   }
 
   .workspace-mobile-switch button {
@@ -832,24 +848,47 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
   }
 
   .workspace-layout {
-    display: flex;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .workspace-layout :deep(.requirements-rail) {
     height: auto;
     min-height: 0;
-    overflow: visible;
-    flex-direction: column;
+    overflow: hidden;
   }
 
-  .resume-stage {
-    min-height: 700px;
+  .workspace-layout :deep(.rail-header) {
+    padding: 11px 15px 9px;
   }
 
+  .workspace-layout :deep(.rail-intro),
+  .workspace-layout :deep(.rail-meta),
+  .workspace-layout :deep(.rail-context) {
+    display: none;
+  }
+
+  .workspace-layout :deep(.requirement-list) {
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-gutter: auto;
+  }
+
+  .workspace-layout :deep(.requirement-item) {
+    min-width: 205px;
+    padding-top: 10px;
+    padding-bottom: 10px;
+  }
+
+  .resume-stage,
   .workspace-layout :deep(.workspace-inspector) {
+    min-height: 0;
+    overflow: hidden;
     border-top: 1px solid var(--app-border-strong);
   }
 
   .workspace-preview-mode {
-    height: auto;
-    overflow: visible;
     padding: 0;
   }
 
@@ -863,6 +902,18 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
 @media (max-width: 640px) {
   .workspace-toolbar {
     display: none;
+  }
+
+  .workspace-panel :deep(.task-workflow) {
+    gap: var(--app-space-1);
+  }
+
+  .workspace-panel :deep(.task-workflow-index) {
+    display: none;
+  }
+
+  .workspace-panel :deep(.task-save-status) {
+    margin-left: auto;
   }
 
   .workspace-mobile-switch {

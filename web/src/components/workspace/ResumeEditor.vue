@@ -894,6 +894,20 @@ const handleSuggestCommand = (bulletId: string, command: BulletSuggestIntent | '
   display: grid;
   min-width: 0;
   gap: 6px;
+  padding: 5px 7px 7px;
+  border: 1px solid transparent;
+  transition: border-color 140ms ease, background-color 140ms ease;
+}
+
+.editor-field:hover,
+.editor-field:focus-within {
+  border-color: var(--app-border-strong);
+  background: var(--app-surface-soft);
+}
+
+.editor-field:focus-within {
+  border-color: var(--app-primary);
+  background: var(--app-primary-soft);
 }
 
 .editor-field > span,
@@ -915,6 +929,15 @@ const handleSuggestCommand = (bulletId: string, command: BulletSuggestIntent | '
 .contact-type-field {
   display: grid;
   gap: 6px;
+  padding: 5px 7px 7px;
+  border: 1px solid transparent;
+  transition: border-color 140ms ease, background-color 140ms ease;
+}
+
+.contact-type-field:hover,
+.contact-type-field:focus-within {
+  border-color: var(--app-border-strong);
+  background: var(--app-surface-soft);
 }
 
 .contact-type {
@@ -1089,8 +1112,17 @@ const handleSuggestCommand = (bulletId: string, command: BulletSuggestIntent | '
   display: grid;
   gap: 14px;
   min-width: 0;
-  padding: 18px 0 0;
-  border-top: 1px solid var(--app-border-soft);
+  margin: 0 -8px;
+  padding: 18px 8px 0;
+  border: 1px solid transparent;
+  border-top-color: var(--app-border-soft);
+  transition: border-color 140ms ease, background-color 140ms ease;
+}
+
+.editor-entry:hover,
+.editor-entry:focus-within {
+  border-color: var(--app-border-strong);
+  background: color-mix(in srgb, var(--app-surface-soft) 70%, transparent);
 }
 
 .entry-grid,
@@ -1140,6 +1172,14 @@ const handleSuggestCommand = (bulletId: string, command: BulletSuggestIntent | '
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 10px;
   align-items: start;
+  border: 1px solid transparent;
+  transition: border-color 140ms ease, background-color 140ms ease;
+}
+
+.bullet-line:hover,
+.bullet-line:focus-within {
+  border-color: var(--app-border-strong);
+  background: var(--app-primary-soft);
 }
 
 .bullet-field {
