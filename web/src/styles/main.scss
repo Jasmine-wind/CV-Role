@@ -470,6 +470,16 @@
   line-height: 1.7;
 }
 
+.auth-form-error {
+  margin-top: 4px;
+  border-top: 1px solid var(--app-danger);
+  border-bottom: 1px solid var(--app-primary-subtle);
+  padding: 10px 0;
+  color: var(--app-danger);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
 .auth-actions {
   display: grid;
   gap: 14px;

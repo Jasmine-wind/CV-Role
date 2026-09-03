@@ -16,6 +16,7 @@ interface RegisterForm {
 const formRef = ref<FormInstance>()
 const router = useRouter()
 const loading = ref(false)
+const submitError = ref<string | null>(null)
 
 const form = reactive<RegisterForm>({
   username: '',
@@ -42,6 +43,8 @@ const rules: FormRules<RegisterForm> = {
 }
 
 const handleSubmit = async () => {
+  if (loading.value) return
+  submitError.value = null
   const valid = await formRef.value?.validate()
 
   if (!valid) {
@@ -59,8 +62,9 @@ const handleSubmit = async () => {
     })
     ElMessage.success('注册成功，请登录')
     await router.push('/login')
-  } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '注册失败')
+  } catch {
+    submitError.value = '注册未完成，请检查填写的信息后重试。'
+    ElMessage.error(submitError.value)
   } finally {
     loading.value = false
   }
@@ -72,7 +76,14 @@ const handleSubmit = async () => {
     <h1 class="auth-title">注册</h1>
     <p class="auth-subtitle">创建账号后，上传简历并粘贴目标岗位 JD 即可开始分析。</p>
 
-    <el-form ref="formRef" :model="form" :rules="rules" label-position="top" size="large">
+    <el-form
+      ref="formRef"
+      :model="form"
+      :rules="rules"
+      label-position="top"
+      size="large"
+      @submit.prevent="handleSubmit"
+    >
         <el-form-item label="用户名" prop="username">
           <el-input
             v-model.trim="form.username"
@@ -95,12 +106,18 @@ const handleSubmit = async () => {
           />
         </el-form-item>
 
-        <el-form-item label="昵称" prop="nickname">
-          <el-input v-model.trim="form.nickname" autocomplete="nickname" placeholder="可选" />
+        <el-form-item label="昵称（可选）" prop="nickname">
+          <el-input v-model.trim="form.nickname" autocomplete="nickname" placeholder="不填写也可以" />
         </el-form-item>
 
+        <div v-if="submitError" class="auth-form-error" role="alert">{{ submitError }}</div>
         <div class="auth-actions">
-          <el-button type="primary" size="large" :loading="loading" @click="handleSubmit">
+          <el-button
+            type="primary"
+            native-type="submit"
+            size="large"
+            :loading="loading"
+          >
             注册
           </el-button>
           <p class="auth-footer">

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { getJobDirectionInsights } from '@/api/job-direction-insight'
 import ErrorState from '@/components/common/ErrorState.vue'
@@ -18,12 +18,14 @@ const insights = ref<JobDirectionInsights | null>(null)
 const loading = ref(false)
 const error = ref<string | null>(null)
 const selectedByCohort = ref<Record<string, string>>({})
+const selectedCohortIndex = ref(0)
 
 const load = async () => {
   loading.value = true
   error.value = null
   try {
     insights.value = await getJobDirectionInsights()
+    selectedCohortIndex.value = 0
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : '暂时无法读取方向洞察'
   } finally {
@@ -45,6 +47,11 @@ const coverageLabel = (level: EvidenceCoverageLevel) => {
 const coverageClass = (level: EvidenceCoverageLevel) => `is-${level.toLowerCase()}`
 
 const cohortKey = (cohort: JobDirectionCohort) => `${cohort.resumeId}-${cohort.newestAnalysisAt}`
+
+const selectedCohort = computed(() => {
+  const cohorts = insights.value?.cohorts ?? []
+  return cohorts[selectedCohortIndex.value] ?? cohorts[0] ?? null
+})
 
 const selectedRequirement = (cohort: JobDirectionCohort) => {
   const selectedLabel = selectedByCohort.value[cohortKey(cohort)]
@@ -103,81 +110,91 @@ onMounted(() => {
       @action="router.push('/app')"
     />
 
-    <div v-else class="cohort-list">
-      <article v-for="cohort in insights.cohorts" :key="cohortKey(cohort)" class="insight-cohort">
+    <div v-else class="insight-workspace">
+      <p class="insight-boundary">
+        以下支持情况来自当时冻结的简历材料，不是对你现实能力的判断；当前工作区的修改也不会回算这里的历史结果。
+      </p>
+
+      <div v-if="insights.cohorts.length > 1" class="cohort-switcher">
+        <label for="insight-cohort">查看哪份简历</label>
+        <select id="insight-cohort" v-model.number="selectedCohortIndex">
+          <option v-for="(cohort, index) in insights.cohorts" :key="cohortKey(cohort)" :value="index">
+            {{ cohort.resumeName }} · {{ cohort.sampleSize }} 个岗位
+          </option>
+        </select>
+      </div>
+
+      <article v-if="selectedCohort" :key="cohortKey(selectedCohort)" class="insight-cohort">
         <header class="cohort-header">
           <div class="cohort-identity">
-            <h2>{{ cohort.resumeName }}</h2>
-            <p>{{ cohort.sampleSize }} 个不同岗位 · {{ windowText(cohort) }}</p>
+            <p class="cohort-context-label">当前材料</p>
+            <h2>{{ selectedCohort.resumeName }}</h2>
+            <p>{{ selectedCohort.sampleSize }} 个不同岗位 · {{ windowText(selectedCohort) }}</p>
           </div>
           <dl class="cohort-facts">
-            <div><dt>样本</dt><dd>{{ cohort.sampleSize }} / {{ cohort.minimumSampleSize }}+</dd></div>
-            <div><dt>最新分析</dt><dd>{{ cohort.newestAnalysisAt.slice(0, 10) }}</dd></div>
+            <div><dt>分析岗位</dt><dd>{{ selectedCohort.sampleSize }} 个</dd></div>
+            <div><dt>最新分析</dt><dd>{{ selectedCohort.newestAnalysisAt.slice(0, 10) }}</dd></div>
           </dl>
         </header>
 
-        <p class="cohort-note">
-          以下状态只描述当时冻结的简历材料是否支持这些岗位要求；不会判断你的真实能力，也不会实时随工作区编辑变化。
-        </p>
-
-        <div v-if="cohort.commonRequirements.length" class="insight-layout">
-          <section class="common-requirements" aria-label="常见岗位要求">
+        <div v-if="selectedCohort.commonRequirements.length" class="insight-layout">
+          <section class="common-requirements" aria-label="反复出现的岗位要求">
             <header class="insight-section-header">
               <div>
-                <span class="insight-section-label">COMMON REQUIREMENTS</span>
+                <p class="insight-section-label">岗位要求</p>
                 <h3>反复出现的要求</h3>
               </div>
-              <span>{{ cohort.commonRequirements.length }} 条</span>
+              <span>{{ selectedCohort.commonRequirements.length }} 条</span>
             </header>
             <div class="insight-requirement-list" role="list">
               <button
-                v-for="requirement in cohort.commonRequirements"
+                v-for="requirement in selectedCohort.commonRequirements"
                 :key="requirement.label"
                 type="button"
                 class="insight-requirement-row"
-                :class="{ 'is-selected': selectedRequirement(cohort)?.label === requirement.label }"
-                @click="selectRequirement(cohort, requirement)"
+                :class="{ 'is-selected': selectedRequirement(selectedCohort)?.label === requirement.label }"
+                @click="selectRequirement(selectedCohort, requirement)"
               >
                 <span class="insight-requirement-name">{{ requirement.label }}</span>
                 <span class="insight-requirement-frequency">
-                  {{ requirement.occurrenceCount }} / {{ requirement.sampleSize }} 个岗位
+                  {{ requirement.occurrenceCount }} / {{ requirement.sampleSize }} 个岗位出现
                 </span>
                 <span class="insight-requirement-distribution">
-                  <span v-if="requirement.matchedCount" class="is-matched">匹配 {{ requirement.matchedCount }}</span>
-                  <span v-if="requirement.partialEvidenceCount" class="is-partial">部分 {{ requirement.partialEvidenceCount }}</span>
-                  <span v-if="requirement.noEvidenceCount" class="is-missing">未体现 {{ requirement.noEvidenceCount }}</span>
+                  <span v-if="requirement.matchedCount" class="is-matched">已有优势 {{ requirement.matchedCount }}</span>
+                  <span v-if="requirement.partialEvidenceCount" class="is-partial">建议完善 {{ requirement.partialEvidenceCount }}</span>
+                  <span v-if="requirement.noEvidenceCount" class="is-missing">当前材料未体现 {{ requirement.noEvidenceCount }}</span>
                 </span>
               </button>
             </div>
           </section>
 
-          <aside v-if="selectedRequirement(cohort)" class="insight-source-trace" aria-label="岗位要求来源">
+          <aside v-if="selectedRequirement(selectedCohort)" class="insight-source-trace" aria-label="来源与证据">
             <header class="insight-section-header">
               <div>
-                <span class="insight-section-label">SOURCE TRACE</span>
-                <h3>{{ selectedRequirement(cohort)?.label }}</h3>
+                <p class="insight-section-label">来源与证据</p>
+                <h3>{{ selectedRequirement(selectedCohort)?.label }}</h3>
               </div>
-              <span>{{ selectedRequirement(cohort)?.sources.length }} 个来源</span>
+              <span>{{ selectedRequirement(selectedCohort)?.sources.length }} 个来源</span>
             </header>
 
             <section class="trace-distribution">
-              <span class="trace-label">Evidence distribution</span>
+              <span class="trace-label">当时材料的支持情况</span>
               <div class="trace-counts">
-                <span class="is-matched">匹配 {{ selectedRequirement(cohort)?.matchedCount }}</span>
-                <span class="is-partial">部分 {{ selectedRequirement(cohort)?.partialEvidenceCount }}</span>
-                <span class="is-missing">未体现 {{ selectedRequirement(cohort)?.noEvidenceCount }}</span>
+                <span class="is-matched">已有优势 {{ selectedRequirement(selectedCohort)?.matchedCount }}</span>
+                <span class="is-partial">建议完善 {{ selectedRequirement(selectedCohort)?.partialEvidenceCount }}</span>
+                <span class="is-missing">当前材料未体现 {{ selectedRequirement(selectedCohort)?.noEvidenceCount }}</span>
               </div>
             </section>
 
             <section class="trace-sources">
               <div class="trace-sources-heading">
-                <span class="trace-label">Sources</span>
+                <span class="trace-label">来源</span>
                 <span>只读引用</span>
               </div>
-              <article v-for="source in selectedRequirement(cohort)?.sources" :key="source.evidenceRequirementId" class="trace-source">
+              <article v-for="(source, index) in selectedRequirement(selectedCohort)?.sources" :key="source.evidenceRequirementId" class="trace-source">
                 <div class="trace-source-heading">
                   <span :class="['trace-status', coverageClass(source.matchLevel)]">{{ coverageLabel(source.matchLevel) }}</span>
-                  <span>任务 #{{ source.optimizationTaskId }}</span>
+                  <span>来源 {{ String(index + 1).padStart(2, '0') }}</span>
                 </div>
                 <p>{{ source.requirementText }}</p>
                 <blockquote v-for="evidence in source.evidences" :key="evidence.requirementEvidenceId">
@@ -189,7 +206,7 @@ onMounted(() => {
           </aside>
         </div>
         <p v-else class="no-common-requirements">
-          当前样本中还没有达到“至少半数岗位出现”的保守共性要求。
+          这些岗位还没有一个在至少一半样本中出现的共同要求。
         </p>
       </article>
     </div>
@@ -202,9 +219,52 @@ onMounted(() => {
   gap: var(--app-section-spacing);
 }
 
-.cohort-list {
+.insight-workspace {
   display: grid;
-  gap: var(--app-space-8);
+  gap: var(--app-space-5);
+}
+
+.insight-boundary {
+  max-width: 76ch;
+  margin: 0;
+  border-top: 1px solid var(--app-border);
+  border-bottom: 1px solid var(--app-border);
+  padding: var(--app-space-3) 0;
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-size-sm);
+  line-height: var(--app-line-height-body);
+}
+
+.cohort-switcher {
+  display: flex;
+  align-items: center;
+  gap: var(--app-space-3);
+  max-width: 520px;
+}
+
+.cohort-switcher label {
+  flex: 0 0 auto;
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-size-sm);
+  font-weight: 650;
+}
+
+.cohort-switcher select {
+  min-width: 0;
+  max-width: 100%;
+  border: 1px solid var(--app-border-strong);
+  border-radius: var(--app-radius-sm);
+  padding: 8px 32px 8px 10px;
+  color: var(--app-text);
+  font: inherit;
+  background: var(--app-surface);
+}
+
+.cohort-context-label {
+  margin: 0;
+  color: var(--app-text-muted) !important;
+  font-size: var(--app-font-size-xs) !important;
+  font-weight: 700;
 }
 
 .insight-cohort {
@@ -243,7 +303,6 @@ onMounted(() => {
 }
 
 .cohort-identity p,
-.cohort-note,
 .no-common-requirements {
   margin: 0;
   color: var(--app-text-secondary);
@@ -279,11 +338,6 @@ onMounted(() => {
   color: var(--app-text);
   font-size: var(--app-font-size-sm);
   font-weight: 700;
-}
-
-.cohort-note {
-  border-left: 1px solid var(--app-border-strong);
-  padding-left: var(--app-space-3);
 }
 
 .insight-layout {
@@ -358,9 +412,11 @@ onMounted(() => {
 }
 
 .insight-requirement-name {
+  min-width: 0;
   color: var(--app-text);
   font-size: var(--app-font-size-md);
   font-weight: 700;
+  overflow-wrap: anywhere;
 }
 
 .insight-requirement-frequency {
@@ -447,6 +503,7 @@ onMounted(() => {
 .trace-source p {
   color: var(--app-text);
   font-weight: 700;
+  overflow-wrap: anywhere;
 }
 
 .trace-source blockquote {
@@ -456,6 +513,7 @@ onMounted(() => {
   color: var(--app-text);
   font-size: var(--app-font-size-xs);
   line-height: var(--app-line-height-body);
+  overflow-wrap: anywhere;
 }
 
 .no-common-requirements {
@@ -476,6 +534,15 @@ onMounted(() => {
 }
 
 @media (max-width: 640px) {
+  .cohort-switcher {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .cohort-switcher select {
+    width: 100%;
+  }
+
   .cohort-header {
     flex-direction: column;
   }

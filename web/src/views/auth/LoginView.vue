@@ -12,6 +12,7 @@ interface LoginForm {
 }
 
 const formRef = ref<FormInstance>()
+const submitError = ref<string | null>(null)
 const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
@@ -33,6 +34,8 @@ const rules: FormRules<LoginForm> = {
 }
 
 const handleSubmit = async () => {
+  if (authStore.loading) return
+  submitError.value = null
   const valid = await formRef.value?.validate()
 
   if (!valid) {
@@ -44,8 +47,9 @@ const handleSubmit = async () => {
     ElMessage.success('登录成功')
     const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : '/app'
     await router.push(redirect)
-  } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '登录失败')
+  } catch {
+    submitError.value = '登录未完成，请检查用户名或密码后重试。'
+    ElMessage.error(submitError.value)
   }
 }
 </script>
@@ -55,7 +59,14 @@ const handleSubmit = async () => {
     <h1 class="auth-title">登录</h1>
     <p class="auth-subtitle">使用用户名或邮箱登录，继续为目标岗位准备简历。</p>
 
-    <el-form ref="formRef" :model="form" :rules="rules" label-position="top" size="large">
+    <el-form
+      ref="formRef"
+      :model="form"
+      :rules="rules"
+      label-position="top"
+      size="large"
+      @submit.prevent="handleSubmit"
+    >
         <el-form-item label="用户名或邮箱" prop="account">
           <el-input
             v-model.trim="form.account"
@@ -74,8 +85,14 @@ const handleSubmit = async () => {
           />
         </el-form-item>
 
+        <div v-if="submitError" class="auth-form-error" role="alert">{{ submitError }}</div>
         <div class="auth-actions">
-          <el-button type="primary" size="large" :loading="authStore.loading" @click="handleSubmit">
+          <el-button
+            type="primary"
+            native-type="submit"
+            size="large"
+            :loading="authStore.loading"
+          >
             登录
           </el-button>
           <p class="auth-footer">

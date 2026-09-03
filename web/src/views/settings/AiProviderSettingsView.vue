@@ -23,6 +23,7 @@ const settings = ref<AiProviderCredential | null>(null)
 const testResult = ref<{ success: boolean; message: string } | null>(null)
 const saveError = ref<string | null>(null)
 const actionError = ref<string | null>(null)
+const savedNeedsEnable = ref(false)
 
 const form = reactive({
   baseUrl: '',
@@ -36,8 +37,13 @@ const canSubmit = computed(() =>
   Boolean(form.baseUrl.trim() && form.apiKey.trim() && form.model.trim()),
 )
 const statusLabel = computed(() => {
-  if (!configured.value) return '未配置'
-  return active.value ? '已启用' : '已停用'
+  if (!configured.value) return '系统提供的 AI'
+  return active.value ? '你的 API' : '系统提供的 AI'
+})
+const currentAiDescription = computed(() => {
+  if (active.value) return '你保存的 API 已启用，新任务会使用它。'
+  if (configured.value) return '你的配置已保存但尚未启用；系统提供的 AI 仍可正常使用。'
+  return '默认可直接使用，无需先配置自己的 API。'
 })
 
 const copySettingsToForm = (value: AiProviderCredential) => {
@@ -52,6 +58,7 @@ const load = async () => {
   loadFailed.value = false
   try {
     settings.value = await getAiProviderSettings()
+    savedNeedsEnable.value = false
     if (settings.value) copySettingsToForm(settings.value)
   } catch {
     loadFailed.value = true
@@ -96,6 +103,7 @@ const handleSave = async () => {
   saveError.value = null
   try {
     settings.value = await saveAiProviderSettings(input())
+    savedNeedsEnable.value = true
     copySettingsToForm(settings.value)
     testResult.value = null
     ElMessage.success('配置已保存；为保护账号安全，当前仍处于停用状态，需要手动启用')
@@ -115,6 +123,7 @@ const handleToggle = async () => {
   actionLoading.value = true
   try {
     settings.value = wasActive ? await disableAiProvider() : await enableAiProvider()
+    savedNeedsEnable.value = false
     copySettingsToForm(settings.value)
     ElMessage.success(
       wasActive ? '已停用你的 API 密钥，新任务将使用系统提供的 AI' : '已启用你的 API 密钥',
@@ -144,6 +153,7 @@ const handleDelete = async () => {
   try {
     await deleteAiProvider()
     settings.value = await getAiProviderSettings()
+    savedNeedsEnable.value = false
     copySettingsToForm(settings.value)
     ElMessage.success('已删除你的 API 密钥')
   } catch (error) {
@@ -177,89 +187,104 @@ onMounted(load)
     />
 
     <template v-else>
-      <div class="settings-layout">
-        <section class="settings-configuration" aria-label="Provider configuration">
-          <header class="settings-section-header">
-            <span class="settings-section-label">PROVIDER CONFIGURATION</span>
-            <h2>使用自己的 API 密钥</h2>
-            <p>可选配置。密钥不会在页面回显；保存后可以停用、替换或删除。</p>
-          </header>
+      <section class="settings-current-ai" aria-labelledby="current-ai-title">
+        <div>
+          <p class="settings-section-label">当前状态</p>
+          <h2 id="current-ai-title">当前使用的 AI</h2>
+          <p>{{ currentAiDescription }}</p>
+        </div>
+        <div class="settings-current-ai-status" :class="active ? 'is-active' : 'is-system'">
+          <span class="settings-status-dot" aria-hidden="true" />
+          <strong>{{ statusLabel }}</strong>
+        </div>
+      </section>
 
-          <p v-if="configured" class="settings-current-key">
-            当前密钥：<strong>{{ settings?.maskedApiKey || '已配置' }}</strong> · 替换配置后会自动停用，需要再次显式启用。
-          </p>
-
-          <el-form label-position="top" class="settings-form" @submit.prevent="handleSave">
-            <el-form-item label="Base URL" required>
-              <el-input
-                v-model="form.baseUrl"
-                placeholder="https://api.example.com/v1"
-                autocomplete="url"
-              />
-              <small>连接地址需使用 HTTPS 和标准 443 端口。</small>
-            </el-form-item>
-
-            <el-form-item label="API Key" required>
-              <el-input
-                v-model="form.apiKey"
-                type="password"
-                show-password
-                autocomplete="new-password"
-                placeholder="输入后用于测试或保存；保存后不会再次显示"
-              />
-            </el-form-item>
-
-            <el-form-item label="Model" required>
-              <el-input v-model="form.model" placeholder="例如 gpt-4o-mini" autocomplete="off" />
-            </el-form-item>
-
-            <div class="settings-actions">
-              <el-button :loading="testing" :disabled="!canSubmit" @click="handleTest">测试连接</el-button>
-              <el-button type="primary" :loading="saving" :disabled="!canSubmit" @click="handleSave">
-                {{ configured ? '保存并替换' : '保存配置' }}
-              </el-button>
-              <el-button v-if="configured" :loading="actionLoading" @click="handleToggle">
-                {{ active ? '停用' : '启用' }}
-              </el-button>
-            </div>
-          </el-form>
-
-          <section v-if="testResult" class="settings-test-result" :class="testResult.success ? 'is-success' : 'is-error'" role="status">
-            <strong>{{ testResult.success ? '连接测试成功' : '连接测试失败' }}</strong>
-            <p>{{ testResult.message }}</p>
-          </section>
-          <section v-if="saveError" class="settings-test-result is-error" role="alert">
-            <strong>保存配置失败</strong>
-            <p>{{ saveError }}</p>
-          </section>
-        </section>
-
-        <aside class="settings-context" aria-label="Provider status and security">
-          <section class="settings-context-section">
-            <span class="settings-section-label">STATUS</span>
-            <dl class="settings-status-list">
-              <div><dt>状态</dt><dd :class="active ? 'is-active' : configured ? 'is-disabled' : 'is-muted'">{{ statusLabel }}</dd></div>
-              <div><dt>Provider</dt><dd>{{ settings?.providerType || 'OpenAI-compatible' }}</dd></div>
-              <div v-if="configured"><dt>Credential</dt><dd>{{ settings?.maskedApiKey || '已配置' }}</dd></div>
-            </dl>
-          </section>
-
-          <section v-if="actionError" class="settings-context-section settings-action-error" role="alert">
-            <span class="settings-section-label">STATUS UPDATE</span>
-            <p>{{ actionError }}</p>
-          </section>
-
-          <section class="settings-context-section">
-            <span class="settings-section-label">SECURITY</span>
-            <p>API Key 只用于服务端连接，不会再次回显，也不会进入浏览器日志或页面存储。</p>
-            <p>停用 BYOK 后，新任务使用系统提供的 AI；不会静默改写历史任务。</p>
-          </section>
-        </aside>
+      <div v-if="savedNeedsEnable && configured && !active" class="settings-next-step" role="status">
+        <strong>配置已保存，尚未启用</strong>
+        <span>如果要让新任务使用自己的 API，请启用它；否则系统 AI 会继续工作。</span>
+        <el-button type="primary" :loading="actionLoading" @click="handleToggle">启用</el-button>
       </div>
+
+      <section class="settings-configuration" aria-labelledby="custom-ai-title">
+        <header class="settings-section-header">
+          <p class="settings-section-label">高级设置</p>
+          <h2 id="custom-ai-title">使用自己的 API</h2>
+          <p>可选配置。适用于兼容 OpenAI 接口的服务；密钥不会在页面回显。</p>
+        </header>
+
+        <p v-if="configured" class="settings-current-key">
+          已保存密钥：<strong>{{ settings?.maskedApiKey || '已配置' }}</strong>
+          <span> · 替换后会自动停用，需要再次启用。</span>
+        </p>
+
+        <el-form label-position="top" class="settings-form" @submit.prevent="handleSave">
+          <el-form-item label="连接地址" required>
+            <el-input
+              v-model="form.baseUrl"
+              placeholder="https://api.example.com/v1"
+              autocomplete="url"
+            />
+            <small>必须使用 HTTPS 和标准 443 端口。</small>
+          </el-form-item>
+
+          <el-form-item label="API 密钥" required>
+            <el-input
+              v-model="form.apiKey"
+              type="password"
+              show-password
+              autocomplete="new-password"
+              placeholder="输入后用于测试或保存；保存后不会再次显示"
+            />
+          </el-form-item>
+
+          <el-form-item label="模型" required>
+            <el-input v-model="form.model" placeholder="例如 gpt-4o-mini" autocomplete="off" />
+          </el-form-item>
+
+          <div class="settings-actions">
+            <el-button :loading="testing" :disabled="!canSubmit" @click="handleTest">测试连接</el-button>
+            <el-button type="primary" native-type="submit" :loading="saving" :disabled="!canSubmit">
+              {{ configured ? '保存并替换' : '保存配置' }}
+            </el-button>
+          </div>
+        </el-form>
+
+        <section v-if="testResult" class="settings-test-result" :class="testResult.success ? 'is-success' : 'is-error'" role="status">
+          <strong>{{ testResult.success ? '连接测试成功' : '连接测试失败' }}</strong>
+          <p>{{ testResult.message }}</p>
+        </section>
+        <section v-if="saveError" class="settings-test-result is-error" role="alert">
+          <strong>保存配置失败</strong>
+          <p>{{ saveError }}</p>
+        </section>
+      </section>
+
+      <section v-if="configured" class="settings-status-actions" aria-labelledby="status-actions-title">
+        <div>
+          <p class="settings-section-label">配置状态</p>
+          <h2 id="status-actions-title">{{ active ? '自己的 API 已启用' : '自己的 API 尚未启用' }}</h2>
+          <p>{{ active ? '新岗位分析会使用已保存的连接。' : '启用后，新岗位分析才会使用已保存的连接。' }}</p>
+        </div>
+        <el-button :type="active ? 'default' : 'primary'" :loading="actionLoading" @click="handleToggle">
+          {{ active ? '停用' : '启用' }}
+        </el-button>
+      </section>
+
+      <section v-if="actionError" class="settings-action-error" role="alert">
+        <strong>状态更新失败</strong>
+        <p>{{ actionError }}</p>
+      </section>
+
+      <section class="settings-security" aria-labelledby="security-title">
+        <p class="settings-section-label">安全说明</p>
+        <h2 id="security-title">密钥只用于服务端连接</h2>
+        <p>保存的密钥只显示为掩码，不会再次回显，也不会进入浏览器日志或页面存储。</p>
+        <p>停用自己的 API 后，新任务使用系统提供的 AI；历史任务不会被改写。</p>
+      </section>
 
       <section v-if="configured" class="settings-danger-zone">
         <div>
-          <span class="settings-section-label">DANGER ZONE</span>
+          <p class="settings-section-label">危险操作</p>
           <h2>删除密钥</h2>
           <p>删除后新任务会使用系统提供的 AI；已保存的密钥无法恢复。</p>
         </div>
@@ -275,41 +300,34 @@ onMounted(load)
   gap: var(--app-section-spacing);
 }
 
-.settings-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(280px, 0.42fr);
-  gap: var(--app-space-8);
-  border-top: 1px solid var(--app-border-strong);
-  border-bottom: 1px solid var(--app-border-strong);
-}
-
+.settings-current-ai,
 .settings-configuration,
-.settings-context {
+.settings-status-actions,
+.settings-security,
+.settings-danger-zone {
   min-width: 0;
-  padding: var(--app-space-6) 0 var(--app-space-8);
+  border-top: 1px solid var(--app-border-strong);
+  padding: var(--app-space-6) 0;
 }
 
-.settings-context {
-  border-left: 1px solid var(--app-border-strong);
-  padding-right: var(--app-space-5);
-  padding-left: var(--app-space-6);
+.settings-current-ai {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--app-space-8);
 }
 
-.settings-section-header {
+.settings-current-ai > div:first-child,
+.settings-status-actions > div,
+.settings-danger-zone > div {
   display: grid;
   gap: var(--app-space-2);
-  margin-bottom: var(--app-space-6);
 }
 
-.settings-section-label {
-  color: var(--app-text-muted);
-  font-family: var(--app-font-mono);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-}
-
+.settings-current-ai h2,
 .settings-section-header h2,
+.settings-status-actions h2,
+.settings-security h2,
 .settings-danger-zone h2 {
   margin: 0;
   color: var(--app-text);
@@ -317,16 +335,78 @@ onMounted(load)
   line-height: var(--app-line-height-tight);
 }
 
+.settings-current-ai p,
 .settings-section-header p,
-.settings-context-section p,
+.settings-status-actions p,
+.settings-security p,
 .settings-danger-zone p,
 .settings-current-key,
 .settings-form small,
-.settings-test-result p {
+.settings-test-result p,
+.settings-action-error p,
+.settings-next-step span {
   margin: 0;
   color: var(--app-text-secondary);
   font-size: var(--app-font-size-sm);
   line-height: var(--app-line-height-body);
+}
+
+.settings-section-label {
+  margin: 0;
+  color: var(--app-text-muted);
+  font-family: var(--app-font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+.settings-current-ai-status {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--app-space-2);
+  color: var(--app-text);
+  font-size: 15px;
+}
+
+.settings-status-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--app-accent);
+}
+
+.settings-current-ai-status.is-active .settings-status-dot {
+  background: var(--app-success);
+}
+
+.settings-next-step {
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(0, 1fr) auto;
+  gap: var(--app-space-3) var(--app-space-4);
+  align-items: center;
+  border-top: 1px solid var(--app-primary-subtle);
+  border-bottom: 1px solid var(--app-primary-subtle);
+  padding: var(--app-space-4) 0;
+  color: var(--app-text);
+}
+
+.settings-next-step strong {
+  font-size: var(--app-font-size-sm);
+}
+
+.settings-next-step .el-button {
+  grid-column: 3;
+}
+
+.settings-configuration {
+  padding-bottom: var(--app-space-8);
+}
+
+.settings-section-header {
+  display: grid;
+  gap: var(--app-space-2);
+  margin-bottom: var(--app-space-6);
 }
 
 .settings-form {
@@ -340,7 +420,6 @@ onMounted(load)
 
 .settings-current-key {
   margin-bottom: var(--app-space-5);
-  color: var(--app-text-secondary);
 }
 
 .settings-current-key strong {
@@ -359,12 +438,14 @@ onMounted(load)
 .settings-test-result {
   display: grid;
   gap: var(--app-space-1);
+  max-width: 680px;
   margin-top: var(--app-space-5);
   border-top: 1px solid var(--app-border);
   padding-top: var(--app-space-4);
 }
 
-.settings-test-result strong {
+.settings-test-result strong,
+.settings-action-error strong {
   color: var(--app-text);
   font-size: var(--app-font-size-sm);
 }
@@ -373,72 +454,28 @@ onMounted(load)
   color: var(--app-success);
 }
 
-.settings-test-result.is-error strong {
+.settings-test-result.is-error strong,
+.settings-action-error strong {
   color: var(--app-danger);
 }
 
-.settings-context {
-  display: grid;
-  align-content: start;
-  gap: var(--app-space-8);
-}
-
-.settings-context-section {
-  display: grid;
-  gap: var(--app-space-3);
+.settings-status-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--app-space-6);
 }
 
 .settings-action-error {
-  border-top: 1px solid var(--app-danger);
-  padding-top: var(--app-space-4);
-}
-
-.settings-action-error .settings-section-label,
-.settings-action-error p {
-  color: var(--app-danger);
-}
-
-.settings-status-list {
   display: grid;
-  gap: var(--app-space-3);
-  margin: 0;
+  gap: var(--app-space-1);
+  border-top-color: var(--app-danger);
 }
 
-.settings-status-list div {
-  display: flex;
-  justify-content: space-between;
-  gap: var(--app-space-3);
-  border-bottom: 1px solid var(--app-border-soft);
-  padding-bottom: var(--app-space-3);
-}
-
-.settings-status-list dt,
-.settings-status-list dd {
-  margin: 0;
-  font-size: var(--app-font-size-sm);
-}
-
-.settings-status-list dt {
-  color: var(--app-text-secondary);
-}
-
-.settings-status-list dd {
-  overflow-wrap: anywhere;
-  color: var(--app-text);
-  font-weight: 700;
-  text-align: right;
-}
-
-.settings-status-list dd.is-active {
-  color: var(--app-success);
-}
-
-.settings-status-list dd.is-disabled {
-  color: var(--app-warning);
-}
-
-.settings-status-list dd.is-muted {
-  color: var(--app-text-muted);
+.settings-security {
+  display: grid;
+  gap: var(--app-space-2);
+  max-width: 760px;
 }
 
 .settings-danger-zone {
@@ -446,13 +483,7 @@ onMounted(load)
   align-items: flex-end;
   justify-content: space-between;
   gap: var(--app-space-6);
-  border-top: 1px solid var(--app-danger);
-  padding-top: var(--app-space-5);
-}
-
-.settings-danger-zone > div {
-  display: grid;
-  gap: var(--app-space-2);
+  border-top-color: var(--app-danger);
 }
 
 .settings-danger-zone .settings-section-label,
@@ -460,36 +491,36 @@ onMounted(load)
   color: var(--app-danger);
 }
 
-@media (max-width: 900px) {
-  .settings-layout {
-    display: block;
-  }
-
-  .settings-context {
-    border-top: 1px solid var(--app-border-strong);
-    border-left: 0;
-    padding: var(--app-space-5) 0 var(--app-space-6);
-  }
-}
-
 @media (max-width: 640px) {
-  .settings-configuration {
-    padding-top: var(--app-space-5);
+  .settings-current-ai,
+  .settings-status-actions,
+  .settings-danger-zone {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .settings-current-ai-status {
+    padding-top: var(--app-space-1);
+  }
+
+  .settings-next-step {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-next-step .el-button {
+    grid-column: 1;
+    width: 100%;
   }
 
   .settings-actions,
   .settings-actions .el-button,
+  .settings-status-actions .el-button,
   .settings-danger-zone .el-button {
     width: 100%;
   }
 
   .settings-actions {
     display: grid;
-  }
-
-  .settings-danger-zone {
-    align-items: stretch;
-    flex-direction: column;
   }
 }
 </style>
