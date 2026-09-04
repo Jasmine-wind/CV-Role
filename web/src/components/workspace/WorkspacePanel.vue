@@ -469,7 +469,7 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
           />
 
           <section
-            v-if="!isNarrowScreen || mobilePanel === 'editor'"
+            v-show="!isNarrowScreen || mobilePanel === 'editor'"
             id="workspace-panel-editor"
             class="resume-stage"
             role="tabpanel"

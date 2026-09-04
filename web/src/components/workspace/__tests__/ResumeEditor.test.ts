@@ -340,30 +340,85 @@ describe('ResumeEditor', () => {
     wrapper.unmount()
   })
 
-  it('keeps keyboard section reordering and contextual evidence focus available', async () => {
+  it('preserves manual section context while navigating between requirements', async () => {
     const document = makeDocument()
-    document.sections.push({
-      id: 's2',
-      kind: 'PROJECT',
-      title: '项目经历',
-      entries: [],
-    })
-    const onChange = vi.fn()
-    const wrapper = mount(ResumeEditor, {
-      props: {
-        document,
-        selectedSectionId: 's1',
-        focusedBulletId: 'b1',
-        onChange,
+    document.sections.push(
+      {
+        id: 's2',
+        kind: 'PROJECT',
+        title: '项目经历',
+        entries: [],
       },
-    })
+      {
+        id: 's3',
+        kind: 'OTHER',
+        title: '补充内容',
+        entries: [],
+      },
+    )
+    const wrapper = mount(ResumeEditor, { props: { document } })
     await nextTick()
 
+    for (const sectionId of ['s1', 's2', 's3']) {
+      expect(wrapper.get(`[data-section-id="${sectionId}"] .section-collapse-toggle`).attributes('aria-expanded')).toBe('true')
+    }
+
+    await wrapper.get('[data-section-id="s1"] .section-collapse-toggle').trigger('click')
+    await wrapper.get('[data-section-id="s2"] .section-collapse-toggle').trigger('click')
+    await wrapper.setProps({ selectedSectionId: 's3' })
+    await nextTick()
+
+    expect(wrapper.get('[data-section-id="s1"] .section-collapse-toggle').attributes('aria-expanded')).toBe('false')
+    expect(wrapper.get('[data-section-id="s2"] .section-collapse-toggle').attributes('aria-expanded')).toBe('false')
+    expect(wrapper.get('[data-section-id="s3"] .section-collapse-toggle').attributes('aria-expanded')).toBe('true')
+
+    await wrapper.setProps({ selectedSectionId: 's1', focusedBulletId: 'b1' })
+    await nextTick()
+    expect(wrapper.get('[data-section-id="s1"] .section-collapse-toggle').attributes('aria-expanded')).toBe('true')
     expect(wrapper.get('[data-bullet-id="b1"]').classes()).toContain('is-evidence-focus')
-    expect(wrapper.find('.editor-section.is-focused').exists()).toBe(true)
-    const moveDown = wrapper.findAll('.section-more-menu button').find((item) => item.text() === '下移')
-    await moveDown!.trigger('click')
-    expect((onChange.mock.lastCall![0] as ResumeDocument).sections.map((section) => section.id)).toEqual(['s2', 's1'])
+    expect(wrapper.get('[data-section-id="s2"] .section-collapse-toggle').attributes('aria-expanded')).toBe('false')
+
+    const updatedDocument = JSON.parse(JSON.stringify(document)) as ResumeDocument
+    updatedDocument.sections[0]!.entries[0]!.bullets[0]!.text = '后台自动保存后的内容'
+    await wrapper.setProps({ document: updatedDocument })
+    await nextTick()
+    expect(wrapper.get('[data-section-id="s2"] .section-collapse-toggle').attributes('aria-expanded')).toBe('false')
+  })
+
+  it('opens new sections once and preserves expansion state across reorder', async () => {
+    const document = makeDocument()
+    document.sections.push({ id: 's2', kind: 'PROJECT', title: '项目经历', entries: [] })
+    const onChange = vi.fn()
+    const wrapper = mount(ResumeEditor, { props: { document, onChange } })
+    await nextTick()
+
+    await wrapper.get('[data-section-id="s1"] .section-collapse-toggle').trigger('click')
+    const updatedDocument = JSON.parse(JSON.stringify(document)) as ResumeDocument
+    updatedDocument.sections.push({ id: 's3', kind: 'OTHER', title: '补充内容', entries: [] })
+    await wrapper.setProps({ document: updatedDocument })
+    await nextTick()
+    expect(wrapper.get('[data-section-id="s1"] .section-collapse-toggle').attributes('aria-expanded')).toBe('false')
+    expect(wrapper.get('[data-section-id="s3"] .section-collapse-toggle').attributes('aria-expanded')).toBe('true')
+
+    const moveDown = wrapper.get('[data-section-id="s1"] .section-more-menu button:nth-of-type(3)')
+    await moveDown.trigger('click')
+    expect((onChange.mock.lastCall![0] as ResumeDocument).sections.map((section) => section.id)).toEqual(['s2', 's1', 's3'])
+    await wrapper.setProps({ document: onChange.mock.lastCall![0] as ResumeDocument })
+    await nextTick()
+    expect(wrapper.get('[data-section-id="s1"] .section-collapse-toggle').attributes('aria-expanded')).toBe('false')
+    expect(wrapper.get('[data-section-id="s3"] .section-collapse-toggle').attributes('aria-expanded')).toBe('true')
+
+    const withoutS1 = JSON.parse(JSON.stringify(onChange.mock.lastCall![0])) as ResumeDocument
+    withoutS1.sections = withoutS1.sections.filter((section) => section.id !== 's1')
+    await wrapper.setProps({ document: withoutS1 })
+    await nextTick()
+    expect(wrapper.find('[data-section-id="s1"]').exists()).toBe(false)
+
+    const restored = JSON.parse(JSON.stringify(withoutS1)) as ResumeDocument
+    restored.sections.push(JSON.parse(JSON.stringify(document.sections[0])))
+    await wrapper.setProps({ document: restored })
+    await nextTick()
+    expect(wrapper.get('[data-section-id="s1"] .section-collapse-toggle').attributes('aria-expanded')).toBe('true')
   })
 
   it('exits contextual name editing with Escape', async () => {

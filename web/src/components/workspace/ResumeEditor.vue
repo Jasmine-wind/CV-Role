@@ -92,23 +92,46 @@ const toggleSection = (sectionId: string) => {
   expandedSectionIds.value = next
 }
 
+watch(
+  () => props.document.sections.map((section) => section.id),
+  (sectionIds, previousSectionIds) => {
+    const currentIds = new Set(sectionIds)
+    const previousIds = new Set(previousSectionIds ?? [])
+    const next = new Set([...expandedSectionIds.value].filter((id) => currentIds.has(id)))
+
+    // The first document establishes the existing "all open" reading state. Later
+    // content updates preserve manual choices while genuinely new sections open once.
+    for (const sectionId of sectionIds) {
+      if (!previousSectionIds || !previousIds.has(sectionId)) next.add(sectionId)
+    }
+    expandedSectionIds.value = next
+  },
+  { immediate: true },
+)
+
 const syncSelectedSection = async () => {
-  const next = new Set(props.document.sections.map((section) => section.id))
-  if (props.selectedSectionId) next.add(props.selectedSectionId)
-  expandedSectionIds.value = next
+  const selectedSection = props.selectedSectionId
+    ? props.document.sections.find((section) => section.id === props.selectedSectionId)
+    : null
+  if (selectedSection && !expandedSectionIds.value.has(selectedSection.id)) {
+    expandedSectionIds.value = new Set([...expandedSectionIds.value, selectedSection.id])
+  }
+
+  // This watch only depends on navigation identity, not the immutable document
+  // object. Autosave replacements therefore cannot re-scroll or steal focus.
   await nextTick()
   const bullet = props.focusedBulletId
     ? editorRoot.value?.querySelector<HTMLElement>(
         `[data-bullet-id="${props.focusedBulletId}"]`,
       )
     : null
-  const target = bullet ?? (props.selectedSectionId ? sectionElements.get(props.selectedSectionId) : null)
+  const target = bullet ?? (selectedSection ? sectionElements.get(selectedSection.id) : null)
   if (!target) return
   const scrollContainer = target.closest<HTMLElement>('.resume-stage-scroll')
   if (scrollContainer) {
     const targetTop = target.getBoundingClientRect().top - scrollContainer.getBoundingClientRect().top
     const targetOffset = bullet
-      ? (scrollContainer.clientHeight - target.clientHeight) / 2
+      ? Math.max(24, (scrollContainer.clientHeight - target.clientHeight) / 2)
       : 24
     scrollContainer.scrollTop += targetTop - targetOffset
   } else if (typeof target.scrollIntoView === 'function') {
@@ -551,6 +574,7 @@ const handleSuggestCommand = (bulletId: string, command: BulletSuggestIntent | '
       v-for="(section, sectionIndex) in document.sections"
       :key="section.id"
       class="editor-block editor-section"
+      :data-section-id="section.id"
       :class="{ 'is-collapsed': !isSectionExpanded(section.id), 'is-focused': props.selectedSectionId === section.id }"
       :ref="(element) => setSectionRef(section.id, element)"
       @dragover.prevent

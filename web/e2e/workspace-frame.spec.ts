@@ -148,17 +148,27 @@ async function mockWorkspace(page: Page, options: { failSaveOnce?: boolean; dens
     }
     return route.fulfill(response({ saved: true, conflict: false, revision: 3 + saveAttempts, document: null }))
   })
-  await page.route('**/api/optimization-tasks/42/analysis-result', (route) => route.fulfill(response(
-    options.denseRequirements
-      ? {
-          ...analysis,
-          evidenceAnalysis: {
-            ...analysis.evidenceAnalysis,
-            requirements: Array.from({ length: 18 }, (_, index) => requirement(index + 1, index === 2 ? 'PARTIAL_EVIDENCE' : 'MATCHED')),
-          },
-        }
-      : analysis,
-  )))
+  const mockedRequirements = Array.from(
+    { length: options.denseRequirements ? 18 : 9 },
+    (_, index) => requirement(index + 1, index === 2 ? 'PARTIAL_EVIDENCE' : 'MATCHED'),
+  )
+  if (options.longResume) {
+    const sectionEvidence = mockedRequirements[3]?.evidences[0]
+    if (sectionEvidence) {
+      sectionEvidence.sectionLabel = '专业经历补充章节 1'
+      sectionEvidence.evidenceText = '补充材料 1'
+    }
+  }
+  const mockedAnalysis = options.denseRequirements || options.longResume
+    ? {
+        ...analysis,
+        evidenceAnalysis: {
+          ...analysis.evidenceAnalysis,
+          requirements: mockedRequirements,
+        },
+      }
+    : analysis
+  await page.route('**/api/optimization-tasks/42/analysis-result', (route) => route.fulfill(response(mockedAnalysis)))
   await page.route('**/api/workspace/42/artifacts', (route) => route.fulfill(response([])))
   await page.route('**/api/workspace/42/bullet-suggestion', async (route) => {
     const body = route.request().postDataJSON() as {
@@ -210,10 +220,17 @@ test.describe('Workspace editor frame', () => {
       await expect(page.locator('.editor-section.is-focused')).toBeVisible()
       await expect(page.locator('.bullet-block.is-evidence-focus')).toHaveCount(1)
       const section = page.locator('.editor-section').first()
-      await section.locator('.section-collapse-toggle').click()
+      const sectionToggle = section.locator('.section-collapse-toggle')
+      const sectionContentId = await sectionToggle.getAttribute('aria-controls')
+      expect(sectionContentId).toBeTruthy()
+      await sectionToggle.focus()
+      await page.keyboard.press('Enter')
+      await expect(sectionToggle).toHaveAttribute('aria-expanded', 'false')
       await expect(section.locator('.editor-section-content')).toBeHidden()
-      await section.locator('.section-collapse-toggle').click()
-      await expect(section.locator('.editor-section-content')).toBeVisible()
+      await page.keyboard.press('Space')
+      await expect(sectionToggle).toBeFocused()
+      await expect(sectionToggle).toHaveAttribute('aria-expanded', 'true')
+      await expect(page.locator(`#${sectionContentId}`)).toBeVisible()
 
       const metrics = await page.evaluate(() => {
         const app = document.querySelector<HTMLElement>('.app-page')!
@@ -297,9 +314,26 @@ test.describe('Workspace editor frame', () => {
     const longBullet = page.locator('[data-bullet-id="bullet-2"] textarea')
     await longBullet.fill(`负责中英文混排 delivery 与稳定性治理，${'持续验证真实数据。'.repeat(80)}`)
     await expect(page.getByText('✓ 已保存', { exact: true })).toBeVisible({ timeout: 5_000 })
+    await expect(longBullet).toBeFocused()
+
+    const collapsedSectionIds = ['section-0', 'section-1', 'section-2', 'section-3']
+    for (const sectionId of collapsedSectionIds) {
+      await page.locator(`[data-section-id="${sectionId}"] .section-collapse-toggle`).click()
+      await expect(page.locator(`[data-section-id="${sectionId}"] .section-collapse-toggle`)).toHaveAttribute('aria-expanded', 'false')
+    }
 
     await page.getByRole('button', { name: /岗位要求 4/ }).click()
-    const nextEvidence = page.locator('[data-bullet-id="bullet-1"]')
+    const targetSection = page.locator('[data-section-id="section-0"]')
+    const targetEvidence = page.locator('[data-bullet-id="other-bullet-0"]')
+    await expect(targetSection.locator('.section-collapse-toggle')).toHaveAttribute('aria-expanded', 'true')
+    await expect(targetEvidence).toHaveClass(/is-evidence-focus/)
+    await expect(targetEvidence).toBeInViewport()
+    await expect(page.locator('[data-section-id="section-1"] .section-collapse-toggle')).toHaveAttribute('aria-expanded', 'false')
+
+    await page.getByRole('button', { name: '具备 Redis 缓存设计经验' }).click()
+    await expect(page.locator('[data-section-id="section-0"] .section-collapse-toggle')).toHaveAttribute('aria-expanded', 'true')
+    await expect(page.locator('[data-section-id="section-1"] .section-collapse-toggle')).toHaveAttribute('aria-expanded', 'false')
+    const nextEvidence = page.locator('[data-bullet-id="bullet-0"]')
     await expect(nextEvidence).toHaveClass(/is-evidence-focus/)
     await expect(nextEvidence).toBeInViewport()
     await nextEvidence.hover()
@@ -316,7 +350,15 @@ test.describe('Workspace editor frame', () => {
     await expect(page.getByText('✓ 已保存', { exact: true })).toBeVisible({ timeout: 5_000 })
 
     await page.setViewportSize({ width: 390, height: 844 })
-    await expect(page.getByRole('tab', { name: '编辑简历' })).toHaveAttribute('aria-selected', 'true')
+    const editorTab = page.getByRole('tab', { name: '编辑简历' })
+    await expect(editorTab).toHaveAttribute('aria-selected', 'true')
+    await page.getByRole('tab', { name: '岗位要求' }).click()
+    await page.getByRole('button', { name: /岗位要求 4/ }).click()
+    await expect(editorTab).toHaveAttribute('aria-selected', 'true')
+    await expect(page.locator('[data-section-id="section-0"] .section-collapse-toggle')).toHaveAttribute('aria-expanded', 'true')
+    await expect(page.locator('[data-bullet-id="other-bullet-0"]')).toHaveClass(/is-evidence-focus/)
+    await expect(page.locator('[data-bullet-id="other-bullet-0"]')).toBeInViewport()
+    await expect(page.locator('[data-section-id="section-1"] .section-collapse-toggle')).toHaveAttribute('aria-expanded', 'false')
     const layout = await page.evaluate(() => {
       const app = document.querySelector<HTMLElement>('.app-page')!
       const stage = document.querySelector<HTMLElement>('.resume-stage-scroll')!
