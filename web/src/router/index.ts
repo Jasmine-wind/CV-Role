@@ -125,4 +125,10 @@ router.beforeEach((to) => {
   return true
 })
 
+router.afterEach((to) => {
+  if (typeof document === 'undefined') return
+  const title = typeof to.meta.title === 'string' ? to.meta.title : ''
+  document.title = title ? `${title} · CV Role` : 'CV Role'
+})
+
 export default router
