@@ -52,6 +52,9 @@ test.describe('auth pages', () => {
       }))
     })
     await page.route('**/api/users/me', (route) => route.fulfill(result(user)))
+    await page.route('**/api/job-direction-insights', (route) =>
+      route.fulfill(result({ cohorts: [] })),
+    )
     await page.goto('/login?redirect=%2Fjob-direction-insights')
     await page.getByPlaceholder('请输入用户名或邮箱').fill('polish-user')
     await page.getByPlaceholder('请输入密码').fill('safe-password')

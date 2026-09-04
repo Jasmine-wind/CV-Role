@@ -60,7 +60,7 @@ async function openWorkspaceWithSavedDraft(page: Page) {
   const bullet = page.locator('textarea').filter({ hasText: '' }).last()
   await expect(bullet).toBeVisible({ timeout: 15_000 })
   await bullet.fill('负责 Java 后端服务开发')
-  await expect(page.getByText('已保存', { exact: true })).toBeVisible({ timeout: 15_000 })
+  await expect(page.getByText('✓ 已保存', { exact: true })).toBeVisible({ timeout: 15_000 })
   return bullet
 }
 
@@ -68,7 +68,7 @@ async function openWorkspaceWithoutEditing(page: Page) {
   await page.getByRole('button', { name: '修改简历', exact: true }).first().click()
   await expect(page).toHaveURL(/\/workspace\/\d+/, { timeout: 15_000 })
   await expect(page.locator('textarea').first()).toBeVisible({ timeout: 15_000 })
-  await expect(page.getByText('已保存', { exact: true })).toBeVisible({ timeout: 15_000 })
+  await expect(page.getByText('✓ 已保存', { exact: true })).toBeVisible({ timeout: 15_000 })
 }
 
 async function previewAndExportAll(page: Page, testInfo: TestInfo, prefix: string) {
@@ -123,7 +123,7 @@ test('happy path: upload, analysis, workspace, deterministic suggestion, preview
     timeout: 45_000,
   })
   await expect(page.getByRole('button', { name: '采纳', exact: true })).toHaveCount(0)
-  await expect(page.getByText('已保存', { exact: true })).toBeVisible({ timeout: 15_000 })
+  await expect(page.getByText('✓ 已保存', { exact: true })).toBeVisible({ timeout: 15_000 })
 
   await page.getByRole('button', { name: '预览 →', exact: true }).click()
   await expect(
@@ -196,7 +196,7 @@ test('workspace conflict preserves the local draft; stale Preview and Suggest ca
 
   const firstBullet = first.locator('textarea').last()
   await firstBullet.fill('负责 Java 后端服务开发 - first writer')
-  await expect(first.getByText('已保存', { exact: true })).toBeVisible({ timeout: 15_000 })
+  await expect(first.getByText('✓ 已保存', { exact: true })).toBeVisible({ timeout: 15_000 })
 
   const secondBullet = sameContextSecond.locator('textarea').last()
   await secondBullet.fill('负责 Java 后端服务开发 - local conflicting draft')
@@ -206,7 +206,7 @@ test('workspace conflict preserves the local draft; stale Preview and Suggest ca
   await expect(secondBullet).toHaveValue('负责 Java 后端服务开发 - local conflicting draft')
 
   await sameContextSecond.getByRole('button', { name: '使用线上版本', exact: true }).click()
-  await expect(sameContextSecond.getByText('已保存', { exact: true })).toBeVisible({
+  await expect(sameContextSecond.getByText('✓ 已保存', { exact: true })).toBeVisible({
     timeout: 15_000,
   })
 
@@ -235,7 +235,7 @@ test('workspace conflict preserves the local draft; stale Preview and Suggest ca
   await expect(first.getByText('未保存', { exact: true })).toBeVisible()
   releasePreviewResponse()
   await expect(first.getByTitle('简历 PDF 预览')).toBeHidden()
-  await expect(first.getByText('已保存', { exact: true })).toBeVisible({ timeout: 15_000 })
+  await expect(first.getByText('✓ 已保存', { exact: true })).toBeVisible({ timeout: 15_000 })
 
   let suggestionRequestStarted!: () => void
   let releaseSuggestionResponse!: () => void
