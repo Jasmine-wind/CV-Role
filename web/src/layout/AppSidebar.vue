@@ -10,6 +10,7 @@ defineProps<{
 }>()
 
 const emit = defineEmits<{
+  close: []
   navigate: []
 }>()
 
@@ -41,12 +42,23 @@ onMounted(() => {
     :aria-hidden="drawer && !open"
     :inert="drawer && !open"
   >
-    <div class="app-sidebar-brand">
-      <span class="app-sidebar-mark">CV</span>
-      <div>
-        <strong>简历优化</strong>
-        <small>为目标岗位准备简历</small>
-      </div>
+    <div class="app-sidebar-header">
+      <RouterLink to="/app" class="app-sidebar-brand" @click="emit('navigate')">
+        <span class="app-sidebar-mark" aria-hidden="true">CV</span>
+        <div>
+          <strong>简历优化</strong>
+          <small>为目标岗位准备简历</small>
+        </div>
+      </RouterLink>
+      <button
+        v-if="drawer"
+        type="button"
+        class="app-sidebar-close"
+        aria-label="关闭导航菜单"
+        @click="emit('close')"
+      >
+        <span aria-hidden="true">×</span>
+      </button>
     </div>
 
     <nav class="app-sidebar-nav" aria-label="主导航">
@@ -61,5 +73,12 @@ onMounted(() => {
       </RouterLink>
     </nav>
 
+    <div class="app-sidebar-trust" aria-label="产品原则">
+      <span aria-hidden="true" />
+      <p>
+        <strong>真实性优先</strong>
+        <small>只依据已确认的简历材料</small>
+      </p>
+    </div>
   </aside>
 </template>
