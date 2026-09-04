@@ -49,7 +49,7 @@ async function uploadAndStartAnalysis(
 
 async function waitForAnalysis(page: Page) {
   await expect(page).toHaveURL(/\/job-analysis\/\d+/, { timeout: 45_000 })
-  await expect(page.locator('.analysis-strengths .analysis-section-header strong')).toBeVisible({
+  await expect(page.getByRole('region', { name: '岗位要求与证据审阅' })).toBeVisible({
     timeout: 20_000,
   })
 }
@@ -106,7 +106,7 @@ test('happy path: upload, analysis, workspace, deterministic suggestion, preview
   await waitForAnalysis(page)
   // A direct result route remains usable after a browser refresh.
   await page.reload()
-  await expect(page.locator('.analysis-strengths .analysis-section-header strong')).toBeVisible({
+  await expect(page.getByRole('region', { name: '岗位要求与证据审阅' })).toBeVisible({
     timeout: 20_000,
   })
 
