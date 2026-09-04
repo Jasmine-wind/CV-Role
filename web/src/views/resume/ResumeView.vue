@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import PageHeader from '@/components/common/PageHeader.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import ErrorState from '@/components/common/ErrorState.vue'
@@ -11,6 +12,7 @@ import {
   getResumeReview,
   requestResumePreparation,
   resolveResumeReview,
+  updateResumeDisplayName,
   uploadResume,
 } from '@/api/resume'
 import type { ResumeReviewResolveRequest, ResumeReviewUnresolvedItem } from '@/api/resume'
@@ -20,6 +22,7 @@ import type { AsyncTaskVO } from '@/types/task'
 import type { ResumeListItem } from '@/types/resume'
 import type { ResumeDocument } from '@/types/resume-document'
 import ResumeReviewWorkspace from '@/components/resume/review/ResumeReviewWorkspace.vue'
+import ResumeSourcePreview from '@/components/resume/ResumeSourcePreview.vue'
 import {
   getInitialReviewItemId,
   selectReviewItemAfterResolve,
@@ -37,6 +40,8 @@ import {
   getResumeLibraryStatus,
   getResumeLibrarySummary,
 } from './resumeLibraryPresentation'
+
+const router = useRouter()
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024
 const ACCEPTED_EXTENSIONS = ['pdf', 'doc', 'docx']
@@ -56,15 +61,22 @@ const pollingControllers = new Map<number, AsyncTaskPollingController>()
 
 const selectedFileType = computed(() => selectedFile.value?.name.split('.').pop()?.toUpperCase() || '')
 const librarySummary = computed(() => getResumeLibrarySummary(resumes.value, activeTasks.value))
-const librarySummaryText = computed(() => {
-  const summary = librarySummary.value
-  const parts = [`${summary.total} 份简历`, `${summary.usable} 份可用于岗位分析`]
-  if (summary.needsAction) parts.push(`${summary.needsAction} 份需要处理`)
-  return parts.join(' · ')
-})
 
 const statusFor = (resume: ResumeListItem) =>
   getResumeLibraryStatus(resume, activeTasks.value[resume.id])
+
+const displayNameFor = (resume: ResumeListItem) => {
+  if (resume.displayName?.trim()) return resume.displayName.trim()
+  return resume.originalFilename.replace(/\.[^.]+$/u, '') || '未命名简历'
+}
+
+const canOpenSource = (resume: ResumeListItem) => statusFor(resume).kind === 'ready'
+
+const startOptimizationFromPreview = () => {
+  const resumeId = sourcePreviewId.value
+  if (resumeId === null) return
+  void router.push({ path: '/app', query: { resumeId: String(resumeId) } })
+}
 
 const clearSelectedFile = () => {
   selectedFile.value = null
@@ -121,6 +133,18 @@ const activeReviewItemId = ref<string | null>(null)
 const resolvingItemId = ref<string | null>(null)
 const reviewTrigger = ref<HTMLElement | null>(null)
 const lastReviewAction = ref<{ resumeId: number; itemId: string; action: 'ACCEPT' | 'DELETE' } | null>(null)
+
+const sourcePreviewId = ref<number | null>(null)
+const sourcePreviewDocument = ref<ResumeDocument | null>(null)
+const sourcePreviewLoading = ref(false)
+const sourcePreviewError = ref<string | null>(null)
+const sourcePreviewTrigger = ref<HTMLElement | null>(null)
+const displayNameEditingId = ref<number | null>(null)
+const displayNameDraft = ref('')
+const displayNameSavingId = ref<number | null>(null)
+const sourcePreviewResume = computed(
+  () => resumes.value.find((resume) => resume.id === sourcePreviewId.value) ?? null,
+)
 
 const CONTACT_TYPE_OPTIONS = [
   { value: 'PHONE', label: '电话' },
@@ -214,6 +238,7 @@ const loadReview = async (resumeId: number, reset = false) => {
 }
 
 const openReview = async (resumeId: number) => {
+  if (sourcePreviewId.value !== null) await closeSourcePreview(false)
   reviewTrigger.value = document.activeElement instanceof HTMLElement ? document.activeElement : null
   reviewResumeId.value = resumeId
   reviewLoadError.value = null
@@ -255,6 +280,85 @@ const closeReview = async (restoreFocus = true) => {
     await nextTick()
     if (trigger?.isConnected) trigger.focus()
     else if (resumeId !== null) focusReviewRow(resumeId)
+  }
+}
+
+const readCanonicalDocument = (value: string | null) => {
+  if (!value) return null
+  try {
+    return JSON.parse(value) as ResumeDocument
+  } catch {
+    return null
+  }
+}
+
+const loadSourcePreview = async (resumeId: number) => {
+  sourcePreviewLoading.value = true
+  sourcePreviewError.value = null
+  try {
+    const review = await getResumeReview(resumeId)
+    sourcePreviewDocument.value = readCanonicalDocument(review.canonicalDocument)
+    if (!sourcePreviewDocument.value) sourcePreviewError.value = '已确认简历内容暂不可用，请重新准备这份简历。'
+  } catch (error) {
+    sourcePreviewError.value = error instanceof Error ? error.message : '获取简历预览失败'
+  } finally {
+    sourcePreviewLoading.value = false
+  }
+}
+
+const openSourcePreview = async (resume: ResumeListItem) => {
+  if (!canOpenSource(resume)) return
+  sourcePreviewTrigger.value = document.activeElement instanceof HTMLElement ? document.activeElement : null
+  if (reviewResumeId.value !== null) await closeReview(false)
+  displayNameEditingId.value = null
+  sourcePreviewId.value = resume.id
+  sourcePreviewDocument.value = null
+  await nextTick()
+  if (window.matchMedia('(max-width: 900px)').matches) {
+    document.querySelector('.resume-source-preview')?.scrollIntoView({ behavior: 'auto', block: 'start' })
+  }
+  await loadSourcePreview(resume.id)
+}
+
+const closeSourcePreview = async (restoreFocus = true) => {
+  const resumeId = sourcePreviewId.value
+  const trigger = sourcePreviewTrigger.value
+  sourcePreviewId.value = null
+  sourcePreviewDocument.value = null
+  sourcePreviewError.value = null
+  sourcePreviewTrigger.value = null
+  if (restoreFocus) {
+    await nextTick()
+    if (trigger?.isConnected) trigger.focus()
+    else if (resumeId !== null) focusReviewRow(resumeId)
+  }
+}
+
+const startDisplayNameEdit = (resume: ResumeListItem) => {
+  displayNameEditingId.value = resume.id
+  displayNameDraft.value = displayNameFor(resume)
+}
+
+const cancelDisplayNameEdit = () => {
+  displayNameEditingId.value = null
+  displayNameDraft.value = ''
+}
+
+const saveDisplayName = async (resume: ResumeListItem) => {
+  const displayName = displayNameDraft.value.trim()
+  if (!displayName || displayNameSavingId.value === resume.id) return
+  displayNameSavingId.value = resume.id
+  try {
+    const updated = await updateResumeDisplayName(resume.id, { displayName })
+    const index = resumes.value.findIndex((item) => item.id === resume.id)
+    const current = resumes.value[index]
+    if (current) resumes.value[index] = { ...current, displayName: updated.displayName }
+    cancelDisplayNameEdit()
+    ElMessage.success('简历名称已更新')
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '简历名称更新失败')
+  } finally {
+    displayNameSavingId.value = null
   }
 }
 
@@ -520,7 +624,7 @@ const handleUpload = async () => {
 const handleDelete = async (resume: ResumeListItem) => {
   try {
     await ElMessageBox.confirm(
-      `确认删除「${resume.originalFilename}」吗？相关分析结果也会删除。`,
+      `确认删除「${displayNameFor(resume)}」吗？相关分析结果也会删除。`,
       '删除简历',
       {
         confirmButtonText: '删除',
@@ -658,16 +762,11 @@ onUnmounted(() => {
     <section
       v-else-if="resumes.length"
       class="resume-library-shell"
-      :class="{ 'has-review-inspector': reviewResumeId && reviewResume }"
+      :class="{ 'has-review-inspector': reviewResumeId && reviewResume, 'has-source-preview': sourcePreviewId && sourcePreviewResume }"
     >
       <div class="resume-library-main">
         <header class="resume-library-heading">
-          <div>
-            <span class="resume-section-label">材料库</span>
-            <h2>简历库</h2>
-            <p>确认完成的简历，可以在开始优化页用于新的岗位分析。</p>
-          </div>
-          <p class="resume-library-summary" aria-live="polite">{{ librarySummaryText }}</p>
+          <p class="resume-library-summary" aria-live="polite">共 {{ librarySummary.total }} 份</p>
         </header>
 
         <div class="resume-library-column-head" role="row" aria-hidden="true">
@@ -690,8 +789,39 @@ onUnmounted(() => {
             <div class="resume-simple-file">
               <span class="resume-file-type" aria-hidden="true">{{ resume.fileType }}</span>
               <div>
-                <strong :title="resume.originalFilename">{{ resume.originalFilename }}</strong>
-                <small>{{ formatResumeFileSize(resume.fileSize) }}</small>
+                <template v-if="displayNameEditingId === resume.id">
+                  <input
+                    v-model="displayNameDraft"
+                    class="resume-name-input"
+                    maxlength="255"
+                    aria-label="简历管理名称"
+                    @keydown.enter.prevent="saveDisplayName(resume)"
+                    @keydown.esc="cancelDisplayNameEdit"
+                  />
+                  <span class="resume-name-edit-actions">
+                    <button
+                      type="button"
+                      :disabled="displayNameSavingId === resume.id"
+                      @click="saveDisplayName(resume)"
+                    >保存</button>
+                    <button type="button" :disabled="displayNameSavingId === resume.id" @click="cancelDisplayNameEdit">取消</button>
+                  </span>
+                </template>
+                <template v-else>
+                  <div class="resume-name-line">
+                    <button
+                      type="button"
+                      class="resume-source-trigger"
+                      :disabled="!canOpenSource(resume)"
+                      :title="canOpenSource(resume) ? `查看${displayNameFor(resume)}的已确认内容` : statusFor(resume).description"
+                      @click="openSourcePreview(resume)"
+                    >
+                      <strong>{{ displayNameFor(resume) }}</strong>
+                      <small>原始文件：{{ resume.originalFilename }} · {{ formatResumeFileSize(resume.fileSize) }}</small>
+                    </button>
+                    <button type="button" class="resume-rename-button" @click="startDisplayNameEdit(resume)">重命名</button>
+                  </div>
+                </template>
               </div>
             </div>
             <div class="resume-library-status">
@@ -724,24 +854,33 @@ onUnmounted(() => {
               >
                 {{ statusFor(resume).primaryAction === 'prepare' ? '重新准备' : '重试' }}
               </el-button>
-              <details class="resume-item-more">
-                <summary :aria-label="`打开 ${resume.originalFilename} 的更多操作`">更多</summary>
-                <div class="resume-item-more-menu">
-                  <el-button
-                    type="danger"
-                    text
-                    :loading="deletingId === resume.id"
-                    :disabled="!statusFor(resume).canDelete || Boolean(activeTasks[resume.id])"
-                    @click="handleDelete(resume)"
-                  >
-                    删除简历
-                  </el-button>
-                </div>
-              </details>
+              <el-button
+                class="resume-delete-button"
+                type="danger"
+                text
+                :loading="deletingId === resume.id"
+                :disabled="!statusFor(resume).canDelete || Boolean(activeTasks[resume.id])"
+                @click="handleDelete(resume)"
+              >
+                删除
+              </el-button>
             </div>
           </article>
         </div>
       </div>
+
+      <ResumeSourcePreview
+        v-if="sourcePreviewId && sourcePreviewResume"
+        class="resume-source-preview-inspector"
+        :document="sourcePreviewDocument"
+        :display-name="displayNameFor(sourcePreviewResume)"
+        :filename="sourcePreviewResume.originalFilename"
+        :loading="sourcePreviewLoading"
+        :error="sourcePreviewError"
+        @close="closeSourcePreview()"
+        @retry="loadSourcePreview(sourcePreviewResume.id)"
+        @start-optimization="startOptimizationFromPreview"
+      />
 
       <ResumeReviewWorkspace
         v-if="reviewResumeId && reviewResume"
@@ -775,7 +914,6 @@ onUnmounted(() => {
 
     <EmptyState
       v-else
-      eyebrow="简历库"
       title="还没有简历"
       description="上传一份真实简历。系统会先准备内容，无法确定的部分会交给你确认。"
       action-text="上传第一份简历"
@@ -971,7 +1109,8 @@ onUnmounted(() => {
   padding-top: var(--app-space-5);
 }
 
-.resume-library-shell.has-review-inspector {
+.resume-library-shell.has-review-inspector,
+.resume-library-shell.has-source-preview {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(340px, 0.42fr);
   gap: var(--app-space-8);
@@ -1076,6 +1215,38 @@ onUnmounted(() => {
   gap: var(--app-space-1);
 }
 
+.resume-simple-file .resume-name-line {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: var(--app-space-3);
+}
+
+.resume-source-trigger {
+  display: grid;
+  min-width: 0;
+  flex: 1 1 auto;
+  gap: var(--app-space-1);
+  border: 0;
+  padding: 0;
+  color: inherit;
+  text-align: left;
+  background: transparent;
+  cursor: pointer;
+}
+
+.resume-source-trigger:not(:disabled):hover strong,
+.resume-source-trigger:not(:disabled):focus-visible strong {
+  color: var(--app-primary-active);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+.resume-source-trigger:disabled {
+  cursor: not-allowed;
+}
+
 .resume-simple-file strong {
   overflow: hidden;
   color: var(--app-text);
@@ -1087,6 +1258,54 @@ onUnmounted(() => {
 .resume-simple-file small {
   color: var(--app-text-secondary);
   font-size: var(--app-font-size-xs);
+  line-height: 1.45;
+}
+
+.resume-rename-button,
+.resume-name-edit-actions button {
+  width: max-content;
+  border: 0;
+  border-bottom: 1px solid var(--app-border);
+  padding: 2px 0;
+  color: var(--app-primary);
+  font: inherit;
+  font-size: 11px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.resume-name-edit-actions button {
+  color: var(--app-text-muted);
+}
+
+.resume-rename-button:hover,
+.resume-rename-button:focus-visible,
+.resume-name-edit-actions button:hover,
+.resume-name-edit-actions button:focus-visible {
+  color: var(--app-primary-active);
+  border-color: var(--app-primary);
+}
+
+.resume-name-input {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--app-primary);
+  border-radius: var(--app-radius-sm);
+  padding: 6px 8px;
+  color: var(--app-text);
+  font: inherit;
+  font-size: var(--app-font-size-sm);
+  background: var(--app-surface);
+}
+
+.resume-name-edit-actions {
+  display: flex;
+  gap: var(--app-space-3);
+}
+
+.resume-name-edit-actions button:disabled {
+  cursor: wait;
+  opacity: 0.55;
 }
 
 .resume-library-status {
@@ -1155,47 +1374,16 @@ onUnmounted(() => {
   min-width: 0;
 }
 
-.resume-item-more {
-  position: relative;
+.resume-delete-button {
   flex: 0 0 auto;
+  color: var(--app-danger) !important;
+  font-size: 12px;
+  opacity: 0.72;
 }
 
-.resume-item-more summary {
-  list-style: none;
-  padding: 7px 10px;
-  border-radius: var(--app-radius-md);
-  color: var(--app-text-secondary);
-  font-size: var(--app-font-size-xs);
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.resume-item-more summary::-webkit-details-marker {
-  display: none;
-}
-
-.resume-item-more summary:hover,
-.resume-item-more summary:focus-visible {
-  color: var(--app-text);
-  background: var(--app-bg-soft);
-}
-
-.resume-item-more-menu {
-  position: absolute;
-  z-index: 4;
-  top: calc(100% + 6px);
-  right: 0;
-  min-width: 120px;
-  padding: 4px;
-  border: 1px solid var(--app-border);
-  border-radius: var(--app-radius-md);
-  background: var(--app-surface);
-  box-shadow: var(--app-shadow-soft);
-}
-
-.resume-item-more-menu .el-button {
-  width: 100%;
-  justify-content: flex-start;
+.resume-delete-button:hover,
+.resume-delete-button:focus-visible {
+  opacity: 1;
 }
 
 @keyframes resume-spin {
@@ -1204,13 +1392,18 @@ onUnmounted(() => {
   }
 }
 
-.resume-review-inspector {
+.resume-review-inspector,
+.resume-source-preview-inspector {
   min-width: 0;
   align-self: start;
   position: sticky;
   top: calc(var(--app-shell-header-height) + var(--app-space-4));
   border-left: 1px solid var(--app-border-strong);
   padding-left: var(--app-space-8);
+}
+
+.resume-source-preview-inspector {
+  overflow: hidden;
 }
 
 @media (max-width: 900px) {
@@ -1228,7 +1421,8 @@ onUnmounted(() => {
   }
 
   .resume-library-shell,
-  .resume-library-shell.has-review-inspector {
+  .resume-library-shell.has-review-inspector,
+  .resume-library-shell.has-source-preview {
     display: block;
   }
 
@@ -1257,7 +1451,12 @@ onUnmounted(() => {
     flex-wrap: wrap;
   }
 
-  .resume-review-inspector {
+  .resume-simple-actions .resume-delete-button {
+    opacity: 0.58;
+  }
+
+  .resume-review-inspector,
+  .resume-source-preview-inspector {
     position: static;
     margin-top: var(--app-space-6);
     border-top: 1px solid var(--app-border-strong);

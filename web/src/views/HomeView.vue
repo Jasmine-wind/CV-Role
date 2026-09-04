@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import PageHeader from '@/components/common/PageHeader.vue'
 import ErrorState from '@/components/common/ErrorState.vue'
 import SkeletonBlock from '@/components/common/SkeletonBlock.vue'
@@ -29,6 +29,7 @@ type StoredActiveJobAnalysis = ActiveJobAnalysis & {
   jobDescription?: string
 }
 
+const route = useRoute()
 const router = useRouter()
 const resumes = ref<ResumeListItem[]>([])
 const selectedResumeId = ref<number | null>(null)
@@ -53,6 +54,15 @@ const preparationPolling = new Map<number, AsyncTaskPollingController>()
 const selectedResume = computed(
   () => resumes.value.find((item) => item.id === selectedResumeId.value) ?? null,
 )
+const displayNameFor = (resume: ResumeListItem) => {
+  if (resume.displayName?.trim()) return resume.displayName.trim()
+  return resume.originalFilename.replace(/\.[^.]+$/u, '') || '未命名简历'
+}
+const preferredResumeId = computed(() => {
+  const raw = Array.isArray(route.query.resumeId) ? route.query.resumeId[0] : route.query.resumeId
+  const parsed = Number(raw)
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined
+})
 const preparationTaskId = computed(() =>
   selectedResumeId.value == null
     ? null
@@ -90,7 +100,9 @@ const analysisStateTitle = computed(() => {
   if (analysisTask.value?.status === 'CANCELLED') return '任务已取消'
   return '岗位分析没有完成'
 })
-const selectedResumeFilename = computed(() => selectedResume.value?.originalFilename || '当前简历')
+const selectedResumeFilename = computed(() =>
+  selectedResume.value ? displayNameFor(selectedResume.value) : '当前简历',
+)
 const composerActionLabel = computed(() => (canStart.value ? '本次核对' : '下一步'))
 const composerActionText = computed(() => {
   if (canStart.value) return `将使用「${selectedResumeFilename.value}」核对这份岗位描述。`
@@ -400,7 +412,7 @@ const restoreActiveAnalysis = () => {
 }
 
 onMounted(async () => {
-  await loadResumes()
+  await loadResumes(preferredResumeId.value)
   const pendingResumes = resumes.value.filter(
     (resume) => resume.parseStatus === 'PENDING' || resume.qualityStatus === 'PENDING',
   )
@@ -472,8 +484,8 @@ onUnmounted(() => {
               />
               <span class="home-option-radio" aria-hidden="true" />
               <span class="home-option-copy">
-                <strong>{{ resume.originalFilename }}</strong>
-                <small>{{ resume.fileType }} · {{ statusForResume(resume).label }}</small>
+                <strong>{{ displayNameFor(resume) }}</strong>
+                <small>{{ resume.fileType }} · {{ statusForResume(resume).label }} · {{ resume.originalFilename }}</small>
               </span>
               <span v-if="selectedResumeId === resume.id" class="home-option-check">已选</span>
             </label>

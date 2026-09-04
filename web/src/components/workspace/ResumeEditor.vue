@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ElMessage } from 'element-plus'
-import { computed, ref } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import BulletSuggestionCard from '@/components/workspace/BulletSuggestionCard.vue'
 import type {
   ResumeDocument,
@@ -17,6 +17,8 @@ const props = defineProps<{
   suggestEnabled?: boolean
   /** 草稿未保存 / 保存中 / 失败 / 冲突时禁止发起 Suggest。 */
   suggestLocked?: boolean
+  selectedSectionId?: string | null
+  focusedBulletId?: string | null
 }>()
 
 const emit = defineEmits<{
@@ -60,6 +62,51 @@ const visibleContacts = computed(() =>
 const draggedSectionId = ref<string | null>(null)
 const editingSectionTitle = ref<string | null>(null)
 const expandedEntryFields = ref<Set<string>>(new Set())
+const expandedSectionIds = ref<Set<string>>(new Set())
+const editorRoot = ref<HTMLElement | null>(null)
+const sectionElements = new Map<string, HTMLElement>()
+
+const setSectionRef = (sectionId: string, element: unknown) => {
+  if (element instanceof HTMLElement) sectionElements.set(sectionId, element)
+  else sectionElements.delete(sectionId)
+}
+
+const isSectionExpanded = (sectionId: string) => expandedSectionIds.value.has(sectionId)
+
+const toggleSection = (sectionId: string) => {
+  const next = new Set(expandedSectionIds.value)
+  if (next.has(sectionId)) next.delete(sectionId)
+  else next.add(sectionId)
+  expandedSectionIds.value = next
+}
+
+const syncSelectedSection = async () => {
+  const next = new Set(expandedSectionIds.value)
+  if (props.selectedSectionId) next.add(props.selectedSectionId)
+  else if (!next.size && props.document.sections[0]) next.add(props.document.sections[0].id)
+  expandedSectionIds.value = next
+  await nextTick()
+  const bullet = props.focusedBulletId
+    ? editorRoot.value?.querySelector<HTMLElement>(
+        `[data-bullet-id="${props.focusedBulletId}"]`,
+      )
+    : null
+  const target = bullet ?? (props.selectedSectionId ? sectionElements.get(props.selectedSectionId) : null)
+  if (!target) return
+  const scrollContainer = target.closest<HTMLElement>('.resume-stage-scroll')
+  if (scrollContainer) {
+    const targetTop = target.getBoundingClientRect().top - scrollContainer.getBoundingClientRect().top
+    scrollContainer.scrollTop += targetTop - (scrollContainer.clientHeight - target.clientHeight) / 2
+  } else {
+    target.scrollIntoView({ behavior: 'auto', block: 'center' })
+  }
+}
+
+watch(
+  () => [props.selectedSectionId, props.focusedBulletId] as const,
+  () => void syncSelectedSection(),
+  { immediate: true },
+)
 
 /** 深拷贝后原地修改再整体发出，保证父级始终收到不可变的新文档。
  * 父级传入的 document 是 Vue reactive proxy，structuredClone 无法克隆 Proxy，
@@ -371,7 +418,7 @@ const handleSuggestCommand = (bulletId: string, command: BulletSuggestIntent | '
 </script>
 
 <template>
-  <div class="resume-editor">
+  <div ref="editorRoot" class="resume-editor">
     <div class="resume-paper">
       <div class="resume-page-meta"><span>岗位定向简历 · 可编辑文档</span><span>内容来自当前简历</span></div>
     <section class="editor-block editor-basics">
@@ -476,11 +523,23 @@ const handleSuggestCommand = (bulletId: string, command: BulletSuggestIntent | '
     <section
       v-for="(section, sectionIndex) in document.sections"
       :key="section.id"
-      class="editor-block"
+      class="editor-block editor-section"
+      :class="{ 'is-collapsed': !isSectionExpanded(section.id), 'is-focused': props.selectedSectionId === section.id }"
+      :ref="(element) => setSectionRef(section.id, element)"
       @dragover.prevent
       @drop.prevent="dropSection(section.id)"
     >
       <header class="editor-block-header">
+        <button
+          type="button"
+          class="section-collapse-toggle"
+          :aria-expanded="isSectionExpanded(section.id)"
+          :aria-controls="`editor-section-${section.id}`"
+          :aria-label="`${isSectionExpanded(section.id) ? '收起' : '展开'}${sectionTitle(section)}`"
+          @click="toggleSection(section.id)"
+        >
+          <span class="section-collapse-icon" aria-hidden="true" />
+        </button>
         <div class="section-heading">
           <span v-if="section.title.trim() !== sectionKindLabel(section.kind)" class="section-kind">
             {{ sectionKindLabel(section.kind) }}
@@ -538,6 +597,7 @@ const handleSuggestCommand = (bulletId: string, command: BulletSuggestIntent | '
         </details>
       </header>
 
+      <div v-if="isSectionExpanded(section.id)" :id="`editor-section-${section.id}`" class="editor-section-content">
       <p v-if="section.entries.length === 0" class="editor-empty">
         该章节暂时没有内容，可以添加{{ sectionEntryLabel(section.kind) }}。
       </p>
@@ -725,7 +785,13 @@ const handleSuggestCommand = (bulletId: string, command: BulletSuggestIntent | '
           {{ entryContentLabel(section.kind) }}
         </div>
         <template v-if="section.kind !== 'SKILL'">
-          <div v-for="bullet in entry.bullets" :key="bullet.id" class="bullet-block">
+          <div
+            v-for="bullet in entry.bullets"
+            :key="bullet.id"
+            class="bullet-block"
+            :class="{ 'is-evidence-focus': props.focusedBulletId === bullet.id }"
+            :data-bullet-id="bullet.id"
+          >
             <div class="bullet-line">
               <label class="bullet-field">
                 <span class="sr-only">{{ entryContentLabel(section.kind) }}</span>
@@ -744,7 +810,10 @@ const handleSuggestCommand = (bulletId: string, command: BulletSuggestIntent | '
                   "
                 />
               </label>
-              <div class="bullet-actions">
+              <div
+                class="bullet-actions"
+                :class="{ 'has-suggestion-entry': suggestEnabled && suggest }"
+              >
                 <el-dropdown
                   v-if="suggestEnabled && suggest"
                   trigger="click"
@@ -760,7 +829,7 @@ const handleSuggestCommand = (bulletId: string, command: BulletSuggestIntent | '
                       suggest.busy.value || suggestActive(bullet.id) || !bullet.text.trim()
                     "
                   >
-                    优化
+                    AI 优化
                   </el-button>
                   <template #dropdown>
                     <el-dropdown-menu>
@@ -831,6 +900,10 @@ const handleSuggestCommand = (bulletId: string, command: BulletSuggestIntent | '
           addEntryLabel(section.kind)
         }}</el-button>
       </div>
+      </div>
+      <p v-else class="editor-collapsed-summary">
+        {{ section.entries.length }} 个条目 · 点击章节标题左侧展开编辑
+      </p>
     </section>
     <div class="resume-page-footer"><span>当前版本由你确认</span><span>编辑内容会自动保存</span></div>
     </div>
@@ -875,6 +948,69 @@ const handleSuggestCommand = (bulletId: string, command: BulletSuggestIntent | '
   color: var(--app-text-secondary);
   font-size: 12px;
   line-height: 1.6;
+}
+
+.editor-section .editor-block-header {
+  align-items: center;
+}
+
+.section-collapse-toggle {
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  margin: -4px 0;
+  border: 1px solid var(--app-border);
+  border-radius: 50%;
+  color: var(--app-primary);
+  background: var(--app-surface-soft);
+  cursor: pointer;
+  transition: border-color 140ms ease, background-color 140ms ease, transform 140ms ease;
+}
+
+.section-collapse-toggle:hover,
+.section-collapse-toggle:focus-visible {
+  border-color: var(--app-primary);
+  background: var(--app-primary-soft);
+}
+
+.section-collapse-toggle:focus-visible {
+  outline: 2px solid var(--app-primary);
+  outline-offset: 2px;
+}
+
+.section-collapse-icon {
+  width: 7px;
+  height: 7px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(45deg) translateY(-2px);
+  transition: transform 140ms ease;
+}
+
+.editor-section:not(.is-collapsed) .section-collapse-icon {
+  transform: rotate(225deg) translate(-1px, -1px);
+}
+
+.editor-section.is-focused {
+  scroll-margin-top: 24px;
+}
+
+.editor-section.is-focused > .editor-block-header {
+  background: var(--app-primary-soft);
+}
+
+.editor-section-content {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+.editor-collapsed-summary {
+  margin: -5px 0 0 44px;
+  color: var(--app-text-muted);
+  font-size: 12px;
 }
 
 .basics-grid,
@@ -1167,6 +1303,13 @@ const handleSuggestCommand = (bulletId: string, command: BulletSuggestIntent | '
   min-width: 0;
 }
 
+.bullet-block.is-evidence-focus {
+  margin: -5px;
+  padding: 5px;
+  border: 1px solid var(--app-accent);
+  background: var(--app-accent-soft);
+}
+
 .bullet-line {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -1196,6 +1339,7 @@ const handleSuggestCommand = (bulletId: string, command: BulletSuggestIntent | '
   transition: opacity 0.15s ease;
 }
 
+.bullet-actions.has-suggestion-entry,
 .bullet-line:hover .bullet-actions,
 .bullet-line:focus-within .bullet-actions,
 .bullet-actions:focus-within {

@@ -32,6 +32,7 @@ declare module 'vue' {
     ResumeReviewCandidateEditor: typeof import('./components/resume/review/ResumeReviewCandidateEditor.vue')['default']
     ResumeReviewProgress: typeof import('./components/resume/review/ResumeReviewProgress.vue')['default']
     ResumeReviewWorkspace: typeof import('./components/resume/review/ResumeReviewWorkspace.vue')['default']
+    ResumeSourcePreview: typeof import('./components/resume/ResumeSourcePreview.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
     SkeletonBlock: typeof import('./components/common/SkeletonBlock.vue')['default']

@@ -3,6 +3,7 @@ import { expect, test, type Page } from '@playwright/test'
 const readyResume = {
   id: 1,
   originalFilename: '林然-产品分析简历-2026.pdf',
+  displayName: '产品分析 · 一页精简版',
   fileType: 'PDF',
   fileSize: 120000,
   uploadStatus: 'SUCCESS',
@@ -17,6 +18,7 @@ const reviewResume = {
   ...readyResume,
   id: 2,
   originalFilename: 'resume-product-analytics-long-name.docx',
+  displayName: '产品分析 · 待确认版',
   fileType: 'DOCX',
   qualityStatus: 'NEEDS_REVIEW',
 }
@@ -64,7 +66,8 @@ test.describe('Job Target Composer', () => {
 
     await page.locator('#home-jd').fill('负责数据分析与跨团队协作。')
     await expect(page.locator('.el-input__count')).toHaveText('13 / 10000')
-    await expect(page.locator('.home-resume-option.is-selected strong')).toContainText('resume-product-analytics-long-name.docx')
+    await expect(page.locator('.home-resume-option.is-selected strong')).toHaveText('产品分析 · 待确认版')
+    await expect(page.locator('.home-resume-option.is-selected small')).toContainText('resume-product-analytics-long-name.docx')
     await expect(page.getByTestId('home-start-analysis')).toBeDisabled()
     await expect(page.locator('.home-action-summary strong')).toHaveText('这份简历有内容需要确认。')
 

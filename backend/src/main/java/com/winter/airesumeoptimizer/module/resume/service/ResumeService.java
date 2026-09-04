@@ -1,6 +1,7 @@
 package com.winter.airesumeoptimizer.module.resume.service;
 
 import com.winter.airesumeoptimizer.infra.ai.AiSelectionSnapshot;
+import com.winter.airesumeoptimizer.module.resume.dto.ResumeDisplayNameUpdateRequestDTO;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeParseOptionsDTO;
 import com.winter.airesumeoptimizer.module.resume.vo.ResumeUploadVO;
 import com.winter.airesumeoptimizer.module.resume.vo.ResumeDetailVO;
@@ -16,6 +17,8 @@ public interface ResumeService {
     List<ResumeListVO> listByUser(Long userId);
 
     ResumeDetailVO getDetail(Long userId, Long resumeId);
+
+    ResumeDetailVO updateDisplayName(Long userId, Long resumeId, ResumeDisplayNameUpdateRequestDTO request);
 
     ResumeParseResultVO parse(Long userId, Long resumeId);
 

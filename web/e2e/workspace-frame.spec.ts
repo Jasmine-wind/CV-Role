@@ -38,7 +38,7 @@ const requirement = (id: number, level: string) => ({
   evidences: [{
     requirementEvidenceId: id * 10,
     sectionLabel: '工作经历',
-    evidenceText: `简历中的证据 ${id}`,
+    evidenceText: id === 3 ? '负责 Java 后端服务与 Redis 缓存优化工作 1' : `简历中的证据 ${id}`,
     supportLevel: level === 'MATCHED' ? 'SUFFICIENT' : 'PARTIAL',
   }],
 })
@@ -103,6 +103,14 @@ test.describe('Workspace editor frame', () => {
       await expect(page.getByText('岗位定向编辑', { exact: true })).toBeVisible()
       await expect(page.getByText('当前优化：具备 Redis 缓存设计经验', { exact: true })).toBeVisible()
       await expect(page.getByText('✓ 已保存', { exact: true })).toBeVisible()
+      await expect(page.getByRole('button', { name: 'AI 优化', exact: true }).first()).toBeVisible()
+      await expect(page.locator('.editor-section.is-focused')).toBeVisible()
+      await expect(page.locator('.bullet-block.is-evidence-focus')).toHaveCount(1)
+      const section = page.locator('.editor-section').first()
+      await section.locator('.section-collapse-toggle').click()
+      await expect(section.locator('.editor-section-content')).toBeHidden()
+      await section.locator('.section-collapse-toggle').click()
+      await expect(section.locator('.editor-section-content')).toBeVisible()
 
       const metrics = await page.evaluate(() => {
         const app = document.querySelector<HTMLElement>('.app-page')!

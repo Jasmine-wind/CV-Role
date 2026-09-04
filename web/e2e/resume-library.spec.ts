@@ -3,6 +3,7 @@ import { expect, test, type Page } from '@playwright/test'
 const readyResume = {
   id: 1,
   originalFilename: 'chinese-java-two-page.pdf',
+  displayName: 'Java 后端 · 两页详细版',
   fileType: 'PDF',
   fileSize: 2 * 1024 * 1024,
   uploadStatus: 'SUCCESS',
@@ -23,6 +24,7 @@ const reviewResume = {
   ...readyResume,
   id: 2,
   originalFilename: 'product-analytics-review.docx',
+  displayName: '产品分析 · 待确认',
   fileType: 'DOCX',
   qualityStatus: 'NEEDS_REVIEW',
 }
@@ -43,13 +45,13 @@ async function mockShell(page: Page, resumes: unknown[]) {
 
 test.describe('Resume Library', () => {
   test('loads a full-width ledger with readable file, status and date columns', async ({ page }) => {
-    await mockShell(page, [readyResume, { ...readyResume, id: 2, originalFilename: 'backend-general.docx', fileType: 'DOCX' }])
+    await mockShell(page, [readyResume, { ...readyResume, id: 2, displayName: 'Java 后端 · 通用版', originalFilename: 'backend-general.docx', fileType: 'DOCX' }])
     await page.goto('/resumes')
 
     await expect(page.getByRole('heading', { name: '我的简历' })).toBeVisible()
-    await expect(page.getByRole('heading', { name: '简历库' })).toBeVisible()
-    await expect(page.locator('.resume-library-summary')).toHaveText('2 份简历 · 2 份可用于岗位分析')
+    await expect(page.locator('.resume-library-summary')).toHaveText('共 2 份')
     await expect(page.locator('.resume-library-row')).toHaveCount(2)
+    await expect(page.locator('.resume-library-row').first()).toContainText('Java 后端 · 两页详细版')
     await expect(page.locator('.resume-library-row').first()).toContainText('chinese-java-two-page.pdf')
     await expect(page.locator('.resume-library-row').first()).toContainText('可用于岗位分析')
     await expect(page.locator('.resume-library-row').first()).toContainText('2026年01月02日')
@@ -61,6 +63,18 @@ test.describe('Resume Library', () => {
     })
     expect(layout.display).toBe('block')
     expect(layout.mainWidth).toBeCloseTo(layout.shellWidth, 0)
+  })
+
+  test('keeps the upload action visible in the first mobile viewport', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 })
+    await mockShell(page, [readyResume])
+    await page.goto('/resumes')
+
+    const upload = page.getByRole('button', { name: '上传简历', exact: true })
+    await expect(upload).toBeVisible()
+    const top = await upload.evaluate((element) => element.getBoundingClientRect().top)
+    expect(top).toBeGreaterThanOrEqual(0)
+    expect(top).toBeLessThan(844)
   })
 
   test('opens the upload composer with secondary cancellation and selected file summary', async ({ page }) => {
@@ -97,7 +111,7 @@ test.describe('Resume Library', () => {
     ])
     await page.goto('/resumes')
 
-    await expect(page.locator('.resume-library-summary')).toHaveText('5 份简历 · 1 份可用于岗位分析 · 4 份需要处理')
+    await expect(page.locator('.resume-library-summary')).toHaveText('共 5 份')
     await expect(page.locator('.resume-library-row').nth(1)).toContainText('需要确认')
     await expect(page.locator('.resume-library-row').nth(1).getByRole('button', { name: /确认 product-analytics-review/ })).toBeVisible()
     await expect(page.locator('.resume-library-row').nth(2)).toContainText('需要重新准备')
@@ -107,6 +121,57 @@ test.describe('Resume Library', () => {
     await expect(page.locator('.resume-library-row').nth(3).getByRole('button', { name: /重试 broken/ })).toBeVisible()
     await expect(page.locator('.resume-library-row').nth(4)).toContainText('等待准备')
     await expect(page.locator('.resume-library-row').nth(4)).toContainText('尚未完成内容准备')
+  })
+
+  test('opens canonical SOURCE preview and renames the management label without changing file metadata', async ({ page }) => {
+    await mockShell(page, [readyResume])
+    await page.route('**/api/resumes/1/review', (route) => route.fulfill(response({
+      resumeId: 1,
+      qualityStatus: 'READY',
+      qualityIssues: null,
+      unresolvedItems: '[]',
+      canonicalDocument: JSON.stringify({
+        schemaVersion: 'RESUME_DOCUMENT_V1',
+        basics: {
+          name: '测试用户',
+          jobIntention: 'Java 后端工程师',
+          highestEducation: null,
+          contacts: [{ id: 'email-1', type: 'EMAIL', label: null, value: 'test@example.com' }],
+        },
+        sections: [{
+          id: 'experience', kind: 'EXPERIENCE', title: '工作经历', entries: [{
+            id: 'entry-1', organization: '某科技公司', role: '后端工程师', school: null, degree: null,
+            major: null, startDate: '2022', endDate: '2024', location: null, group: null, skillItems: null,
+            bullets: [{ id: 'bullet-1', text: '负责 Java 服务开发与维护' }],
+          }],
+        }],
+      }),
+    })))
+    await page.route('**/api/resumes/1', (route) => {
+      if (route.request().method() === 'PATCH') {
+        return route.fulfill(response({ id: 1, displayName: '后端主简历' }))
+      }
+      return route.continue()
+    })
+    await page.goto('/resumes')
+
+    await page.locator('.resume-source-trigger').click()
+    await expect(page.locator('.resume-source-preview')).toContainText('已确认材料')
+    await expect(page.locator('.resume-source-preview')).toContainText('负责 Java 服务开发与维护')
+    await expect(page.locator('.resume-source-preview')).toContainText('原始文件：chinese-java-two-page.pdf')
+    await expect(page.getByRole('button', { name: '开始优化这份简历' })).toBeVisible()
+    await page.getByRole('button', { name: '开始优化这份简历' }).click()
+    await expect(page).toHaveURL(/\/app\?resumeId=1/)
+    await page.goto('/resumes')
+    await page.locator('.resume-source-trigger').click()
+    await page.locator('.source-preview-close').click()
+    await expect(page.locator('.resume-source-preview')).toBeHidden()
+
+    await page.locator('.resume-rename-button').click()
+    await page.getByRole('textbox', { name: '简历管理名称' }).fill('后端主简历')
+    await page.getByRole('button', { name: '保存' }).click()
+    await expect(page.locator('.resume-source-trigger strong')).toHaveText('后端主简历')
+    await expect(page.locator('.resume-source-trigger small')).toContainText('chinese-java-two-page.pdf')
   })
 
   test('opens and closes the existing review inspector without leaving an empty rail', async ({ page }) => {
@@ -134,12 +199,11 @@ test.describe('Resume Library', () => {
     await expect(page.locator('.resume-review-inspector')).toBeHidden()
   })
 
-  test('keeps deletion behind an accessible menu and preserves the real impact warning', async ({ page }) => {
+  test('keeps direct deletion accessible and preserves the real impact warning', async ({ page }) => {
     await mockShell(page, [readyResume])
     await page.goto('/resumes')
 
-    await page.locator('.resume-item-more summary').click()
-    await page.getByRole('button', { name: '删除简历' }).click()
+    await page.locator('.resume-delete-button').click()
     const dialog = page.locator('.el-message-box')
     await expect(dialog).toContainText('相关分析结果也会删除')
     await dialog.getByRole('button', { name: '取消', exact: true }).click()
@@ -168,8 +232,7 @@ test.describe('Resume Library', () => {
     await expect(row).toContainText('正在准备')
     await expect(row).toContainText('正在读取工作经历')
     await expect(row).not.toContainText('17%')
-    await row.locator('summary').click()
-    await expect(row.getByRole('button', { name: '删除简历' })).toBeDisabled()
+    await expect(row.getByRole('button', { name: '删除' })).toBeDisabled()
   })
 
   test('separates load failure from empty state and supports retry', async ({ page }) => {
@@ -196,7 +259,7 @@ test.describe('Resume Library', () => {
     await mockShell(page, [])
     await page.goto('/resumes')
 
-    await expect(page.getByText('简历库', { exact: true })).toBeVisible()
+    await expect(page.getByRole('heading', { name: '我的简历' })).toBeVisible()
     await expect(page.getByText('还没有简历', { exact: true })).toBeVisible()
     await expect(page.getByRole('button', { name: '上传第一份简历' })).toBeVisible()
     await page.getByRole('button', { name: '上传第一份简历' }).click()

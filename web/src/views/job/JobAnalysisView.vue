@@ -7,7 +7,10 @@ import RequirementNavigator from '@/components/task/RequirementNavigator.vue'
 import TaskHeader from '@/components/task/TaskHeader.vue'
 import { getOptimizationAnalysisResult } from '@/api/job-analysis'
 import type { AiJobMatchItem } from '@/types/ai-job-match'
+import ResumeSourcePreview from '@/components/resume/ResumeSourcePreview.vue'
+import type { ResumeDocument } from '@/types/resume-document'
 import type { OptimizationAnalysisResult } from '@/types/job-analysis'
+import { getResumeReview } from '@/api/resume'
 import { sortEvidenceRequirements } from '@/utils/analysisPresentation'
 
 const route = useRoute()
@@ -17,6 +20,9 @@ const error = ref<string | null>(null)
 const optimizationResult = ref<OptimizationAnalysisResult | null>(null)
 const selectedRequirementId = ref<number | null>(null)
 const evidenceDetailRef = ref<HTMLElement | null>(null)
+const sourceDocument = ref<ResumeDocument | null>(null)
+const sourceDocumentLoading = ref(false)
+const sourceDocumentError = ref<string | null>(null)
 
 const parsePositiveId = (value: unknown) => {
   const raw = Array.isArray(value) ? value[0] : value
@@ -105,6 +111,63 @@ const importanceLabel = (value: string) => (value === 'BONUS' ? '加分项' : '�
 const evidenceLocation = (sectionLabel: string | null) => sectionLabel || '简历材料'
 const itemKey = (item: AiJobMatchItem, index: number) => `${item.item}-${index}`
 
+const normalizeEvidenceText = (text: string) => text.replace(/\s+/gu, ' ').trim()
+
+const sectionLabelAliases: Record<string, string[]> = {
+  EXPERIENCE: ['工作经历', '实习经历', 'experience'],
+  PROJECT: ['项目经历', '项目经验', 'project'],
+  EDUCATION: ['教育经历', '教育背景', 'education'],
+  SKILL: ['技能', '专业技能', 'skills', 'skill'],
+}
+
+const sectionMatchesLabel = (section: ResumeDocument['sections'][number], label: string) =>
+  normalizeEvidenceText(section.title).toLocaleLowerCase() === label.toLocaleLowerCase() ||
+  (sectionLabelAliases[section.kind] ?? []).some(
+    (alias) => normalizeEvidenceText(alias).toLocaleLowerCase() === label.toLocaleLowerCase(),
+  )
+
+const sourceAnchors = computed(() => {
+  const document = sourceDocument.value
+  const requirement = selectedRequirement.value
+  if (!document || !requirement || requirement.matchLevel === 'NO_EVIDENCE') {
+    return { sectionId: null, bulletIds: [] as string[] }
+  }
+
+  const matchesByEvidence = requirement.evidences.map((evidence) => {
+    const quote = normalizeEvidenceText(evidence.evidenceText)
+    if (!quote) return []
+    const labeledSections = evidence.sectionLabel
+      ? document.sections.filter((section) => {
+          const label = normalizeEvidenceText(evidence.sectionLabel ?? '')
+          return sectionMatchesLabel(section, label)
+        })
+      : document.sections
+    // A section label is part of the evidence locator. If it cannot be resolved,
+    // fail closed rather than searching the whole document and guessing.
+    const sections = evidence.sectionLabel ? labeledSections : document.sections
+    const bullets = sections.flatMap((section) =>
+      section.entries.flatMap((entry) => entry.bullets.map((bullet) => ({ section, bullet }))),
+    )
+    const exactMatches = bullets.filter(
+      ({ bullet }) => normalizeEvidenceText(bullet.text) === quote,
+    )
+    const matches = exactMatches.length
+      ? exactMatches
+      : bullets.filter(({ bullet }) => normalizeEvidenceText(bullet.text).includes(quote))
+    return matches.map(({ section, bullet }) => ({ sectionId: section.id, bulletId: bullet.id }))
+  })
+
+  const allMatches = matchesByEvidence.flat()
+  const sectionIds = [...new Set(allMatches.map((match) => match.sectionId))]
+  const bulletIds = matchesByEvidence.every((matches) => matches.length === 1)
+    ? matchesByEvidence.map((matches) => matches[0]?.bulletId).filter((id): id is string => Boolean(id))
+    : []
+  return {
+    sectionId: sectionIds.length === 1 ? sectionIds[0] ?? null : null,
+    bulletIds: [...new Set(bulletIds)],
+  }
+})
+
 watch(
   [evidenceAnalysis, requestedRequirementId],
   () => {
@@ -147,6 +210,29 @@ const goToWorkspace = (requirementId = selectedRequirement.value?.evidenceRequir
   })
 }
 
+const loadSourceDocument = async (result: OptimizationAnalysisResult) => {
+  sourceDocument.value = null
+  sourceDocumentError.value = null
+  if (!result.resumeId || result.analysisMode !== 'EVIDENCE') return
+  sourceDocumentLoading.value = true
+  try {
+    const review = await getResumeReview(result.resumeId)
+    if (!review.canonicalDocument) {
+      sourceDocumentError.value = '当前简历没有可供定位的已确认内容。'
+      return
+    }
+    try {
+      sourceDocument.value = JSON.parse(review.canonicalDocument) as ResumeDocument
+    } catch {
+      sourceDocumentError.value = '当前简历内容格式不正确，暂时无法定位。'
+    }
+  } catch (error) {
+    sourceDocumentError.value = error instanceof Error ? error.message : '暂时无法读取简历原文'
+  } finally {
+    sourceDocumentLoading.value = false
+  }
+}
+
 const loadResult = async () => {
   if (!optimizationTaskId.value) {
     error.value = '岗位分析地址无效，请从首页重新开始。'
@@ -156,7 +242,9 @@ const loadResult = async () => {
   loading.value = true
   error.value = null
   try {
-    optimizationResult.value = await getOptimizationAnalysisResult(optimizationTaskId.value)
+    const result = await getOptimizationAnalysisResult(optimizationTaskId.value)
+    optimizationResult.value = result
+    if (result) void loadSourceDocument(result)
   } catch (loadError) {
     error.value = loadError instanceof Error ? loadError.message : '岗位分析结果加载失败'
   } finally {
@@ -256,6 +344,22 @@ onMounted(loadResult)
             </header>
 
             <h2>{{ selectedRequirement.requirementText }}</h2>
+
+            <section class="analysis-source-context" aria-label="简历中的相关内容">
+              <ResumeSourcePreview
+                class="analysis-source-preview"
+                :document="sourceDocument"
+                :display-name="taskResumeName"
+                :filename="taskResumeName"
+                :loading="sourceDocumentLoading"
+                :error="sourceDocumentError"
+                :highlighted-bullet-ids="sourceAnchors.bulletIds"
+                :focused-section-id="sourceAnchors.sectionId"
+                :closable="false"
+                :show-filename="false"
+                :show-start-action="false"
+              />
+            </section>
 
             <section class="analysis-detail-block">
               <span class="analysis-block-label">岗位要求</span>
@@ -605,6 +709,16 @@ onMounted(loadResult)
   font-weight: 750;
   line-height: 1.3;
   letter-spacing: -0.035em;
+}
+
+.analysis-source-context {
+  margin: 0 var(--app-space-8) var(--app-space-6);
+  border: 1px solid var(--app-border-strong);
+  background: var(--app-surface);
+}
+
+.analysis-source-preview {
+  height: clamp(260px, 38vh, 420px);
 }
 
 .analysis-detail-block {

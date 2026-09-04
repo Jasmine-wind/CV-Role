@@ -73,7 +73,7 @@ test.describe('auth pages', () => {
     await page.getByPlaceholder('请输入用户名或邮箱').fill('polish-user')
     await page.getByPlaceholder('请输入密码').fill('wrong-password')
     await page.getByPlaceholder('请输入密码').press('Enter')
-    await expect(page.locator('.auth-form-error')).toHaveText('登录未完成，请检查用户名或密码后重试。')
+    await expect(page.locator('.auth-form-error')).toHaveText('用户名或密码错误，请检查后重试。')
     await expect(page.getByText('internal auth detail')).toHaveCount(0)
   })
 

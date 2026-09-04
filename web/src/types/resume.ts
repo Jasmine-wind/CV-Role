@@ -1,6 +1,7 @@
 export interface ResumeListItem {
   id: number
   originalFilename: string
+  displayName: string
   fileType: string
   fileSize: number
   uploadStatus: string
@@ -16,10 +17,15 @@ export interface ResumeListItem {
 export interface ResumeUploadResult {
   id: number
   originalFilename: string
+  displayName: string
   fileType: string
   fileSize: number
   uploadStatus: string
   parseStatus: 'PENDING' | 'PROCESSING' | 'SUCCESS' | 'FAILED' | string
   preparationTaskId: number | null
   createdAt: string
+}
+
+export interface ResumeDisplayNameUpdateRequest {
+  displayName: string
 }

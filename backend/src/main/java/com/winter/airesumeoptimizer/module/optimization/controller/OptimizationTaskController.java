@@ -85,6 +85,7 @@ public class OptimizationTaskController {
         }
         return Result.success(OptimizationAnalysisResultVO.builder()
                 .optimizationTaskId(task.getOptimizationTaskId())
+                .resumeId(task.getResumeId())
                 .sourceResumeVersionId(task.getSourceResumeVersionId())
                 .targetResumeVersionId(task.getTargetResumeVersionId())
                 .jobTargetId(task.getJobTargetId())

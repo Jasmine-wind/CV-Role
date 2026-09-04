@@ -12,6 +12,8 @@ public class OptimizationTaskVO {
 
     private Long optimizationTaskId;
 
+    private Long resumeId;
+
     private Long sourceResumeVersionId;
 
     private Long targetResumeVersionId;

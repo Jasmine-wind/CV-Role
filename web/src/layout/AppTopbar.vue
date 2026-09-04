@@ -65,13 +65,6 @@ const handleAccountCommand = (command: string) => {
           {{ item.label }}
         </RouterLink>
       </nav>
-      <span
-        v-if="$route.name === 'workspace' || $route.name === 'job-analysis'"
-        class="app-workspace-context"
-      >
-        岗位任务 <span aria-hidden="true">/</span>
-        {{ $route.name === 'workspace' ? '编辑工作区' : '证据审阅' }}
-      </span>
     </div>
 
     <div class="app-topbar-account">

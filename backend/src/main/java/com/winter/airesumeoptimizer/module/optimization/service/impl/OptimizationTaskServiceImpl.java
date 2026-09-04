@@ -762,6 +762,7 @@ public class OptimizationTaskServiceImpl implements OptimizationTaskService {
             Resume resume) {
         return OptimizationTaskVO.builder()
                 .optimizationTaskId(task.getId())
+                .resumeId(resume.getId())
                 .sourceResumeVersionId(task.getSourceResumeVersionId())
                 .targetResumeVersionId(task.getTargetResumeVersionId())
                 .jobTargetId(task.getJobTargetId())
@@ -769,7 +770,8 @@ public class OptimizationTaskServiceImpl implements OptimizationTaskService {
                 .analysisResultId(task.getAnalysisResultId())
                 .status(task.getStatus())
                 .jobTitle(jobTarget.getTitle())
-                .resumeName(resume.getOriginalFilename())
+                .resumeName(resume.getDisplayName() != null && !resume.getDisplayName().isBlank()
+                        ? resume.getDisplayName() : resume.getOriginalFilename())
                 .providerSnapshot(task.getProviderSnapshot())
                 .modelSnapshot(task.getModelSnapshot())
                 .templateVersion(task.getTemplateVersion())

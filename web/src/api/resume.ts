@@ -1,6 +1,10 @@
 import request from '@/api/request'
 import type { AsyncTaskVO } from '@/types/task'
-import type { ResumeListItem, ResumeUploadResult } from '@/types/resume'
+import type {
+  ResumeDisplayNameUpdateRequest,
+  ResumeListItem,
+  ResumeUploadResult,
+} from '@/types/resume'
 import type { ResumeDocumentEntry } from '@/types/resume-document'
 
 export const uploadResume = (file: File) => {
@@ -15,6 +19,10 @@ export const getResumeList = () => {
 
 export const requestResumePreparation = (id: number) => {
   return request.post<AsyncTaskVO>(`/api/resumes/${id}/preparation`, {})
+}
+
+export const updateResumeDisplayName = (id: number, payload: ResumeDisplayNameUpdateRequest) => {
+  return request.patch<{ id: number; displayName: string }>(`/api/resumes/${id}`, payload)
 }
 
 export const deleteResume = (id: number) => {

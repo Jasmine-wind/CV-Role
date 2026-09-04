@@ -1,6 +1,7 @@
 package com.winter.airesumeoptimizer.module.resume.controller;
 
 import com.winter.airesumeoptimizer.common.result.Result;
+import com.winter.airesumeoptimizer.module.resume.dto.ResumeDisplayNameUpdateRequestDTO;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeParseOptionsDTO;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeReviewResolveRequestDTO;
 import com.winter.airesumeoptimizer.module.resume.service.ResumeAsyncTaskService;
@@ -26,6 +27,7 @@ import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -88,6 +90,16 @@ public class ResumeController {
             Authentication authentication) {
         AuthenticatedUser authenticatedUser = (AuthenticatedUser) authentication.getPrincipal();
         return Result.success(resumeService.getDetail(authenticatedUser.getUserId(), id));
+    }
+
+    @PatchMapping("/{id}")
+    @Operation(summary = "修改简历管理名称", description = "只修改用户在简历库中的管理名称，不改变原始文件或简历内容")
+    public Result<ResumeDetailVO> updateDisplayName(
+            @PathVariable @Positive(message = "简历 ID 必须大于 0") Long id,
+            @Valid @RequestBody ResumeDisplayNameUpdateRequestDTO request,
+            Authentication authentication) {
+        AuthenticatedUser authenticatedUser = (AuthenticatedUser) authentication.getPrincipal();
+        return Result.success("简历名称已更新", resumeService.updateDisplayName(authenticatedUser.getUserId(), id, request));
     }
 
     @PostMapping("/{id}/parse")

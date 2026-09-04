@@ -19,6 +19,8 @@ public class Resume {
 
     private String originalFilename;
 
+    private String displayName;
+
     private String fileType;
 
     private Long fileSize;

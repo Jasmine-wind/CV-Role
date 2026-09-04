@@ -31,6 +31,7 @@ import com.winter.airesumeoptimizer.module.resume.mapper.ResumeMapper;
 import com.winter.airesumeoptimizer.module.resume.mapper.ResumeParseResultMapper;
 import com.winter.airesumeoptimizer.module.resume.config.ResumeParseProperties;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeAiStructuredParseResultDTO;
+import com.winter.airesumeoptimizer.module.resume.dto.ResumeDisplayNameUpdateRequestDTO;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeParseMetaDTO;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeParseMode;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeParseOptionsDTO;
@@ -246,6 +247,7 @@ public class ResumeServiceImpl implements ResumeService {
         return ResumeUploadVO.builder()
                 .id(resume.getId())
                 .originalFilename(resume.getOriginalFilename())
+                .displayName(resume.getDisplayName())
                 .fileType(resume.getFileType())
                 .fileSize(resume.getFileSize())
                 .uploadStatus(resume.getUploadStatus())
@@ -288,6 +290,29 @@ public class ResumeServiceImpl implements ResumeService {
         }
 
         return toDetailVO(resume);
+    }
+
+    @Override
+    @Transactional
+    public ResumeDetailVO updateDisplayName(
+            Long userId, Long resumeId, ResumeDisplayNameUpdateRequestDTO request) {
+        Resume resume = getOwnedResume(userId, resumeId);
+        if (request == null || request.getDisplayName() == null || request.getDisplayName().isBlank()) {
+            throw new BusinessException(400, "简历名称不能为空");
+        }
+        String displayName = request.getDisplayName().strip();
+        if (displayName.length() > 255) {
+            throw new BusinessException(400, "简历名称不能超过 255 个字符");
+        }
+        int rows = resumeMapper.update(null, new LambdaUpdateWrapper<Resume>()
+                .eq(Resume::getId, resume.getId())
+                .eq(Resume::getUserId, userId)
+                .set(Resume::getDisplayName, displayName)
+                .set(Resume::getUpdatedAt, LocalDateTime.now()));
+        if (rows != 1) {
+            throw new BusinessException(409, "简历名称更新失败，请重试");
+        }
+        return getDetail(userId, resume.getId());
     }
 
     @Override
@@ -730,6 +755,7 @@ public class ResumeServiceImpl implements ResumeService {
         Resume resume = new Resume();
         resume.setUserId(userId);
         resume.setOriginalFilename(storedFile.originalFilename());
+        resume.setDisplayName(defaultDisplayName(storedFile.originalFilename()));
         resume.setFileType(fileType.toUpperCase(Locale.ROOT));
         resume.setFileSize(storedFile.size());
         resume.setObjectKey(storedFile.storageKey());
@@ -788,6 +814,7 @@ public class ResumeServiceImpl implements ResumeService {
         return ResumeListVO.builder()
                 .id(resume.getId())
                 .originalFilename(resume.getOriginalFilename())
+                .displayName(resume.getDisplayName())
                 .fileType(resume.getFileType())
                 .fileSize(resume.getFileSize())
                 .uploadStatus(resume.getUploadStatus())
@@ -803,12 +830,20 @@ public class ResumeServiceImpl implements ResumeService {
         return ResumeDetailVO.builder()
                 .id(resume.getId())
                 .originalFilename(resume.getOriginalFilename())
+                .displayName(resume.getDisplayName())
                 .fileType(resume.getFileType())
                 .fileSize(resume.getFileSize())
                 .uploadStatus(resume.getUploadStatus())
                 .createdAt(resume.getCreatedAt())
                 .updatedAt(resume.getUpdatedAt())
                 .build();
+    }
+
+    private String defaultDisplayName(String originalFilename) {
+        if (originalFilename == null || originalFilename.isBlank()) return "未命名简历";
+        int extensionStart = originalFilename.lastIndexOf('.');
+        if (extensionStart > 0) return originalFilename.substring(0, extensionStart);
+        return originalFilename;
     }
 
     private ResumeParseResultVO toParseResultVO(ResumeParseResult parseResult) {

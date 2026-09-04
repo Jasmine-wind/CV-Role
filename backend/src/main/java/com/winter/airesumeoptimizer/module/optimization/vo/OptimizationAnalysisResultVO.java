@@ -13,6 +13,8 @@ public class OptimizationAnalysisResultVO {
 
     private Long optimizationTaskId;
 
+    private Long resumeId;
+
     private Long sourceResumeVersionId;
 
     private Long targetResumeVersionId;

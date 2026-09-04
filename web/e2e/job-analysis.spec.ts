@@ -14,6 +14,23 @@ const businessError = (message: string) => ({
 
 const longEvidence = '负责平台服务与数据链路建设，围绕稳定性、性能和可观测性持续改进。'.repeat(60)
 
+const canonicalSource = {
+  schemaVersion: 'RESUME_DOCUMENT_V1',
+  basics: {
+    name: '林然',
+    jobIntention: 'Java 后端工程师',
+    highestEducation: null,
+    contacts: [{ id: 'email-1', type: 'EMAIL', label: null, value: 'linran@example.com' }],
+  },
+  sections: [{
+    id: 'experience', kind: 'EXPERIENCE', title: '工作经历', entries: [{
+      id: 'entry-1', organization: '某科技公司', role: '后端工程师', school: null, degree: null,
+      major: null, startDate: '2021', endDate: '2024', location: null, group: null, skillItems: null,
+      bullets: [{ id: 'bullet-1', text: '负责 Java 后端服务开发与维护' }],
+    }],
+  }],
+}
+
 const makeRequirement = (index: number, matchLevel: string = 'MATCHED') => ({
   evidenceRequirementId: index,
   requirementText: `岗位要求 ${index}：具备 Java 后端与系统设计能力`,
@@ -235,6 +252,25 @@ test.describe('Job Analysis fixed evidence workspace', () => {
     await page.route('**/api/workspace/**', (route) => route.fulfill(response({})))
     await page.getByRole('button', { name: '修改简历 →' }).last().click()
     await expect(page).toHaveURL('/workspace/42?requirement=4')
+  })
+
+  test('links matched evidence to the canonical SOURCE bullet without guessing', async ({ page }) => {
+    await page.setViewportSize({ width: 1366, height: 768 })
+    const result = { ...evidenceResult(['MATCHED']), resumeId: 1 }
+    const evidence = result.evidenceAnalysis.requirements[0]?.evidences[0]
+    if (evidence) evidence.evidenceText = '负责 Java 后端服务开发与维护'
+    await openAnalysis(page, result)
+    await page.route('**/api/resumes/1/review', (route) => route.fulfill(response({
+      resumeId: 1,
+      qualityStatus: 'READY',
+      qualityIssues: null,
+      unresolvedItems: '[]',
+      canonicalDocument: JSON.stringify(canonicalSource),
+    })))
+    await page.reload()
+    await expect(page.locator('.source-preview-section.is-focused')).toBeVisible()
+    await expect(page.locator('.source-preview-entry mark')).toHaveText('负责 Java 后端服务开发与维护')
+    await expectFixedViewport(page)
   })
 
   test('keeps matched, partial and missing summaries inside the fixed frame', async ({ page }) => {

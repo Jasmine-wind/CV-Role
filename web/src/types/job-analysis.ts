@@ -22,6 +22,8 @@ export type OptimizationAnalysisMode = 'EVIDENCE' | 'LEGACY_COMPAT'
 
 export interface OptimizationAnalysisResult {
   optimizationTaskId: number
+  /** Present for formal tasks; omitted by historical compatibility fixtures. */
+  resumeId?: number
   sourceResumeVersionId: number
   targetResumeVersionId: number
   jobTargetId: number

@@ -112,7 +112,7 @@ test('happy path: upload, analysis, workspace, deterministic suggestion, preview
 
   const bullet = await openWorkspaceWithSavedDraft(page)
   const bulletLine = bullet.locator('xpath=ancestor::div[contains(@class, "bullet-line")]')
-  await bulletLine.getByRole('button', { name: '优化', exact: true }).click()
+  await bulletLine.getByRole('button', { name: 'AI 优化', exact: true }).click()
   await page.locator('[role="menuitem"]:visible', { hasText: '精简' }).click()
   // Demo Provider intentionally returns the frozen original. The no-op guard must
   // discard it rather than expose a misleading Apply action.
@@ -290,7 +290,7 @@ test('workspace conflict preserves the local draft; stale Preview and Suggest ca
   })
   const refreshedBullet = first.locator('textarea').last()
   const bulletLine = refreshedBullet.locator('xpath=ancestor::div[contains(@class, "bullet-line")]')
-  await bulletLine.getByRole('button', { name: '优化', exact: true }).click()
+  await bulletLine.getByRole('button', { name: 'AI 优化', exact: true }).click()
   await first.locator('[role="menuitem"]:visible', { hasText: '精简' }).click()
   await suggestionStarted
   await refreshedBullet.fill('负责 Java 后端服务开发 - edited while suggestion was pending')

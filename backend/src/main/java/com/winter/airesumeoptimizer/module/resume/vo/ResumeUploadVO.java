@@ -14,6 +14,8 @@ public class ResumeUploadVO {
     private Long id;
     @Schema(description = "原始文件名", example = "resume.pdf")
     private String originalFilename;
+    @Schema(description = "用户管理名称", example = "Java 后端简历")
+    private String displayName;
     @Schema(description = "文件类型", example = "PDF")
     private String fileType;
     @Schema(description = "文件大小，单位字节", example = "102400")

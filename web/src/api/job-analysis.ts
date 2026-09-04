@@ -16,7 +16,7 @@ export const retryJobAnalysis = (optimizationTaskId: number) => {
 }
 
 export const getOptimizationAnalysisResult = (optimizationTaskId: number) => {
-  return request.get<OptimizationAnalysisResult>(
+  return request.get<OptimizationAnalysisResult | null>(
     `/api/optimization-tasks/${optimizationTaskId}/analysis-result`,
   )
 }

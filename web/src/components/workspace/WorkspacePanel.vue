@@ -67,6 +67,53 @@ const effectiveSelectedRequirementId = computed(() => {
   }
   return requirements.value[0]?.evidenceRequirementId ?? null
 })
+
+const normalizeEvidenceText = (value: string | null | undefined) =>
+  (value ?? '').replace(/\s+/g, '').toLocaleLowerCase()
+
+const sectionKindLabels: Record<string, string[]> = {
+  EXPERIENCE: ['工作经历', '实习经历', 'experience'],
+  PROJECT: ['项目经历', '项目经验', 'project'],
+  EDUCATION: ['教育经历', '教育背景', 'education'],
+  SKILL: ['技能', '专业技能', 'skills', 'skill'],
+  SUMMARY: ['个人简介', '简介', 'summary'],
+}
+
+const selectedWorkspaceEvidence = computed(() => {
+  const requirement = requirements.value.find(
+    (item) => item.evidenceRequirementId === effectiveSelectedRequirementId.value,
+  )
+  return requirement?.evidences[0] ?? null
+})
+
+const selectedWorkspaceSectionId = computed(() => {
+  const evidence = selectedWorkspaceEvidence.value
+  const label = normalizeEvidenceText(evidence?.sectionLabel)
+  if (!label || !editor.draft.value) return null
+  return (
+    editor.draft.value.sections.find((section) => {
+      const title = normalizeEvidenceText(section.title)
+      const kindLabels = sectionKindLabels[section.kind] ?? []
+      return title === label || kindLabels.some((kind) => normalizeEvidenceText(kind) === label)
+    })?.id ?? null
+  )
+})
+
+const selectedWorkspaceBulletId = computed(() => {
+  const evidence = selectedWorkspaceEvidence.value
+  const sectionId = selectedWorkspaceSectionId.value
+  if (!evidence?.evidenceText || !sectionId || !editor.draft.value) return null
+  const quote = normalizeEvidenceText(evidence.evidenceText)
+  const bullets = editor.draft.value.sections
+    .filter((section) => section.id === sectionId)
+    .flatMap((section) => section.entries.flatMap((entry) => entry.bullets))
+  const exactMatches = bullets.filter((bullet) => normalizeEvidenceText(bullet.text) === quote)
+  const matches = exactMatches.length
+    ? exactMatches
+    : bullets.filter((bullet) => normalizeEvidenceText(bullet.text).includes(quote))
+  return matches.length === 1 ? matches[0]?.id ?? null : null
+})
+
 const suggestionCount = computed(() => {
   const analysis = analysisResult.value?.evidenceAnalysis
   return analysis ? analysis.partialEvidenceCount + analysis.noEvidenceCount : 0
@@ -453,6 +500,8 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
                 :suggest="bulletSuggest"
                 :suggest-enabled="suggestEnabled"
                 :suggest-locked="suggestLocked"
+                :selected-section-id="selectedWorkspaceSectionId"
+                :focused-bullet-id="selectedWorkspaceBulletId"
                 @change="handleEditorChange"
               />
             </div>
