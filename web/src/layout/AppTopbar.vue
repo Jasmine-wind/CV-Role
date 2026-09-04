@@ -64,7 +64,7 @@ const handleAccountCommand = (command: string) => {
       <button
         type="button"
         class="app-topbar-menu-button"
-        :aria-label="menuOpen ? '关闭导航菜单' : '打开导航菜单'"
+        aria-label="打开导航菜单"
         aria-controls="app-primary-navigation"
         :aria-expanded="menuOpen"
         @click="emit('toggleMenu')"
