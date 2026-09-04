@@ -223,6 +223,7 @@
   max-width: none;
   height: calc(100dvh - var(--app-shell-header-height));
   padding: 0;
+  overflow: hidden;
 }
 
 .app-shell.is-task-layout .app-page {
