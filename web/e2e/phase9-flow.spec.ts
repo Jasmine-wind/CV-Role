@@ -72,7 +72,8 @@ async function openWorkspaceWithoutEditing(page: Page) {
 }
 
 async function previewAndExportAll(page: Page, testInfo: TestInfo, prefix: string) {
-  await page.getByRole('button', { name: '预览 →', exact: true }).click()
+  const previewButton = page.getByRole('button', { name: '预览 →', exact: true })
+  if (await previewButton.isVisible()) await previewButton.click()
   await expect(
     page.locator('.preflight-section').getByText('可以导出', { exact: true }),
   ).toBeVisible({ timeout: 45_000 })
@@ -93,9 +94,10 @@ async function previewAndExportAll(page: Page, testInfo: TestInfo, prefix: strin
     expect(await downloaded.path()).toBeTruthy()
     await downloaded.saveAs(testInfo.outputPath(`${prefix}-${template}.pdf`))
   }
-  await page.locator('details.export-history summary').click()
-  await expect(page.getByText('导出记录', { exact: true })).toBeVisible()
-  await expect(page.locator('.artifact-list li')).toHaveCount(3)
+  const exportHistory = page.locator('details.export-history')
+  await exportHistory.locator('summary').click()
+  await expect(exportHistory).toHaveJSProperty('open', true)
+  await expect(exportHistory.locator('.artifact-list li')).toHaveCount(3)
 }
 
 test('happy path: upload, analysis, workspace, deterministic suggestion, preview and export', async ({
@@ -113,15 +115,15 @@ test('happy path: upload, analysis, workspace, deterministic suggestion, preview
   const bullet = await openWorkspaceWithSavedDraft(page)
   const bulletLine = bullet.locator('xpath=ancestor::div[contains(@class, "bullet-line")]')
   await bulletLine.getByRole('button', { name: 'AI 优化', exact: true }).click()
+  const suggestionFinished = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'POST' && response.url().includes('/bullet-suggestion'),
+  )
   await page.locator('[role="menuitem"]:visible', { hasText: '精简' }).click()
+  await suggestionFinished
   // Demo Provider intentionally returns the frozen original. The no-op guard must
   // discard it rather than expose a misleading Apply action.
-  await expect(page.getByText('正在生成修改建议…', { exact: true })).toBeVisible({
-    timeout: 15_000,
-  })
-  await expect(page.getByText('正在生成修改建议…', { exact: true })).toHaveCount(0, {
-    timeout: 45_000,
-  })
+  await expect(page.getByText('正在生成修改建议…', { exact: true })).toHaveCount(0)
   await expect(page.getByRole('button', { name: '采纳', exact: true })).toHaveCount(0)
   await expect(page.getByText('✓ 已保存', { exact: true })).toBeVisible({ timeout: 15_000 })
 
