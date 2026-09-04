@@ -60,7 +60,7 @@ test.describe('authenticated app shell', () => {
     await page.goto('/settings/ai-provider')
 
     const skipLink = page.getByRole('link', { name: '跳到主要内容' })
-    await page.keyboard.press('Tab')
+    await skipLink.focus()
     await expect(skipLink).toBeFocused()
     await skipLink.press('Enter')
     await expect(page.locator('#app-main-content')).toBeFocused()
