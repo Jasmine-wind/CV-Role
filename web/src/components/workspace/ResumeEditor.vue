@@ -9,6 +9,11 @@ import type {
 } from '@/types/resume-document'
 import type { BulletSuggestIntent } from '@/types/workspace'
 import type { BulletSuggestController } from '@/utils/useBulletSuggest'
+import {
+  getResumeContactPlaceholder,
+  getResumeContactTypeLabel,
+  RESUME_CONTACT_TYPE_OPTIONS,
+} from '@/components/resume/resumeContactPresentation'
 
 const props = defineProps<{
   document: ResumeDocument
@@ -68,6 +73,11 @@ const expandedSectionIds = ref<Set<string>>(new Set())
 const editorRoot = ref<HTMLElement | null>(null)
 const sectionElements = new Map<string, HTMLElement>()
 
+const focusEditorElement = async (selector: string) => {
+  await nextTick()
+  editorRoot.value?.querySelector<HTMLElement>(selector)?.focus()
+}
+
 const setSectionRef = (sectionId: string, element: unknown) => {
   if (element instanceof HTMLElement) sectionElements.set(sectionId, element)
   else sectionElements.delete(sectionId)
@@ -101,7 +111,7 @@ const syncSelectedSection = async () => {
       ? (scrollContainer.clientHeight - target.clientHeight) / 2
       : 24
     scrollContainer.scrollTop += targetTop - targetOffset
-  } else {
+  } else if (typeof target.scrollIntoView === 'function') {
     target.scrollIntoView({ behavior: 'auto', block: bullet ? 'center' : 'start' })
   }
 }
@@ -229,33 +239,6 @@ const dropSection = (targetSectionId: string) => {
   })
 }
 
-const CONTACT_TYPES: Array<{ value: string; label: string }> = [
-  { value: 'PHONE', label: '电话' },
-  { value: 'EMAIL', label: '邮箱' },
-  { value: 'WECHAT', label: '微信' },
-  { value: 'QQ', label: 'QQ' },
-  { value: 'LINKEDIN', label: 'LinkedIn' },
-  { value: 'GITHUB', label: 'GitHub' },
-  { value: 'WEBSITE', label: '个人网站' },
-  { value: 'LOCATION', label: '所在地' },
-  { value: 'OTHER', label: '其他' },
-]
-
-const contactPlaceholder = (type: string) => {
-  switch (type) {
-    case 'PHONE':
-      return '例如 138 1234 5678'
-    case 'EMAIL':
-      return '例如 name@example.com'
-    case 'GITHUB':
-      return '例如 github.com/name'
-    case 'WEBSITE':
-      return '例如 your-site.com'
-    default:
-      return '联系方式内容'
-  }
-}
-
 const setContactType = (contactId: string, type: string) => {
   updateBasics((basics) => {
     const target = basics.contacts.find((item) => item.id === contactId)
@@ -299,9 +282,11 @@ const addEntry = (sectionId: string) => {
     ElMessage.warning('单个章节的条目数量已达上限')
     return
   }
+  const entryId = newId()
+  editingEntryKey.value = entryKey(sectionId, entryId)
   updateSection(sectionId, (target) => {
     target.entries.push({
-      id: newId(),
+      id: entryId,
       organization: null,
       role: null,
       school: null,
@@ -315,6 +300,7 @@ const addEntry = (sectionId: string) => {
       bullets: [],
     })
   })
+  void focusEditorElement(`[data-entry-id="${entryId}"] input, [data-entry-id="${entryId}"] textarea`)
 }
 
 const addBullet = (sectionId: string, entryId: string) => {
@@ -325,9 +311,11 @@ const addBullet = (sectionId: string, entryId: string) => {
     ElMessage.warning('单个条目的内容数量已达上限')
     return
   }
+  const bulletId = newId()
   updateEntry(sectionId, entryId, (target) => {
-    target.bullets.push({ id: newId(), text: '' })
+    target.bullets.push({ id: bulletId, text: '' })
   })
+  void focusEditorElement(`[data-bullet-id="${bulletId}"] textarea`)
 }
 
 const sectionKindLabel = (kind: string) => {
@@ -465,6 +453,7 @@ const handleSuggestCommand = (bulletId: string, command: BulletSuggestIntent | '
               @update:model-value="(value: string) => updateBasics((basics) => (basics.name = value))"
               @blur="finishNameEdit"
               @keyup.enter="finishNameEdit"
+              @keyup.esc="finishNameEdit"
             />
           </template>
           <button
@@ -508,47 +497,50 @@ const handleSuggestCommand = (bulletId: string, command: BulletSuggestIntent | '
       </header>
       <div class="basics-document">
         <div class="contact-line" aria-label="联系方式">
-          <template v-for="contact in visibleContacts" :key="contact.id">
-            <div v-if="editingContactId === contact.id" class="contact-inline-editor">
-              <select
-                class="contact-type"
-                :value="contact.type || 'OTHER'"
-                :aria-label="`联系方式类型 · ${contact.value || '未填写'}`"
-                @change="
-                  (event: Event) =>
-                    setContactType(contact.id, (event.target as HTMLSelectElement).value)
-                "
+          <template v-for="(contact, index) in visibleContacts" :key="contact.id">
+            <div class="contact-item">
+              <span v-if="index > 0" class="contact-divider" aria-hidden="true">·</span>
+              <div v-if="editingContactId === contact.id" class="contact-inline-editor" @keydown.esc="finishContactEdit">
+                <select
+                  class="contact-type"
+                  :value="contact.type || 'OTHER'"
+                  :aria-label="`联系方式类型 · ${contact.value || '未填写'}`"
+                  @change="
+                    (event: Event) =>
+                      setContactType(contact.id, (event.target as HTMLSelectElement).value)
+                  "
+                >
+                  <option v-for="option in RESUME_CONTACT_TYPE_OPTIONS" :key="option.value" :value="option.value">
+                    {{ option.label }}
+                  </option>
+                </select>
+                <el-input
+                  :model-value="contact.value"
+                  :maxlength="LIMITS.contact"
+                  :placeholder="getResumeContactPlaceholder(contact.type)"
+                  :aria-label="`${getResumeContactTypeLabel(contact.type)}内容`"
+                  @update:model-value="
+                    (value: string) =>
+                      updateBasics((basics) => {
+                        const target = basics.contacts.find((item) => item.id === contact.id)
+                        if (target) target.value = value
+                      })
+                  "
+                />
+                <button type="button" class="inline-done" @click="finishContactEdit">完成</button>
+                <button type="button" class="inline-delete" @click="deleteContact(contact.id)">删除</button>
+              </div>
+              <button
+                v-else
+                type="button"
+                class="contact-token"
+                :class="{ 'is-empty': !contact.value?.trim() }"
+                :aria-label="`编辑${getResumeContactTypeLabel(contact.type)}`"
+                @click="beginContactEdit(contact.id)"
               >
-                <option v-for="option in CONTACT_TYPES" :key="option.value" :value="option.value">
-                  {{ option.label }}
-                </option>
-              </select>
-              <el-input
-                :model-value="contact.value"
-                :maxlength="LIMITS.contact"
-                :placeholder="contactPlaceholder(contact.type)"
-                :aria-label="`${CONTACT_TYPES.find((option) => option.value === contact.type)?.label || '联系方式'}内容`"
-                @update:model-value="
-                  (value: string) =>
-                    updateBasics((basics) => {
-                      const target = basics.contacts.find((item) => item.id === contact.id)
-                      if (target) target.value = value
-                    })
-                "
-              />
-              <button type="button" class="inline-done" @click="finishContactEdit">完成</button>
-              <button type="button" class="inline-delete" @click="deleteContact(contact.id)">删除</button>
+                {{ contact.value || `添加${getResumeContactTypeLabel(contact.type)}` }}
+              </button>
             </div>
-            <button
-              v-else
-              type="button"
-              class="contact-token"
-              :class="{ 'is-empty': !contact.value?.trim() }"
-              :aria-label="`编辑${CONTACT_TYPES.find((option) => option.value === contact.type)?.label || '联系方式'}`"
-              @click="beginContactEdit(contact.id)"
-            >
-              {{ contact.value || `添加${CONTACT_TYPES.find((option) => option.value === contact.type)?.label || '联系方式'}` }}
-            </button>
           </template>
           <button type="button" class="contact-add" @click="addContact">+ 联系方式</button>
         </div>
@@ -589,6 +581,8 @@ const handleSuggestCommand = (bulletId: string, command: BulletSuggestIntent | '
                 (value: string) => updateSection(section.id, (target) => (target.title = value))
               "
               @blur="finishSectionTitleEdit"
+              @keyup.enter="finishSectionTitleEdit"
+              @keyup.esc="finishSectionTitleEdit"
             />
           </template>
           <button
@@ -638,10 +632,15 @@ const handleSuggestCommand = (bulletId: string, command: BulletSuggestIntent | '
         该章节暂时没有内容，可以添加{{ sectionEntryLabel(section.kind) }}。
       </p>
 
-      <article v-for="entry in section.entries" :key="entry.id" class="editor-entry">
+      <article
+        v-for="entry in section.entries"
+        :key="entry.id"
+        class="editor-entry"
+        :data-entry-id="entry.id"
+      >
         <div class="entry-document-heading">
           <template v-if="isEntryEditing(section.id, entry.id)">
-            <div v-if="section.kind === 'SKILL'" class="entry-inline-editor">
+            <div v-if="section.kind === 'SKILL'" class="entry-inline-editor" @keydown.esc="finishEntryEdit" @keydown.enter.prevent="finishEntryEdit">
               <el-input
                 :model-value="entry.group ?? ''"
                 :maxlength="LIMITS.entryField"
@@ -661,7 +660,7 @@ const handleSuggestCommand = (bulletId: string, command: BulletSuggestIntent | '
               />
               <button type="button" class="inline-done" @click="finishEntryEdit">完成</button>
             </div>
-            <div v-else-if="section.kind === 'EDUCATION'" class="entry-inline-editor entry-inline-editor-grid">
+            <div v-else-if="section.kind === 'EDUCATION'" class="entry-inline-editor entry-inline-editor-grid" @keydown.esc="finishEntryEdit" @keydown.enter.prevent="finishEntryEdit">
               <el-input
                 :model-value="entry.school ?? ''"
                 :maxlength="LIMITS.entryField"
@@ -714,7 +713,7 @@ const handleSuggestCommand = (bulletId: string, command: BulletSuggestIntent | '
               />
               <button type="button" class="inline-done" @click="finishEntryEdit">完成</button>
             </div>
-            <div v-else class="entry-inline-editor entry-inline-editor-grid">
+            <div v-else class="entry-inline-editor entry-inline-editor-grid" @keydown.esc="finishEntryEdit" @keydown.enter.prevent="finishEntryEdit">
               <el-input
                 :model-value="entry.organization ?? ''"
                 :maxlength="LIMITS.entryField"
@@ -1171,19 +1170,6 @@ const handleSuggestCommand = (bulletId: string, command: BulletSuggestIntent | '
   font-size: 12px;
 }
 
-.basics-grid,
-.supplement-grid,
-.entry-grid,
-.skill-grid {
-  display: grid;
-  gap: 14px;
-}
-
-.basics-grid,
-.supplement-grid {
-  max-width: 760px;
-}
-
 .editor-field {
   display: grid;
   min-width: 0;
@@ -1205,66 +1191,18 @@ const handleSuggestCommand = (bulletId: string, command: BulletSuggestIntent | '
 }
 
 .editor-field > span,
-.contact-type-field > span,
 .entry-bullets-label {
   color: var(--app-text-secondary);
   font-size: 12px;
   font-weight: 700;
 }
 
-.contact-row {
-  display: grid;
-  grid-template-columns: 150px minmax(0, 1fr) auto;
-  gap: 10px;
-  align-items: end;
-  max-width: 760px;
-}
-
-.contact-type-field {
-  display: grid;
-  gap: 6px;
-  padding: 5px 7px 7px;
-  border: 1px solid transparent;
-  transition: border-color 140ms ease, background-color 140ms ease;
-}
-
-.contact-type-field:hover,
-.contact-type-field:focus-within {
-  border-color: var(--app-border-strong);
-  background: var(--app-surface-soft);
-}
-
-.contact-type {
-  width: 100%;
-  height: 32px;
-  border: 1px solid var(--app-border);
-  border-radius: var(--app-radius-md);
-  padding: 0 9px;
-  color: var(--app-text);
-  background: var(--app-surface);
-}
-
-.contact-type:focus-visible {
-  outline: 2px solid var(--app-primary);
-  outline-offset: 2px;
-}
-
-.contact-value-field {
-  min-width: 0;
-}
-
-.add-control {
-  justify-self: start;
-}
-
-.supplement-details,
 .entry-optional-fields {
   max-width: 760px;
   border-top: 1px solid var(--app-border-soft);
   padding-top: 12px;
 }
 
-.supplement-details summary,
 .entry-optional-fields summary,
 .inline-more summary,
 .section-more summary,
@@ -1274,17 +1212,6 @@ const handleSuggestCommand = (bulletId: string, command: BulletSuggestIntent | '
   font-size: 12px;
   font-weight: 700;
   cursor: pointer;
-}
-
-.supplement-details summary small {
-  margin-left: 8px;
-  color: var(--app-text-muted);
-  font-weight: 500;
-}
-
-.supplement-grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  margin-top: 12px;
 }
 
 .section-heading {
@@ -1421,6 +1348,8 @@ const handleSuggestCommand = (bulletId: string, command: BulletSuggestIntent | '
 
 .entry-grid,
 .skill-grid {
+  display: grid;
+  gap: 14px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
@@ -1606,7 +1535,6 @@ const handleSuggestCommand = (bulletId: string, command: BulletSuggestIntent | '
 }
 
 .editor-field > span,
-.contact-type-field > span,
 .entry-bullets-label {
   color: var(--app-text-muted);
   font-family: 'IBM Plex Mono', 'SFMono-Regular', Consolas, monospace;
@@ -1732,42 +1660,12 @@ const handleSuggestCommand = (bulletId: string, command: BulletSuggestIntent | '
   padding-top: 3px;
 }
 
-.add-control,
 .add-field-control,
 .section-footer :deep(.el-button),
 .entry-actions :deep(.el-button) {
   color: var(--app-text-secondary);
 }
 
-@media (max-width: 760px) {
-  .contact-row,
-  .entry-grid,
-  .skill-grid,
-  .supplement-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .contact-row {
-    align-items: stretch;
-  }
-
-  .contact-row .inline-more {
-    justify-self: start;
-  }
-
-  .date-grid {
-    grid-column: auto;
-  }
-
-  .bullet-actions {
-    opacity: 1;
-    gap: 7px;
-  }
-
-  .section-title-display {
-    max-width: calc(100vw - 110px);
-  }
-}
 /* Document-first surface: fields remain available, but only appear in a contextual edit state. */
 .resume-editor .sr-only {
   position: absolute;
@@ -1831,7 +1729,7 @@ const handleSuggestCommand = (bulletId: string, command: BulletSuggestIntent | '
 .identity-name {
   width: fit-content;
   max-width: 100%;
-  overflow: hidden;
+  overflow-wrap: anywhere;
   border: 0;
   padding: 0;
   color: var(--app-text);
@@ -1841,8 +1739,6 @@ const handleSuggestCommand = (bulletId: string, command: BulletSuggestIntent | '
   line-height: 1.05;
   letter-spacing: -0.05em;
   text-align: left;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   background: transparent;
   cursor: text;
 }
@@ -1953,14 +1849,25 @@ const handleSuggestCommand = (bulletId: string, command: BulletSuggestIntent | '
   cursor: pointer;
 }
 
-.contact-token::after {
-  margin-left: 13px;
-  color: var(--app-border-strong);
-  content: '·';
+.contact-token {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  line-height: 1.55;
+  text-align: left;
 }
 
-.contact-token:last-of-type::after {
-  display: none;
+.contact-item {
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.contact-divider {
+  flex: 0 0 auto;
+  color: var(--app-border-strong);
 }
 
 .contact-token:hover,
@@ -1979,7 +1886,8 @@ const handleSuggestCommand = (bulletId: string, command: BulletSuggestIntent | '
 
 .contact-inline-editor {
   display: flex;
-  min-width: min(100%, 430px);
+  width: min(430px, 100%);
+  min-width: 0;
   align-items: center;
   gap: 7px;
   flex-wrap: wrap;
@@ -2046,11 +1954,17 @@ const handleSuggestCommand = (bulletId: string, command: BulletSuggestIntent | '
 
 .section-title-display {
   max-width: 100%;
+  overflow: visible;
+  overflow-wrap: anywhere;
   font-family: Georgia, 'Songti SC', serif;
   font-size: 18px;
   font-weight: 700;
   letter-spacing: -0.02em;
+  line-height: 1.35;
+  text-align: left;
+  text-overflow: clip;
   text-transform: none;
+  white-space: normal;
 }
 
 .section-entry-count {
@@ -2112,19 +2026,19 @@ const handleSuggestCommand = (bulletId: string, command: BulletSuggestIntent | '
 .entry-document-heading {
   display: grid;
   min-width: 0;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 38%);
   gap: 4px 12px;
-  align-items: baseline;
+  align-items: start;
 }
 
 .entry-title-display,
 .entry-meta-display {
-  overflow: hidden;
+  min-width: 0;
+  overflow-wrap: anywhere;
   border: 0;
   padding: 0;
   text-align: left;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
   background: transparent;
   cursor: text;
 }
@@ -2138,6 +2052,7 @@ const handleSuggestCommand = (bulletId: string, command: BulletSuggestIntent | '
 .entry-meta-display {
   color: var(--app-text-secondary);
   font-size: 11px;
+  line-height: 1.45;
 }
 
 .entry-title-display:hover,
@@ -2251,10 +2166,14 @@ const handleSuggestCommand = (bulletId: string, command: BulletSuggestIntent | '
 
 :deep(.bullet-line .el-textarea__inner) {
   min-height: 24px;
+  max-width: 100%;
+  overflow-x: hidden;
+  overflow-wrap: anywhere;
   padding: 1px 0;
   color: var(--app-text);
   font-size: 12px;
   line-height: 1.55;
+  word-break: break-word;
   resize: none;
   box-shadow: none !important;
 }
@@ -2319,16 +2238,13 @@ const handleSuggestCommand = (bulletId: string, command: BulletSuggestIntent | '
     gap: 5px 10px;
   }
 
-  .contact-token::after {
-    margin-left: 10px;
-  }
-
   .entry-document-heading {
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 3px;
   }
 
   .entry-meta-display {
-    max-width: 48vw;
+    max-width: 100%;
   }
 
   .entry-inline-editor,

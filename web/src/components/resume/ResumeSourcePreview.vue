@@ -291,10 +291,18 @@ const isHighlighted = (bulletId: string) => props.highlightedBulletIds.includes(
 
 .source-preview-contacts {
   display: flex;
+  min-width: 0;
   flex-wrap: wrap;
   gap: var(--app-space-2) var(--app-space-4);
   color: var(--app-text-secondary);
   font-size: var(--app-font-size-xs);
+}
+
+.source-preview-contacts span,
+.source-preview-entry-heading strong,
+.source-preview-entry-heading > div span {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .source-preview-section {
@@ -336,6 +344,7 @@ const isHighlighted = (bulletId: string) => props.highlightedBulletIds.includes(
 
 .source-preview-entry-heading {
   display: flex;
+  min-width: 0;
   justify-content: space-between;
   gap: var(--app-space-3);
 }

@@ -173,6 +173,7 @@ const handleKeydown = (event: KeyboardEvent) => {
   gap: var(--app-space-6);
   min-width: 0;
   min-height: 560px;
+  scroll-margin-top: calc(var(--app-shell-header-height) + var(--app-space-4));
   padding: var(--app-space-1) 0 var(--app-space-8);
   outline: none;
 }
@@ -203,6 +204,7 @@ const handleKeydown = (event: KeyboardEvent) => {
 
 .resume-review-header h2 {
   margin: 0;
+  scroll-margin-top: calc(var(--app-shell-header-height) + var(--app-space-4));
   color: var(--app-text);
   font-size: 26px;
   line-height: var(--app-line-height-tight);
@@ -282,11 +284,17 @@ const handleKeydown = (event: KeyboardEvent) => {
 
 .resume-review-progress-items {
   display: flex;
+  min-width: 0;
   gap: var(--app-space-2);
+  overflow-x: auto;
+  padding: 2px 2px 5px;
+  scrollbar-color: var(--app-scroll-thumb) transparent;
+  scrollbar-width: thin;
 }
 
 .resume-review-progress-item {
   min-width: 34px;
+  flex: 0 0 auto;
   min-height: 30px;
   border: 1px solid var(--app-border);
   border-radius: var(--app-radius-sm);

@@ -38,10 +38,80 @@ const requirement = (id: number, level: string) => ({
   evidences: [{
     requirementEvidenceId: id * 10,
     sectionLabel: '工作经历',
-    evidenceText: id === 3 ? '负责 Java 后端服务与 Redis 缓存优化工作 1' : `简历中的证据 ${id}`,
+    evidenceText: id === 3
+      ? '负责 Java 后端服务与 Redis 缓存优化工作 1'
+      : id === 4
+        ? '负责 Java 后端服务与 Redis 缓存优化工作 2'
+        : `简历中的证据 ${id}`,
     supportLevel: level === 'MATCHED' ? 'SUFFICIENT' : 'PARTIAL',
   }],
 })
+
+const longDocument = {
+  ...document,
+  basics: {
+    ...document.basics,
+    name: '张晓测试与国际化交付团队长期协作负责人',
+    contacts: Array.from({ length: 20 }, (_, index) => ({
+      id: `contact-${index}`,
+      type: index === 0 ? 'EMAIL' : index === 1 ? 'GITHUB' : index === 2 ? 'WEBSITE' : 'OTHER',
+      label: null,
+      value: index === 0
+        ? 'long.resume.editor@example.com'
+        : `https://example.com/profiles/very-long-professional-address-${index}/中英文混排`,
+    })),
+  },
+  sections: [
+    {
+      id: 'experience',
+      kind: 'EXPERIENCE',
+      title: '工作经历',
+      entries: Array.from({ length: 5 }, (_, entryIndex) => ({
+        id: `long-entry-${entryIndex}`,
+        organization: `某国际化云原生基础设施与企业数字化解决方案科技有限公司第 ${entryIndex + 1} 事业部`,
+        role: '高级后端平台工程师兼跨区域可靠性交付负责人',
+        school: null,
+        degree: null,
+        major: null,
+        startDate: '2020.01',
+        endDate: '2026.12 至今',
+        location: '上海 · 新加坡 · Remote',
+        group: null,
+        skillItems: null,
+        bullets: Array.from({ length: 6 }, (_, bulletIndex) => {
+          const position = entryIndex * 6 + bulletIndex
+          return {
+            id: `bullet-${position}`,
+            text: position < 2
+              ? `负责 Java 后端服务与 Redis 缓存优化工作 ${position + 1}`
+              : position === 2
+                ? `负责中英文混排 delivery、稳定性治理与 URL https://example.com/runbook，${'持续验证真实数据。'.repeat(240)}`
+                : `负责第 ${position + 1} 项真实平台工程交付，覆盖 API、可观测性、容量规划与跨团队协作。`,
+          }
+        }),
+      })),
+    },
+    ...Array.from({ length: 9 }, (_, sectionIndex) => ({
+      id: `section-${sectionIndex}`,
+      kind: 'OTHER',
+      title: `专业经历补充章节 ${sectionIndex + 1}`,
+      entries: [{
+        id: `other-entry-${sectionIndex}`,
+        organization: `长期项目与专业实践 ${sectionIndex + 1}`,
+        role: null,
+        school: null,
+        degree: null,
+        major: null,
+        startDate: null,
+        endDate: null,
+        location: null,
+        group: null,
+        skillItems: null,
+        bullets: [{ id: `other-bullet-${sectionIndex}`, text: `补充材料 ${sectionIndex + 1}` }],
+      }],
+    })),
+  ],
+}
 
 const analysis = {
   optimizationTaskId: 42,
@@ -62,7 +132,7 @@ const analysis = {
   legacyAnalysis: null,
 }
 
-async function mockWorkspace(page: Page, options: { failSaveOnce?: boolean; denseRequirements?: boolean } = {}) {
+async function mockWorkspace(page: Page, options: { failSaveOnce?: boolean; denseRequirements?: boolean; longResume?: boolean } = {}) {
   await page.addInitScript(() => localStorage.setItem('ai-resume-token', 'workspace-frame-token'))
   await page.route('**/api/users/me', (route) => route.fulfill(response({
     id: 1, username: 'workspace', email: 'workspace@example.invalid', nickname: '工作区测试用户', createdAt: '2026-01-01T00:00:00Z',
@@ -70,7 +140,7 @@ async function mockWorkspace(page: Page, options: { failSaveOnce?: boolean; dens
   let saveAttempts = 0
   await page.route('**/api/workspace/42/content', (route) => {
     if (route.request().method() === 'GET') {
-      return route.fulfill(response({ optimizationTaskId: 42, revision: 3, document }))
+      return route.fulfill(response({ optimizationTaskId: 42, revision: 3, document: options.longResume ? longDocument : document }))
     }
     saveAttempts += 1
     if (options.failSaveOnce && saveAttempts === 1) {
@@ -212,6 +282,53 @@ test.describe('Workspace editor frame', () => {
     await expect(page.getByRole('button', { name: '重新保存' })).toBeVisible()
     await page.getByRole('button', { name: '重新保存' }).click()
     await expect(page.getByText('✓ 已保存', { exact: true })).toBeVisible({ timeout: 5_000 })
+  })
+
+  test('keeps long-form editing focused, saved and connected to requirement evidence', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await mockWorkspace(page, { denseRequirements: true, longResume: true })
+    await page.goto('/workspace/42?requirement=3')
+
+    const firstEvidence = page.locator('[data-bullet-id="bullet-0"]')
+    await expect(firstEvidence).toHaveClass(/is-evidence-focus/)
+    await expect(firstEvidence).toBeInViewport()
+    await expect(page.getByRole('button', { name: '编辑个人网站' }).first()).toContainText('https://example.com/profiles/')
+
+    const longBullet = page.locator('[data-bullet-id="bullet-2"] textarea')
+    await longBullet.fill(`负责中英文混排 delivery 与稳定性治理，${'持续验证真实数据。'.repeat(80)}`)
+    await expect(page.getByText('✓ 已保存', { exact: true })).toBeVisible({ timeout: 5_000 })
+
+    await page.getByRole('button', { name: /岗位要求 4/ }).click()
+    const nextEvidence = page.locator('[data-bullet-id="bullet-1"]')
+    await expect(nextEvidence).toHaveClass(/is-evidence-focus/)
+    await expect(nextEvidence).toBeInViewport()
+    await nextEvidence.hover()
+    await nextEvidence.getByRole('button', { name: 'AI 优化', exact: true }).click()
+    await page.getByRole('menuitem', { name: '精简' }).click()
+    await expect(page.getByLabel('AI 优化检查器')).toBeVisible()
+    await page.getByRole('button', { name: '收起 AI 优化' }).click()
+
+    const firstEntry = page.locator('[data-entry-id="long-entry-0"]')
+    await firstEntry.hover()
+    await firstEntry.getByRole('button', { name: '添加工作要点' }).click()
+    await expect(firstEntry.locator('textarea').last()).toBeFocused()
+    await firstEntry.locator('textarea').last().fill('新增后可以立即输入的工作要点')
+    await expect(page.getByText('✓ 已保存', { exact: true })).toBeVisible({ timeout: 5_000 })
+
+    await page.setViewportSize({ width: 390, height: 844 })
+    await expect(page.getByRole('tab', { name: '编辑简历' })).toHaveAttribute('aria-selected', 'true')
+    const layout = await page.evaluate(() => {
+      const app = document.querySelector<HTMLElement>('.app-page')!
+      const stage = document.querySelector<HTMLElement>('.resume-stage-scroll')!
+      const paper = document.querySelector<HTMLElement>('.resume-paper')!
+      return {
+        documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        appOverflow: app.scrollWidth - app.clientWidth,
+        stageOverflow: stage.scrollWidth - stage.clientWidth,
+        paperOverflow: paper.scrollWidth - paper.clientWidth,
+      }
+    })
+    expect(layout).toEqual({ documentOverflow: 0, appOverflow: 0, stageOverflow: 0, paperOverflow: 0 })
   })
 
   test('opens narrow workspace in the editable document and keeps the outer page fixed', async ({ page }) => {

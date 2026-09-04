@@ -282,4 +282,108 @@ describe('ResumeEditor', () => {
       ],
     })
   })
+
+  it('keeps long contacts and bullets available without truncating their values', () => {
+    const document = makeDocument()
+    const longContact = `https://example.com/${'long-profile/'.repeat(12)}`
+    const longBullet = `负责中英文混排 delivery、稳定性治理与 URL https://example.com/runbook，${'持续验证真实数据。'.repeat(240)}`
+    document.basics.contacts.push({ id: 'website', type: 'WEBSITE', label: null, value: longContact })
+    document.sections[0]!.entries[0]!.bullets[0]!.text = longBullet
+
+    const wrapper = mount(ResumeEditor, { props: { document } })
+
+    expect(wrapper.findAll('.contact-token').map((item) => item.text())).toContain(longContact)
+    const bullet = wrapper
+      .findAllComponents({ name: 'ElInput' })
+      .find((item) => item.props('type') === 'textarea')
+    expect(bullet?.props('modelValue')).toBe(longBullet)
+  })
+
+  it('focuses a newly added bullet so typing can continue immediately', async () => {
+    vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValueOnce('00000000-0000-4000-8000-000000000001')
+    const wrapper = mount(ResumeEditor, {
+      props: {
+        document: makeDocument(),
+        onChange: (document: ResumeDocument) => wrapper.setProps({ document }),
+      },
+      attachTo: document.body,
+    })
+
+    const addBullet = wrapper.findAll('button').find((item) => item.text() === '添加工作要点')
+    await addBullet!.trigger('click')
+    await nextTick()
+    await nextTick()
+
+    const added = wrapper.get('[data-bullet-id="00000000-0000-4000-8000-000000000001"] textarea')
+    expect(document.activeElement).toBe(added.element)
+    wrapper.unmount()
+  })
+
+  it('opens and focuses the first field of a newly added entry', async () => {
+    vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValueOnce('00000000-0000-4000-8000-000000000002')
+    const wrapper = mount(ResumeEditor, {
+      props: {
+        document: makeDocument(),
+        onChange: (document: ResumeDocument) => wrapper.setProps({ document }),
+      },
+      attachTo: document.body,
+    })
+
+    const addEntry = wrapper.findAll('button').find((item) => item.text() === '添加工作经历')
+    await addEntry!.trigger('click')
+    await nextTick()
+    await nextTick()
+
+    const entry = wrapper.get('[data-entry-id="00000000-0000-4000-8000-000000000002"]')
+    expect(entry.find('.entry-inline-editor').exists()).toBe(true)
+    expect(entry.element.contains(document.activeElement)).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('keeps keyboard section reordering and contextual evidence focus available', async () => {
+    const document = makeDocument()
+    document.sections.push({
+      id: 's2',
+      kind: 'PROJECT',
+      title: '项目经历',
+      entries: [],
+    })
+    const onChange = vi.fn()
+    const wrapper = mount(ResumeEditor, {
+      props: {
+        document,
+        selectedSectionId: 's1',
+        focusedBulletId: 'b1',
+        onChange,
+      },
+    })
+    await nextTick()
+
+    expect(wrapper.get('[data-bullet-id="b1"]').classes()).toContain('is-evidence-focus')
+    expect(wrapper.find('.editor-section.is-focused').exists()).toBe(true)
+    const moveDown = wrapper.findAll('.section-more-menu button').find((item) => item.text() === '下移')
+    await moveDown!.trigger('click')
+    expect((onChange.mock.lastCall![0] as ResumeDocument).sections.map((section) => section.id)).toEqual(['s2', 's1'])
+  })
+
+  it('exits contextual name editing with Escape', async () => {
+    const wrapper = mount(ResumeEditor, { props: { document: makeDocument() } })
+    await wrapper.get('.identity-name').trigger('click')
+    await wrapper.get('.identity-name-input').trigger('keyup', { key: 'Escape' })
+    expect(wrapper.find('.identity-name-input').exists()).toBe(false)
+    expect(wrapper.find('.identity-name').exists()).toBe(true)
+  })
+
+  it('keeps section and entry editing exits predictable from the keyboard', async () => {
+    const wrapper = mount(ResumeEditor, { props: { document: makeDocument() } })
+
+    await wrapper.get('.section-title-display').trigger('click')
+    await wrapper.get('.section-title-input').trigger('keyup', { key: 'Escape' })
+    expect(wrapper.find('.section-title-display').exists()).toBe(true)
+
+    await wrapper.get('.entry-title-display').trigger('click')
+    expect(wrapper.find('.entry-inline-editor').exists()).toBe(true)
+    await wrapper.get('.entry-inline-editor').trigger('keydown', { key: 'Enter' })
+    expect(wrapper.find('.entry-title-display').exists()).toBe(true)
+  })
 })

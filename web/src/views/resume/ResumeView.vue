@@ -24,6 +24,10 @@ import type { ResumeDocument } from '@/types/resume-document'
 import ResumeReviewWorkspace from '@/components/resume/review/ResumeReviewWorkspace.vue'
 import ResumeSourcePreview from '@/components/resume/ResumeSourcePreview.vue'
 import {
+  REQUIRED_RESUME_CONTACT_TYPE_OPTIONS,
+  RESUME_CONTACT_TYPE_OPTIONS,
+} from '@/components/resume/resumeContactPresentation'
+import {
   getInitialReviewItemId,
   selectReviewItemAfterResolve,
 } from './resumeReviewPresentation'
@@ -144,21 +148,6 @@ const displayNameDraft = ref('')
 const displayNameSavingId = ref<number | null>(null)
 const sourcePreviewResume = computed(
   () => resumes.value.find((resume) => resume.id === sourcePreviewId.value) ?? null,
-)
-
-const CONTACT_TYPE_OPTIONS = [
-  { value: 'PHONE', label: '电话' },
-  { value: 'EMAIL', label: '邮箱' },
-  { value: 'WECHAT', label: '微信' },
-  { value: 'QQ', label: 'QQ' },
-  { value: 'LINKEDIN', label: 'LinkedIn' },
-  { value: 'GITHUB', label: 'GitHub' },
-  { value: 'WEBSITE', label: '个人网站' },
-  { value: 'LOCATION', label: '所在地' },
-  { value: 'OTHER', label: '其他' },
-]
-const REQUIRED_CONTACT_TYPE_OPTIONS = CONTACT_TYPE_OPTIONS.filter(
-  (option) => option.value === 'PHONE' || option.value === 'EMAIL',
 )
 
 const parseDraft = <T,>(draft: string): T => {
@@ -895,8 +884,8 @@ onUnmounted(() => {
         :items="reviewItems"
         :active-item-id="activeReviewItemId"
         :resolving-item-id="resolvingItemId"
-        :contact-type-options="CONTACT_TYPE_OPTIONS"
-        :required-contact-type-options="REQUIRED_CONTACT_TYPE_OPTIONS"
+        :contact-type-options="RESUME_CONTACT_TYPE_OPTIONS"
+        :required-contact-type-options="REQUIRED_RESUME_CONTACT_TYPE_OPTIONS"
         @close="closeReview()"
         @retry-load="reviewResumeId && loadReview(reviewResumeId)"
         @retry-action="retryReviewAction"

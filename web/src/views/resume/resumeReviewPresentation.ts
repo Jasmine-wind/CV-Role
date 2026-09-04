@@ -54,7 +54,7 @@ export const entryDraftSummary = (draft: string) => {
     entry.role,
     entry.degree,
     entry.major,
-    [entry.startDate, entry.endDate].filter(Boolean).join(' - '),
+    [entry.startDate, entry.endDate].filter(Boolean).join(' — '),
     entry.skillItems?.filter(Boolean).join('、'),
   ].filter((value): value is string => Boolean(value && value.trim()))
   const bullets = (entry.bullets ?? [])

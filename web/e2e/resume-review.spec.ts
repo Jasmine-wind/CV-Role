@@ -85,12 +85,43 @@ const educationItem = {
   reason: '请核对这段教育经历。',
 }
 
-const reviewPayload = (items: unknown[], qualityStatus = 'NEEDS_REVIEW') => ({
+const confirmedDocument = JSON.stringify({
+  schemaVersion: 'RESUME_DOCUMENT_V1',
+  basics: {
+    name: '林然',
+    contacts: [{ id: 'confirmed-email', type: 'EMAIL', label: null, value: 'linran@example.com' }],
+  },
+  sections: [{
+    id: 'confirmed-experience',
+    kind: 'EXPERIENCE',
+    title: '工作经历',
+    entries: [{
+      id: 'confirmed-entry',
+      organization: '示例科技',
+      role: '后端工程师',
+      school: null,
+      degree: null,
+      major: null,
+      startDate: '2022',
+      endDate: '至今',
+      location: null,
+      group: null,
+      skillItems: null,
+      bullets: [{ id: 'confirmed-bullet', text: '负责服务端接口开发与维护' }],
+    }],
+  }],
+})
+
+const reviewPayload = (
+  items: unknown[],
+  qualityStatus = 'NEEDS_REVIEW',
+  canonicalDocument = '{"basics":{"name":"测试用户"}}',
+) => ({
   resumeId: 2,
   qualityStatus,
   qualityIssues: null,
   unresolvedItems: JSON.stringify(items),
-  canonicalDocument: '{"basics":{"name":"测试用户"}}',
+  canonicalDocument,
 })
 
 async function mockReviewShell(page: Page, resumes: unknown[] = [reviewResume]) {
@@ -105,6 +136,7 @@ async function mockReviewShell(page: Page, resumes: unknown[] = [reviewResume]) 
     createdAt: '2026-01-01T00:00:00Z',
   })))
   await page.route('**/api/resumes', (route) => route.fulfill(response(resumes)))
+  await page.route('**/api/job-direction-insights', (route) => route.fulfill(response({ cohorts: [] })))
 }
 
 async function openReview(page: Page) {
@@ -163,12 +195,12 @@ test.describe('Resume Review Workspace', () => {
 
     await page.locator('.resume-review-progress-item').nth(1).click()
     await expect(page.getByRole('heading', { name: '教育经历' })).toBeVisible()
-    await expect(page.getByText('学校名', { exact: true })).toBeVisible()
+    await expect(page.getByText('学校', { exact: true })).toBeVisible()
     await expect(page.getByText('学历', { exact: true })).toBeVisible()
     await expect(page.getByText('专业', { exact: true })).toBeVisible()
     await expect(page.getByText('开始时间', { exact: true })).toBeVisible()
     await expect(page.getByText('结束时间', { exact: true })).toBeVisible()
-    await expect(page.getByText('描述 1', { exact: true })).toBeVisible()
+    await expect(page.getByText('内容 1', { exact: true })).toBeVisible()
     await expect(page.locator('.resume-review-field-pair')).toHaveCount(2)
   })
 
@@ -177,10 +209,8 @@ test.describe('Resume Review Workspace', () => {
     await mockReviewShell(page, [reviewResume])
     await page.unroute('**/api/resumes')
     await page.route('**/api/resumes', (route) => route.fulfill(response(listReady ? [readyResume] : [reviewResume])))
-    await page.route('**/api/resumes/2/review', (route) => route.fulfill(response(reviewPayload([
-      contactItem,
-      fragmentItem,
-    ]))))
+    let latestReview = reviewPayload([contactItem, fragmentItem])
+    await page.route('**/api/resumes/2/review', (route) => route.fulfill(response(latestReview)))
     const payloads: Array<Record<string, unknown>> = []
     await page.route('**/api/resumes/2/review/resolve', async (route) => {
       const payload = route.request().postDataJSON() as Record<string, unknown>
@@ -189,7 +219,8 @@ test.describe('Resume Review Workspace', () => {
         await route.fulfill(response(reviewPayload([fragmentItem])))
       } else {
         listReady = true
-        await route.fulfill(response(reviewPayload([], 'READY')))
+        latestReview = reviewPayload([], 'READY', confirmedDocument)
+        await route.fulfill(response(latestReview))
       }
     })
     await openReview(page)
@@ -201,6 +232,13 @@ test.describe('Resume Review Workspace', () => {
     await expect(page.locator('.resume-review-workspace')).toBeHidden()
     await expect(page.locator('.resume-library-row')).toContainText('可用于岗位分析')
     expect(await page.evaluate(() => document.activeElement?.getAttribute('data-resume-row'))).toBe('2')
+    await page.getByRole('button', { name: /product-analytics-ready/ }).click()
+    await expect(page.getByRole('heading', { name: '林然' })).toBeVisible()
+    await expect(page.locator('.resume-source-preview')).toContainText('示例科技')
+    await expect(page.locator('.resume-source-preview')).toContainText('负责服务端接口开发与维护')
+    await page.getByRole('button', { name: /开始优化这份简历/ }).click()
+    await expect(page).toHaveURL(/\/app\?resumeId=2$/)
+    await expect(page.getByRole('radio', { name: /product-analytics-ready/ })).toBeChecked()
     expect(payloads).toEqual([
       { itemId: 'contact-1', action: 'DELETE', name: '测试用户' },
       { itemId: 'fragment-1', action: 'ACCEPT', text: '负责跨团队项目推进', name: '测试用户' },

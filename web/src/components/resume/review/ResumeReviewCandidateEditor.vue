@@ -44,6 +44,21 @@ watch(
 
 const candidate = () => getReviewCandidatePresentation(draft)
 const id = () => draft.item.id
+const entryOrganizationLabel = () => {
+  if (draft.entry.kind === 'EDUCATION') return '学校'
+  return draft.entry.kind === 'PROJECT' ? '项目名' : '公司'
+}
+const entryOrganizationPlaceholder = () => {
+  if (draft.entry.kind === 'EDUCATION') return '请填写学校'
+  return draft.entry.kind === 'PROJECT' ? '请填写项目名' : '请填写公司'
+}
+const entryRoleLabel = () => draft.entry.kind === 'PROJECT' ? '角色' : '职位'
+const entryRolePlaceholder = () => draft.entry.kind === 'PROJECT' ? '可选角色' : '可选职位'
+const entryBulletLabel = () => {
+  if (draft.entry.kind === 'PROJECT') return '项目要点'
+  if (draft.entry.kind === 'EXPERIENCE') return '工作要点'
+  return '内容'
+}
 </script>
 
 <template>
@@ -102,14 +117,13 @@ const id = () => draft.item.id
 
     <div v-else-if="draft.item.kind === 'ENTRY_CANDIDATE'" class="resume-review-entry-form">
       <div class="resume-review-field-grid">
-        <label v-if="draft.entry.kind === 'EDUCATION'" :for="`resume-school-${id()}`">学校名</label>
-        <label v-else :for="`resume-organization-${id()}`">公司或项目名</label>
-        <input v-if="draft.entry.kind === 'EDUCATION'" :id="`resume-school-${id()}`" v-model="draft.entry.school" placeholder="请填写学校名" />
-        <input v-else :id="`resume-organization-${id()}`" v-model="draft.entry.organization" placeholder="请填写公司或项目名" />
+        <label :for="draft.entry.kind === 'EDUCATION' ? `resume-school-${id()}` : `resume-organization-${id()}`">{{ entryOrganizationLabel() }}</label>
+        <input v-if="draft.entry.kind === 'EDUCATION'" :id="`resume-school-${id()}`" v-model="draft.entry.school" :placeholder="entryOrganizationPlaceholder()" />
+        <input v-else :id="`resume-organization-${id()}`" v-model="draft.entry.organization" :placeholder="entryOrganizationPlaceholder()" />
       </div>
       <div class="resume-review-field-grid">
-        <label :for="`resume-role-${id()}`">职位或角色</label>
-        <input :id="`resume-role-${id()}`" v-model="draft.entry.role" placeholder="可选" />
+        <label :for="`resume-role-${id()}`">{{ entryRoleLabel() }}</label>
+        <input :id="`resume-role-${id()}`" v-model="draft.entry.role" :placeholder="entryRolePlaceholder()" />
       </div>
       <div v-if="draft.entry.kind === 'EDUCATION'" class="resume-review-field-pair">
         <div class="resume-review-field-grid">
@@ -132,8 +146,8 @@ const id = () => draft.item.id
         </div>
       </div>
       <div v-for="(bullet, index) in draft.entry.bullets" :key="`${id()}-bullet-${index}`" class="resume-review-field-grid">
-        <label :for="`resume-bullet-${id()}-${index}`">描述 {{ index + 1 }}</label>
-        <textarea :id="`resume-bullet-${id()}-${index}`" v-model="bullet.text" rows="3" placeholder="请核对经历描述"></textarea>
+        <label :for="`resume-bullet-${id()}-${index}`">{{ entryBulletLabel() }} {{ index + 1 }}</label>
+        <textarea :id="`resume-bullet-${id()}-${index}`" v-model="bullet.text" rows="3" :placeholder="`请核对${entryBulletLabel()}`"></textarea>
       </div>
     </div>
 
