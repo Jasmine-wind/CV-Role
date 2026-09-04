@@ -34,10 +34,6 @@ const requestedRequirementId = computed(() => parsePositiveId(route.query?.requi
 const evidenceAnalysis = computed(() => optimizationResult.value?.evidenceAnalysis ?? null)
 const legacyResult = computed(() => optimizationResult.value?.legacyAnalysis ?? null)
 const requirements = computed(() => evidenceAnalysis.value?.requirements ?? [])
-const totalChecked = computed(() => requirements.value.length)
-const matchedCount = computed(() => evidenceAnalysis.value?.matchedCount ?? 0)
-const partialCount = computed(() => evidenceAnalysis.value?.partialEvidenceCount ?? 0)
-const missingCount = computed(() => evidenceAnalysis.value?.noEvidenceCount ?? 0)
 
 const legacyPriorityItems = computed(() => {
   const match = legacyResult.value
@@ -106,8 +102,6 @@ const matchLevelClass = (value: string) => {
   }
 }
 
-const importanceLabel = (value: string) => (value === 'BONUS' ? '加分项' : '必需项')
-const evidenceLocation = (sectionLabel: string | null) => sectionLabel || '简历材料'
 const itemKey = (item: AiJobMatchItem, index: number) => `${item.item}-${index}`
 
 const normalizeEvidenceText = (text: string) => text.replace(/\s+/gu, ' ').trim()
@@ -268,13 +262,6 @@ onMounted(loadResult)
             <button type="button" @click="router.push('/app')">分析新岗位</button>
           </div>
         </details>
-        <el-button
-          v-if="optimizationResult?.status === 'SUCCESS'"
-          type="primary"
-          @click="goToWorkspace()"
-        >
-          修改简历 →
-        </el-button>
       </template>
     </TaskHeader>
 
@@ -289,28 +276,29 @@ onMounted(loadResult)
       />
 
       <template v-else-if="evidenceAnalysis">
-        <section class="analysis-summary-strip" aria-label="证据摘要">
-          <div class="analysis-summary-counts">
-            <span class="analysis-summary-item is-matched">
-              <strong>{{ matchedCount }}</strong><span>已匹配</span>
+        <div v-if="selectedRequirement" class="analysis-selected-requirement-bar">
+          <div class="selected-requirement-copy">
+            <span class="selected-requirement-reference">
+              要求 {{ String(selectedRequirementIndex + 1).padStart(2, '0') }} / {{ String(requirements.length).padStart(2, '0') }}
+              <span aria-hidden="true">·</span>
+              <span :class="['analysis-status', matchLevelClass(selectedRequirement.matchLevel)]">
+                {{ matchLevelLabel(selectedRequirement.matchLevel) }}
+              </span>
             </span>
-            <span class="analysis-summary-item is-partial">
-              <strong>{{ partialCount }}</strong><span>部分证据</span>
-            </span>
-            <span class="analysis-summary-item is-missing">
-              <strong>{{ missingCount }}</strong><span>当前未体现</span>
-            </span>
+            <strong v-if="selectedRequirement.matchLevel === 'NO_EVIDENCE'">
+              当前简历没有找到支持这项要求的内容
+            </strong>
+            <strong v-else>{{ selectedRequirement.requirementText }}</strong>
           </div>
-          <p>
-            共核对 {{ totalChecked }} 条岗位要求。分析只依据本次冻结的简历材料；没有证据的要求不会自动写入简历。
-          </p>
-        </section>
+          <el-button type="primary" @click="goToWorkspace(selectedRequirement.evidenceRequirementId)">
+            修改简历
+          </el-button>
+        </div>
 
         <section class="analysis-review-layout" aria-label="岗位要求与证据审阅">
           <RequirementNavigator
             :requirements="requirements"
             :selected-requirement-id="selectedRequirement?.evidenceRequirementId ?? null"
-            :job-title="taskTitle"
             @select="selectRequirement"
           />
 
@@ -322,26 +310,7 @@ onMounted(loadResult)
             tabindex="0"
             aria-label="当前岗位要求的证据详情，可滚动"
           >
-            <header class="analysis-detail-header">
-              <div>
-                <span class="analysis-detail-eyebrow">EVIDENCE REVIEW</span>
-                <p class="analysis-detail-reference">
-                  要求 {{ String(selectedRequirementIndex + 1).padStart(2, '0') }}
-                  <span aria-hidden="true">·</span>
-                  <span :class="['analysis-status', matchLevelClass(selectedRequirement.matchLevel)]">
-                    {{ matchLevelLabel(selectedRequirement.matchLevel) }}
-                  </span>
-                  <span>{{ importanceLabel(selectedRequirement.importance) }}</span>
-                </p>
-              </div>
-              <span class="analysis-detail-state" :class="matchLevelClass(selectedRequirement.matchLevel)">
-                {{ selectedRequirement.evidences.length }} 条引用
-              </span>
-            </header>
-
-            <h2>{{ selectedRequirement.requirementText }}</h2>
-
-            <section class="analysis-source-context" aria-label="简历中的相关内容">
+            <section class="analysis-source-context" aria-label="本次分析冻结的简历原文">
               <ResumeSourcePreview
                 class="analysis-source-preview"
                 :document="sourceDocument"
@@ -357,62 +326,30 @@ onMounted(loadResult)
               />
             </section>
 
-            <section class="analysis-detail-block">
-              <span class="analysis-block-label">岗位要求</span>
-              <blockquote>“{{ selectedRequirement.requirementText }}”</blockquote>
-              <p class="analysis-source-note">来自本次岗位分析时冻结的目标岗位。</p>
-            </section>
-
-            <section class="analysis-detail-block">
-              <div class="analysis-block-heading">
-                <h3>证据</h3>
-                <span>{{ selectedRequirement.evidences.length }} 条关联引用</span>
-              </div>
-              <div v-if="selectedRequirement.evidences.length" class="analysis-evidence-list">
-                <article
-                  v-for="evidence in selectedRequirement.evidences"
-                  :key="evidence.requirementEvidenceId"
-                  class="analysis-evidence-quote"
-                >
-                  <div>
-                    <span>{{ evidenceLocation(evidence.sectionLabel) }}</span>
-                    <span>{{ evidence.supportLevel === 'SUFFICIENT' ? '足够支持' : '部分支持' }}</span>
-                  </div>
-                  <p>“{{ evidence.evidenceText }}”</p>
-                  <small>来自本次分析冻结的简历材料</small>
-                </article>
-              </div>
-              <p v-else class="analysis-detail-muted">当前简历未找到支持该要求的证据。</p>
-            </section>
-
-            <section class="analysis-detail-block analysis-conclusion-block">
-              <span class="analysis-block-label">
-                {{ selectedRequirement.matchLevel === 'MATCHED' ? '核对结论' : '结论与边界' }}
-              </span>
-              <p>{{ selectedRequirement.conclusion || '当前材料暂时无法支持这项要求。' }}</p>
-              <p v-if="selectedRequirement.matchLevel === 'NO_EVIDENCE'" class="analysis-boundary">
-                当前简历未找到支持该要求的证据，不代表你没有这项能力。只有在确有真实经历时，才手动补充到简历；系统不会自动加入。
-              </p>
-              <p v-else-if="selectedRequirement.matchLevel === 'PARTIAL_EVIDENCE'" class="analysis-boundary">
-                这代表当前材料中的证据不完整。建议先核对真实经历，再决定如何表达；本页面不会替你增加新事实。
-              </p>
-            </section>
-
-            <section class="analysis-detail-block analysis-suggestion-block">
-              <div class="analysis-block-heading">
-                <h3>建议完善</h3>
-                <span>保留真实材料</span>
-              </div>
-              <p>{{ selectedRequirement.suggestion || '当前材料已足够支持这项要求，无需为了匹配关键词额外增加事实。' }}</p>
-              <div class="analysis-detail-actions">
-                <el-button type="primary" @click="goToWorkspace(selectedRequirement.evidenceRequirementId)">
-                  修改简历 →
-                </el-button>
-                <el-button @click="selectRequirement(requirements[0]?.evidenceRequirementId ?? selectedRequirement.evidenceRequirementId)">
-                  回到第一条要求
+            <details
+              v-if="selectedRequirement.matchLevel !== 'NO_EVIDENCE' && selectedRequirement.evidences.length"
+              class="analysis-evidence-disclosure"
+            >
+              <summary>查看证据说明 · {{ selectedRequirement.evidences.length }} 处原文已标记</summary>
+              <div class="analysis-evidence-disclosure-content">
+                <span :class="['analysis-status', matchLevelClass(selectedRequirement.matchLevel)]">
+                  {{ selectedRequirement.evidences[0]?.supportLevel === 'SUFFICIENT' ? '足够支持' : '部分支持' }}
+                </span>
+                <p>{{ selectedRequirement.conclusion || '当前材料存在相关证据。' }}</p>
+                <p v-if="selectedRequirement.suggestion">{{ selectedRequirement.suggestion }}</p>
+                <el-button type="primary" size="small" @click="goToWorkspace(selectedRequirement.evidenceRequirementId)">
+                  修改简历
                 </el-button>
               </div>
-            </section>
+            </details>
+
+            <div v-else-if="selectedRequirement.matchLevel === 'NO_EVIDENCE'" class="analysis-no-evidence-note">
+              <span class="analysis-no-evidence-state">当前简历没有找到支持这项要求的内容</span>
+              <details class="analysis-boundary-disclosure">
+                <summary>查看边界</summary>
+                <p>这不代表你没有这项能力；只有在确有真实经历时，才手动补充。</p>
+              </details>
+            </div>
           </article>
           <div v-else class="analysis-detail-empty" role="status">
             <strong>暂无逐条证据</strong>
@@ -1117,4 +1054,225 @@ onMounted(loadResult)
     margin-left: 0;
   }
 }
+.analysis-task-content {
+  gap: var(--app-space-2);
+  padding-top: var(--app-space-2);
+  padding-bottom: var(--app-space-2);
+}
+
+.analysis-selected-requirement-bar {
+  display: flex;
+  min-width: 0;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--app-space-4);
+  border-top: 1px solid var(--app-border-strong);
+  border-bottom: 1px solid var(--app-border);
+  padding: 9px var(--app-space-2);
+  background: var(--app-surface);
+}
+
+.selected-requirement-copy {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.selected-requirement-reference {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--app-space-2);
+  color: var(--app-text-muted);
+  font-family: var(--app-font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.selected-requirement-copy > strong {
+  overflow: hidden;
+  color: var(--app-text);
+  font-size: 13px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.analysis-selected-requirement-bar > .el-button {
+  flex: 0 0 auto;
+}
+
+.analysis-review-layout {
+  grid-template-columns: var(--app-workspace-requirements-width) minmax(0, 1fr);
+  border-top: 0;
+}
+
+.analysis-evidence-detail {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.analysis-source-context {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 0;
+  margin: 0;
+  border: 0;
+}
+
+.analysis-source-preview {
+  width: 100%;
+  height: 100%;
+}
+
+.analysis-evidence-disclosure,
+.analysis-no-evidence-note {
+  flex: 0 0 auto;
+  margin: 0;
+  border-top: 1px solid var(--app-border);
+  background: var(--app-surface);
+}
+
+.analysis-evidence-disclosure summary,
+.analysis-boundary-disclosure summary {
+  padding: 9px var(--app-space-6);
+  color: var(--app-text-secondary);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  list-style: none;
+}
+
+.analysis-evidence-disclosure summary::-webkit-details-marker,
+.analysis-boundary-disclosure summary::-webkit-details-marker {
+  display: none;
+}
+
+.analysis-evidence-disclosure summary::after,
+.analysis-boundary-disclosure summary::after {
+  margin-left: 5px;
+  color: var(--app-primary);
+  content: '＋';
+}
+
+.analysis-evidence-disclosure[open] summary::after,
+.analysis-boundary-disclosure[open] summary::after {
+  content: '－';
+}
+
+.analysis-evidence-disclosure-content {
+  display: grid;
+  gap: 5px;
+  padding: 0 var(--app-space-6) 12px;
+}
+
+.analysis-evidence-disclosure-content p,
+.analysis-no-evidence-note p {
+  margin: 0;
+  color: var(--app-text-secondary);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.analysis-no-evidence-note {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--app-space-3);
+  padding-left: var(--app-space-6);
+}
+
+.analysis-no-evidence-state {
+  color: var(--app-primary-active);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.analysis-boundary-disclosure {
+  flex: 0 0 auto;
+}
+
+.analysis-boundary-disclosure summary {
+  padding-right: var(--app-space-6);
+  padding-left: var(--app-space-3);
+  color: var(--app-text-muted);
+  font-weight: 600;
+}
+
+.analysis-boundary-disclosure p {
+  max-width: 430px;
+  margin: 0 var(--app-space-6) 12px;
+  color: var(--app-text-secondary);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+@media (max-width: 1119px) {
+  .analysis-task-content {
+    padding-top: var(--app-space-1);
+    padding-bottom: var(--app-space-1);
+  }
+
+  .analysis-selected-requirement-bar {
+    align-items: flex-start;
+    padding: 8px var(--app-space-1);
+  }
+
+  .selected-requirement-copy > strong {
+    white-space: normal;
+  }
+
+  .analysis-review-layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .analysis-review-layout :deep(.requirements-rail) {
+    height: auto;
+  }
+
+  .analysis-review-layout :deep(.requirement-list) {
+    max-height: 126px;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  .analysis-review-layout :deep(.requirement-item) {
+    min-width: 0;
+  }
+
+  .analysis-evidence-detail {
+    height: auto;
+    border-top: 1px solid var(--app-border-strong);
+  }
+
+  .analysis-evidence-disclosure summary,
+  .analysis-boundary-disclosure summary {
+    padding-right: var(--app-space-4);
+    padding-left: var(--app-space-4);
+  }
+
+  .analysis-evidence-disclosure-content {
+    padding-right: var(--app-space-4);
+    padding-left: var(--app-space-4);
+  }
+
+  .analysis-no-evidence-note {
+    padding-left: var(--app-space-4);
+  }
+
+  .analysis-boundary-disclosure summary {
+    padding-left: var(--app-space-2);
+  }
+
+  .analysis-boundary-disclosure p {
+    margin-right: var(--app-space-4);
+    margin-left: var(--app-space-4);
+  }
+}
+
 </style>

@@ -6,7 +6,6 @@ import type { EvidenceRequirementItem } from '@/types/evidence-analysis'
 const props = defineProps<{
   requirements: EvidenceRequirementItem[]
   selectedRequirementId: number | null
-  jobTitle: string
 }>()
 
 const emit = defineEmits<{
@@ -35,7 +34,6 @@ watch(
     <RequirementNavigator
       :requirements="requirements"
       :selected-requirement-id="selectedRequirementId"
-      :job-title="jobTitle"
       @select="emit('select', $event)"
     />
   </div>

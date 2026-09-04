@@ -4,7 +4,6 @@ import type { EvidenceRequirementItem } from '@/types/evidence-analysis'
 const props = defineProps<{
   requirements: EvidenceRequirementItem[]
   selectedRequirementId: number | null
-  jobTitle: string
 }>()
 
 const emit = defineEmits<{
@@ -37,11 +36,6 @@ const statusClass = (matchLevel: string) => {
   }
 }
 
-const linkLabel = (requirement: EvidenceRequirementItem) => {
-  const count = requirement.evidences.length
-  return count ? `${count} 条证据` : '暂无证据'
-}
-
 const countByStatus = (matchLevel: string) =>
   props.requirements.filter((item) => item.matchLevel === matchLevel).length
 </script>
@@ -50,15 +44,9 @@ const countByStatus = (matchLevel: string) =>
   <aside class="requirements-rail" aria-label="岗位要求">
     <div class="rail-header">
       <div class="rail-title-line">
-        <div>
-          <span class="rail-eyebrow">REQUIREMENTS</span>
-          <h2>岗位要求</h2>
-          <p class="rail-context">{{ jobTitle }} 关注的信号</p>
-        </div>
-        <span class="rail-count">{{ requirements.length }} 项</span>
+        <h2>岗位要求 · {{ requirements.length }}</h2>
+        <span class="rail-count">{{ countByStatus('MATCHED') }} 已支持 · {{ countByStatus('PARTIAL_EVIDENCE') + countByStatus('NO_EVIDENCE') }} 待完善</span>
       </div>
-      <p class="rail-intro">选择一项，查看它在当前简历中的证据与需要完善的地方。</p>
-      <div class="rail-meta"><span>当前岗位视角</span><span>按 JD 顺序</span></div>
     </div>
 
     <div v-if="requirements.length" class="requirement-list" role="list">
@@ -74,12 +62,9 @@ const countByStatus = (matchLevel: string) =>
         <span class="requirement-number">{{ String(index + 1).padStart(2, '0') }}</span>
         <span class="requirement-content">
           <strong>{{ requirement.requirementText }}</strong>
-          <span class="requirement-copy">{{ requirement.conclusion || '查看当前材料是否支持该要求。' }}</span>
           <span class="requirement-meta">
             <span class="status-dot" :class="statusClass(requirement.matchLevel)" aria-hidden="true" />
             <span>{{ statusLabel(requirement.matchLevel) }}</span>
-            <span class="meta-divider" aria-hidden="true">·</span>
-            <span>{{ linkLabel(requirement) }}</span>
           </span>
         </span>
       </button>
@@ -90,16 +75,7 @@ const countByStatus = (matchLevel: string) =>
       <span>分析完成后，相关证据会显示在这里。</span>
     </div>
 
-    <div v-if="requirements.length" class="rail-footer">
-      <div class="rail-footer-line"><span>审核状态</span><strong>{{ countByStatus('MATCHED') }} 项已有优势</strong></div>
-      <div class="coverage-track" aria-label="岗位要求证据覆盖情况">
-        <span :style="{ transform: `scaleX(${countByStatus('MATCHED') / requirements.length})` }" />
-      </div>
-      <p>
-        {{ countByStatus('PARTIAL_EVIDENCE') }} 项建议完善 ·
-        {{ countByStatus('NO_EVIDENCE') }} 项当前材料未体现
-      </p>
-    </div>
+
   </aside>
 </template>
 
@@ -422,4 +398,64 @@ const countByStatus = (matchLevel: string) =>
     display: none;
   }
 }
+.rail-header {
+  padding: 14px 18px 12px;
+}
+
+.rail-title-line {
+  align-items: baseline;
+}
+
+.rail-title-line h2 {
+  font-size: 14px;
+}
+
+.rail-count {
+  color: var(--app-text-muted);
+  font-size: 9px;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+.requirement-item {
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 8px;
+  padding: 11px 16px 10px 18px;
+}
+
+.requirement-content strong {
+  display: -webkit-box;
+  overflow: hidden;
+  margin-bottom: 5px;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.requirement-meta {
+  margin-top: 0;
+}
+
+@media (max-width: 1119px) {
+  .rail-header {
+    padding: 11px 14px 9px;
+  }
+
+  .rail-title-line {
+    gap: 8px;
+  }
+
+  .rail-title-line h2 {
+    font-size: 13px;
+  }
+
+  .rail-count {
+    font-size: 8px;
+  }
+
+  .requirement-item {
+    min-width: 0;
+    padding: 10px 14px 9px 16px;
+  }
+}
+
 </style>

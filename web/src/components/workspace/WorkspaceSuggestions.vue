@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import BulletSuggestionCard from '@/components/workspace/BulletSuggestionCard.vue'
 import type { OptimizationAnalysisResult } from '@/types/job-analysis'
+import type { ResumeDocument } from '@/types/resume-document'
+import type { BulletSuggestController } from '@/utils/useBulletSuggest'
 import {
   isKnownRequirementImportance,
   isKnownRequirementMatchLevel,
@@ -12,6 +15,8 @@ const props = defineProps<{
   loading: boolean
   error: string | null
   selectedRequirementId?: number | null
+  document?: ResumeDocument | null
+  suggest?: BulletSuggestController | null
 }>()
 
 const emit = defineEmits<{
@@ -79,13 +84,42 @@ const statusClass = (value: string) => {
 
 const importanceLabel = (value: string) => (value === 'BONUS' ? '加分项' : '必需项')
 const evidenceLocation = (sectionLabel: string | null) => sectionLabel || '简历材料'
+
+const suggestionMode = computed(() => {
+  const controller = props.suggest
+  if (!controller || controller.phase.value === 'idle') return null
+  if (controller.phase.value === 'ready' && controller.candidateStale.value) return 'stale' as const
+  return controller.phase.value
+})
+
+const activeBulletId = computed(() => props.suggest?.activeBulletId.value ?? null)
+const activeBulletText = computed(() => {
+  const bulletId = activeBulletId.value
+  if (!bulletId || !props.document) return ''
+  for (const section of props.document.sections) {
+    for (const entry of section.entries) {
+      const bullet = entry.bullets.find((item) => item.id === bulletId)
+      if (bullet) return bullet.text
+    }
+  }
+  return ''
+})
 </script>
 
 <template>
-  <aside class="workspace-inspector" aria-label="要求证据检查器" aria-live="polite">
+  <aside
+    class="workspace-inspector"
+    :aria-label="suggestionMode ? 'AI 优化检查器' : '要求证据检查器'"
+    aria-live="polite"
+  >
     <div class="inspector-scroll">
       <header class="inspector-header">
-        <div class="inspector-ref">
+        <div v-if="suggestionMode" class="inspector-ref">
+          <span>AI 优化</span>
+          <span class="inspector-ref-dot" aria-hidden="true" />
+          <span>当前工作要点</span>
+        </div>
+        <div v-else class="inspector-ref">
           <span v-if="selected">当前修改上下文 · {{ String(requirements.indexOf(selected) + 1).padStart(2, '0') }}</span>
           <span class="inspector-ref-dot" aria-hidden="true" />
           <span v-if="selected" :class="['inspector-status', statusClass(selected.matchLevel)]">
@@ -94,7 +128,12 @@ const evidenceLocation = (sectionLabel: string | null) => sectionLabel || '简�
           <span v-if="selected" class="inspector-importance">{{ importanceLabel(selected.importance) }}</span>
           <span v-else>岗位分析</span>
         </div>
-        <button type="button" class="inspector-close" aria-label="收起要求检查器" @click="emit('close')">
+        <button
+          type="button"
+          class="inspector-close"
+          :aria-label="suggestionMode ? '收起 AI 优化' : '收起要求检查器'"
+          @click="emit('close')"
+        >
           收起
         </button>
       </header>
@@ -104,6 +143,27 @@ const evidenceLocation = (sectionLabel: string | null) => sectionLabel || '简�
         <p>{{ error }}</p>
         <el-button size="small" @click="emit('retryLoad')">重新加载</el-button>
       </div>
+
+      <template v-else-if="suggestionMode && props.suggest">
+        <div class="inspector-ai-detail">
+          <p class="inspector-context-label">受约束改写</p>
+          <h2>只修改这一条简历内容</h2>
+          <p class="inspector-ai-source">{{ activeBulletText || '当前简历中的工作要点' }}</p>
+          <BulletSuggestionCard
+            :mode="suggestionMode"
+            :original-text="props.suggest.candidate.value?.originalText ?? activeBulletText"
+            :suggested-text="props.suggest.candidate.value?.suggestedText ?? null"
+            :reason="props.suggest.candidate.value?.reason ?? null"
+            :reject-message="props.suggest.rejectInfo.value?.message ?? null"
+            :error-message="props.suggest.errorMessage.value ?? null"
+            @apply="props.suggest.apply()"
+            @reject="props.suggest.reject()"
+            @regenerate="props.suggest.regenerate()"
+            @cancel="props.suggest.cancelCompose()"
+            @submit-custom="(instruction: string) => activeBulletId && props.suggest?.submitCustom(activeBulletId, instruction)"
+          />
+        </div>
+      </template>
 
       <template v-else-if="result?.evidenceAnalysis && selected">
         <div class="inspector-detail">
@@ -177,7 +237,7 @@ const evidenceLocation = (sectionLabel: string | null) => sectionLabel || '简�
       <p v-else class="inspector-quiet">暂无逐条证据分析，可以直接编辑简历内容。</p>
     </div>
 
-    <footer v-if="selected" class="inspector-footer">
+    <footer v-if="selected && !suggestionMode" class="inspector-footer">
       <span class="footer-note">分析结论只对应当前冻结材料</span>
       <button type="button" class="next-button" @click="emit('close')">收起检查器</button>
     </footer>
@@ -538,4 +598,41 @@ const evidenceLocation = (sectionLabel: string | null) => sectionLabel || '简�
     bottom: 0;
   }
 }
+.inspector-ai-detail {
+  padding: 15px 18px 24px;
+}
+
+.inspector-ai-detail .inspector-context-label {
+  margin: 0 0 6px;
+}
+
+.inspector-ai-detail h2 {
+  margin: 0;
+  color: var(--app-text);
+  font-size: 20px;
+  line-height: 1.25;
+}
+
+.inspector-ai-source {
+  overflow: hidden;
+  margin: 9px 0 15px;
+  color: var(--app-text-secondary);
+  font-size: 12px;
+  line-height: 1.55;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inspector-ai-detail :deep(.bullet-suggestion) {
+  margin-top: 0;
+  border-radius: var(--app-radius-sm);
+}
+
+@media (max-width: 1119px) {
+  .inspector-ai-detail {
+    padding-right: var(--app-space-4);
+    padding-left: var(--app-space-4);
+  }
+}
+
 </style>

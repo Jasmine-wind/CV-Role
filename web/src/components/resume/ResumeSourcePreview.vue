@@ -418,4 +418,11 @@ const isHighlighted = (bulletId: string) => props.highlightedBulletIds.includes(
     text-align: left;
   }
 }
+.source-preview-section.is-focused {
+  border-top-color: var(--app-border);
+  background: transparent;
+  box-shadow: inset 2px 0 0 var(--app-primary);
+  padding-left: var(--app-space-3);
+}
+
 </style>

@@ -96,6 +96,16 @@ describe('ResumeEditor', () => {
     expect(changed).not.toBe(draft.value)
   })
 
+  it('keeps identity editing contextual instead of showing a permanent form field', async () => {
+    const wrapper = mount(ResumeEditor, { props: { document: makeDocument() } })
+
+    expect(wrapper.find('.identity-name').exists()).toBe(true)
+    expect(wrapper.find('.identity-name-input').exists()).toBe(false)
+
+    await wrapper.get('.identity-name').trigger('click')
+    expect(wrapper.find('.identity-name-input').exists()).toBe(true)
+  })
+
   it('shows duplicate contact values and blank drafts only once', () => {
     const document = makeDocument()
     document.basics.contacts = [
@@ -107,7 +117,7 @@ describe('ResumeEditor', () => {
 
     const wrapper = mount(ResumeEditor, { props: { document } })
 
-    expect(wrapper.findAll('.contact-row')).toHaveLength(2)
+    expect(wrapper.findAll('.contact-token')).toHaveLength(2)
   })
 
   it('renders semantic fields without offering non-exported skill bullets or generic custom metadata', () => {
@@ -185,19 +195,14 @@ describe('ResumeEditor', () => {
       },
     })
 
-    expect(wrapper.text()).toContain('地点')
-    expect(
-      wrapper
-        .findAllComponents({ name: 'ElInput' })
-        .some((item) => item.props('placeholder') === '例如 上海'),
-    ).toBe(true)
+    expect(wrapper.text()).toContain('上海')
+    expect(wrapper.text()).toContain('某公司')
+    expect(wrapper.text()).toContain('后端工程师')
+    expect(wrapper.text()).toContain('旧 generic 标题')
+    expect(wrapper.text()).toContain('旧 generic 角色')
+    expect(wrapper.text()).toContain('旧日期')
     expect(wrapper.text()).not.toContain('添加技能要点')
     expect(wrapper.text()).not.toContain('不应出现在技能编辑器里的内容')
-    expect(wrapper.text()).not.toContain('公司或机构名')
-    expect(wrapper.text()).not.toContain('职位 / 角色')
-    expect(wrapper.text()).not.toContain('旧 generic 标题')
-    expect(wrapper.text()).not.toContain('旧 generic 角色')
-    expect(wrapper.text()).not.toContain('旧日期')
   })
 
   it('preserves all supported RESUME_DOCUMENT_V1 values while cloning a reactive proxy', async () => {

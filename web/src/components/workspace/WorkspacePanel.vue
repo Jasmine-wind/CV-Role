@@ -38,8 +38,8 @@ const previewPreparing = ref(false)
 const previewComponentMounted = ref(false)
 const workspaceMode = ref<'edit' | 'preview'>('edit')
 const initialRequirementId = parsePositiveId(route.query.requirement)
-const inspectorOpen = ref(true)
-const mobilePanel = ref<'editor' | 'suggestions'>('editor')
+const inspectorOpen = ref(false)
+const mobilePanel = ref<'editor' | 'requirements' | 'suggestions'>('editor')
 const selectedRequirementId = ref<number | null>(initialRequirementId)
 
 // At 1120px, compact columns are 245px + 340px, leaving 535px for the Resume stage.
@@ -171,7 +171,8 @@ const goToAnalysis = () => {
 
 const selectRequirement = (requirementId: number) => {
   selectedRequirementId.value = requirementId
-  inspectorOpen.value = true
+  inspectorOpen.value = false
+  if (isNarrowScreen.value) mobilePanel.value = 'editor'
   void router.replace({
     query: { ...route.query, requirement: String(requirementId) },
   })
@@ -275,11 +276,17 @@ const closeInspector = () => {
   if (isNarrowScreen.value) mobilePanel.value = 'editor'
 }
 
+watch(bulletSuggest.activeBulletId, (bulletId) => {
+  if (!bulletId) return
+  inspectorOpen.value = true
+  if (isNarrowScreen.value) mobilePanel.value = 'suggestions'
+})
+
 const routeRequirementId = computed(() => parsePositiveId(route.query.requirement))
 watch(routeRequirementId, (requirementId) => {
   selectedRequirementId.value = requirementId
-  if (requirementId) {
-    inspectorOpen.value = true
+  if (requirementId && isNarrowScreen.value && mobilePanel.value === 'requirements') {
+    mobilePanel.value = 'editor'
   }
 })
 
@@ -348,7 +355,7 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
       THESIS: 岗位要求不是分数，而是一条可回到简历原文的证据线；工作区拒绝 Dashboard。
       OWN-WORLD: 暖中性纸面、清晰分隔线、Slate ink 与克制 Burnt Clay 标注组成证据账本。
       STORY: 用户选择要求，核对冻结材料中的证据与缺口，在同一份简历上编辑，再预览或导出。
-      FIRST VIEWPORT: shared task header and contextual editor toolbar lead into a three-column workspace where requirements, resume, and inspector remain visible together.
+      FIRST VIEWPORT: the task header leads into a focused resume document; requirements and AI context appear only when they are needed.
       FORM: Redline evidence ledger；正式项目数据、编辑状态和 API 保持唯一真实链路。
       FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, DESIGN.md, and every shipping raster carrying its provenance
     -->
@@ -370,56 +377,6 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
         <el-button v-else @click="setReviewStep('edit')">返回编辑</el-button>
       </template>
     </TaskHeader>
-
-    <div v-if="workspaceMode === 'edit'" class="workspace-toolbar" aria-label="编辑工具">
-      <div class="workspace-toolbar-context">
-        <span class="workspace-toolbar-kicker">岗位定向编辑</span>
-        <strong>{{ resumeName }}</strong>
-        <span v-if="effectiveSelectedRequirementId" class="workspace-selected-requirement">
-          当前优化：{{ requirements.find((item) => item.evidenceRequirementId === effectiveSelectedRequirementId)?.requirementText }}
-        </span>
-      </div>
-      <div class="workspace-toolbar-actions">
-        <button
-          v-if="workspaceMode === 'edit'"
-          type="button"
-          class="toolbar-button"
-          :disabled="!editor.canUndo.value"
-          @click="editor.undo()"
-        >
-          撤销
-        </button>
-        <button
-          v-if="workspaceMode === 'edit'"
-          type="button"
-          class="toolbar-button"
-          :disabled="!editor.canRedo.value"
-          @click="editor.redo()"
-        >
-          重做
-        </button>
-        <button
-          v-if="workspaceMode === 'edit' && !inspectorOpen"
-          type="button"
-          class="toolbar-button toolbar-button-accent"
-          @click="openInspector"
-        >
-          优化建议<span v-if="suggestionCount" class="toolbar-count">{{ suggestionCount }}</span>
-        </button>
-        <details v-if="workspaceMode === 'edit'" class="workspace-more">
-          <summary>更多</summary>
-          <div class="workspace-more-menu">
-            <button
-              type="button"
-              :disabled="editor.status.value === 'saving'"
-              @click="confirmRestore"
-            >
-              {{ restoring ? '正在恢复…' : '恢复优化前版本' }}
-            </button>
-          </div>
-        </details>
-      </div>
-    </div>
 
     <div v-if="editor.status.value === 'conflict'" class="workspace-conflict" role="alert">
       <p>线上已有更新，你的本地修改尚未保存。请选择保留哪一份内容：</p>
@@ -449,16 +406,25 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
           v-if="isNarrowScreen"
           class="workspace-mobile-switch"
           role="tablist"
-          aria-label="编辑与建议"
+          aria-label="工作区内容"
         >
           <button
             type="button"
             role="tab"
             :aria-selected="mobilePanel === 'editor'"
             :class="{ 'is-active': mobilePanel === 'editor' }"
-            @click="mobilePanel = 'editor'"
+            @click="mobilePanel = 'editor'; inspectorOpen = false"
           >
             编辑简历
+          </button>
+          <button
+            type="button"
+            role="tab"
+            :aria-selected="mobilePanel === 'requirements'"
+            :class="{ 'is-active': mobilePanel === 'requirements' }"
+            @click="mobilePanel = 'requirements'; inspectorOpen = false"
+          >
+            岗位要求
           </button>
           <button
             type="button"
@@ -485,15 +451,56 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
           </details>
         </div>
 
-        <div class="workspace-layout" :class="{ 'is-inspector-closed': !inspectorOpen }">
+        <div class="workspace-layout" :class="{ 'is-inspector-open': inspectorOpen }">
           <WorkspaceRequirements
+            v-if="!isNarrowScreen || mobilePanel === 'requirements'"
             :requirements="requirements"
             :selected-requirement-id="effectiveSelectedRequirementId"
-            :job-title="jobTitle"
             @select="selectRequirement"
           />
 
           <section v-if="!isNarrowScreen || mobilePanel === 'editor'" class="resume-stage" aria-label="简历编辑器">
+            <div class="workspace-document-toolbar" aria-label="文档工具">
+              <span class="document-toolbar-label">简历正文</span>
+              <div class="document-toolbar-actions">
+                <button
+                  type="button"
+                  class="toolbar-button"
+                  :disabled="!editor.canUndo.value"
+                  @click="editor.undo()"
+                >
+                  撤销
+                </button>
+                <button
+                  type="button"
+                  class="toolbar-button"
+                  :disabled="!editor.canRedo.value"
+                  @click="editor.redo()"
+                >
+                  重做
+                </button>
+                <button
+                  v-if="!inspectorOpen"
+                  type="button"
+                  class="toolbar-button toolbar-button-accent"
+                  @click="openInspector"
+                >
+                  优化建议<span v-if="suggestionCount" class="toolbar-count">{{ suggestionCount }}</span>
+                </button>
+                <details class="workspace-more">
+                  <summary aria-label="更多文档操作">···</summary>
+                  <div class="workspace-more-menu">
+                    <button
+                      type="button"
+                      :disabled="editor.status.value === 'saving'"
+                      @click="confirmRestore"
+                    >
+                      {{ restoring ? '正在恢复…' : '恢复优化前版本' }}
+                    </button>
+                  </div>
+                </details>
+              </div>
+            </div>
             <div class="resume-stage-scroll">
               <ResumeEditor
                 :document="editor.draft.value"
@@ -513,6 +520,8 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
             :loading="analysisLoading"
             :error="analysisError"
             :selected-requirement-id="effectiveSelectedRequirementId"
+            :document="editor.draft.value"
+            :suggest="bulletSuggest"
             @retry-load="loadAnalysis"
             @close="closeInspector"
           />
@@ -1004,4 +1013,98 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
     min-width: 156px;
   }
 }
+/* Focused editing mode: the document owns the canvas; supporting panes are transient. */
+.workspace-document-toolbar {
+  display: flex;
+  min-height: 40px;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--app-space-3);
+  padding: 0 var(--app-space-6);
+  border-bottom: 1px solid var(--app-border);
+  background: var(--app-surface);
+}
+
+.document-toolbar-label {
+  color: var(--app-text-muted);
+  font-family: var(--app-font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.document-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--app-space-1);
+}
+
+.workspace-layout {
+  grid-template-columns: var(--app-workspace-requirements-width) minmax(0, 1fr);
+}
+
+.workspace-layout.is-inspector-open {
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 34%);
+}
+
+.workspace-layout.is-inspector-open > .workspace-requirements {
+  display: none;
+}
+
+.workspace-layout.is-inspector-open .resume-stage {
+  border-right: 1px solid var(--app-border-strong);
+}
+
+.resume-stage {
+  min-width: 0;
+}
+
+.resume-stage-scroll {
+  min-width: 0;
+}
+
+/* The old form remains in the template for the same mutation handlers, but the default surface is a document. */
+@media (min-width: 1120px) {
+  .workspace-layout.is-inspector-open {
+    grid-template-columns: minmax(0, 1fr) minmax(300px, 34%);
+  }
+}
+
+@media (max-width: 1119px) {
+  .workspace-mobile-switch {
+    gap: 2px;
+  }
+
+  .workspace-mobile-switch button {
+    min-width: 0;
+    padding: 0 8px;
+    font-size: 10px;
+  }
+
+  .workspace-layout,
+  .workspace-layout.is-inspector-open {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .workspace-layout > .workspace-requirements,
+  .workspace-layout > .workspace-requirements :deep(.requirements-rail) {
+    height: 100%;
+  }
+
+  .workspace-layout.is-inspector-open > .workspace-requirements {
+    display: none;
+  }
+
+  .workspace-layout.is-inspector-open .resume-stage {
+    border-right: 0;
+  }
+
+  .workspace-document-toolbar {
+    min-height: 38px;
+    padding: 0 var(--app-space-3);
+  }
+}
+
 </style>

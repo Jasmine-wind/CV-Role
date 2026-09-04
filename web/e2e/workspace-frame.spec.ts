@@ -62,7 +62,7 @@ const analysis = {
   legacyAnalysis: null,
 }
 
-async function mockWorkspace(page: Page, options: { failSaveOnce?: boolean } = {}) {
+async function mockWorkspace(page: Page, options: { failSaveOnce?: boolean; denseRequirements?: boolean } = {}) {
   await page.addInitScript(() => localStorage.setItem('ai-resume-token', 'workspace-frame-token'))
   await page.route('**/api/users/me', (route) => route.fulfill(response({
     id: 1, username: 'workspace', email: 'workspace@example.invalid', nickname: '工作区测试用户', createdAt: '2026-01-01T00:00:00Z',
@@ -78,8 +78,38 @@ async function mockWorkspace(page: Page, options: { failSaveOnce?: boolean } = {
     }
     return route.fulfill(response({ saved: true, conflict: false, revision: 3 + saveAttempts, document: null }))
   })
-  await page.route('**/api/optimization-tasks/42/analysis-result', (route) => route.fulfill(response(analysis)))
+  await page.route('**/api/optimization-tasks/42/analysis-result', (route) => route.fulfill(response(
+    options.denseRequirements
+      ? {
+          ...analysis,
+          evidenceAnalysis: {
+            ...analysis.evidenceAnalysis,
+            requirements: Array.from({ length: 18 }, (_, index) => requirement(index + 1, index === 2 ? 'PARTIAL_EVIDENCE' : 'MATCHED')),
+          },
+        }
+      : analysis,
+  )))
   await page.route('**/api/workspace/42/artifacts', (route) => route.fulfill(response([])))
+  await page.route('**/api/workspace/42/bullet-suggestion', async (route) => {
+    const body = route.request().postDataJSON() as {
+      requestId: string
+      bulletId: string
+      baseRevision: number
+      originalText: string
+    }
+    await route.fulfill(response({
+      requestId: body.requestId,
+      bulletId: body.bulletId,
+      baseRevision: body.baseRevision,
+      state: 'READY',
+      originalText: body.originalText,
+      suggestedText: `${body.originalText}，持续改善交付稳定性`,
+      reason: '保留真实事实，只让职责与结果更清楚。',
+      rejectCode: null,
+      rejectMessage: null,
+      modelName: 'workspace-frame-model',
+    }))
+  })
 }
 
 const issues = new WeakMap<Page, string[]>()
@@ -95,14 +125,17 @@ test.afterEach(({ page }) => expect(issues.get(page) ?? []).toEqual([]))
 
 test.describe('Workspace editor frame', () => {
   for (const viewport of [{ width: 1366, height: 768 }, { width: 1920, height: 1080 }]) {
-    test(`uses a fixed 20/60/20 editor-first layout at ${viewport.width}x${viewport.height}`, async ({ page }) => {
+    test(`keeps the resume-first two-pane layout at ${viewport.width}x${viewport.height}`, async ({ page }) => {
       await page.setViewportSize(viewport)
       await mockWorkspace(page)
       await page.goto('/workspace/42?requirement=3')
       await expect(page.locator('.workspace-layout')).toBeVisible()
-      await expect(page.getByText('岗位定向编辑', { exact: true })).toBeVisible()
-      await expect(page.getByText('当前优化：具备 Redis 缓存设计经验', { exact: true })).toBeVisible()
+      await expect(page.getByText('岗位定向编辑', { exact: true })).toBeHidden()
+      await expect(page.getByText('当前优化：具备 Redis 缓存设计经验', { exact: true })).toBeHidden()
+      await expect(page.getByText('简历正文', { exact: true })).toBeVisible()
       await expect(page.getByText('✓ 已保存', { exact: true })).toBeVisible()
+      await expect(page.locator('.workspace-inspector')).toBeHidden()
+      await page.locator('.bullet-line').first().hover()
       await expect(page.getByRole('button', { name: 'AI 优化', exact: true }).first()).toBeVisible()
       await expect(page.locator('.editor-section.is-focused')).toBeVisible()
       await expect(page.locator('.bullet-block.is-evidence-focus')).toHaveCount(1)
@@ -120,36 +153,60 @@ test.describe('Workspace editor frame', () => {
       })
       expect(metrics.appScrollHeight).toBeLessThanOrEqual(metrics.appClientHeight + 1)
       expect(metrics.appScrollTop).toBe(0)
+      expect(metrics.columns).toHaveLength(2)
       expect(metrics.columns[1]).toBeGreaterThan(metrics.columns[0]! * 2.5)
-      expect(metrics.columns[1]).toBeGreaterThan(metrics.columns[2]! * 2.5)
     })
   }
 
   test('keeps requirements, document and context in independent scroll regions', async ({ page }) => {
     await page.setViewportSize({ width: 1366, height: 768 })
-    await mockWorkspace(page)
+    await mockWorkspace(page, { denseRequirements: true })
     await page.goto('/workspace/42?requirement=3')
     const app = page.locator('.app-page')
     const requirements = page.locator('.requirement-list')
     const editor = page.locator('.resume-stage-scroll')
-    const context = page.locator('.inspector-scroll')
     await requirements.hover()
     await page.mouse.wheel(0, 600)
     await expect.poll(() => requirements.evaluate((element) => element.scrollTop)).toBeGreaterThan(0)
     await editor.hover()
     await page.mouse.wheel(0, 600)
     await expect.poll(() => editor.evaluate((element) => element.scrollTop)).toBeGreaterThan(0)
+    await page.getByRole('button', { name: /优化建议/ }).click()
+    const context = page.locator('.inspector-scroll')
+    await expect(page.locator('.workspace-inspector')).toBeVisible()
     await context.hover()
     await page.mouse.wheel(0, 300)
     await expect.poll(() => context.evaluate((element) => element.scrollTop)).toBeGreaterThan(0)
     expect(await app.evaluate((element) => element.scrollTop)).toBe(0)
   })
 
+  test('opens the AI inspector for one bullet and keeps the suggestion lifecycle controls together', async ({ page }) => {
+    await page.setViewportSize({ width: 1366, height: 768 })
+    await mockWorkspace(page)
+    await page.goto('/workspace/42?requirement=3')
+    await page.locator('.bullet-line').first().hover()
+    await page.getByRole('button', { name: 'AI 优化', exact: true }).first().click()
+    await page.getByRole('menuitem', { name: '精简' }).click()
+
+    await expect(page.locator('.workspace-inspector')).toBeVisible()
+    await expect(page.locator('.workspace-layout > .workspace-requirements')).toBeHidden()
+    await expect(page.locator('.resume-stage .toolbar-button-accent')).toBeHidden()
+    await expect(page.getByText('原文', { exact: true })).toBeVisible()
+    await expect(page.getByText('建议版本', { exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: '采纳' })).toBeVisible()
+    await expect(page.getByRole('button', { name: '重新生成' })).toBeVisible()
+    await expect(page.getByRole('button', { name: '拒绝' })).toBeVisible()
+
+    await page.getByRole('button', { name: '拒绝' }).click()
+    await expect(page.getByText('建议版本', { exact: true })).toBeHidden()
+  })
+
   test('shows save failure recovery without changing the save API', async ({ page }) => {
     await page.setViewportSize({ width: 1366, height: 768 })
     await mockWorkspace(page, { failSaveOnce: true })
     await page.goto('/workspace/42?requirement=3')
-    const name = page.locator('.editor-basics input').first()
+    await page.getByRole('button', { name: '编辑姓名' }).click()
+    const name = page.locator('.identity-name-input input')
     await name.fill('Alex Chen Updated')
     await expect(page.getByText('保存失败 · 重新保存', { exact: true })).toBeVisible({ timeout: 5_000 })
     await expect(page.getByRole('button', { name: '重新保存' })).toBeVisible()
@@ -164,11 +221,15 @@ test.describe('Workspace editor frame', () => {
     await expect(page.getByRole('tab', { name: '编辑简历' })).toHaveAttribute('aria-selected', 'true')
     await expect(page.locator('.resume-stage')).toBeVisible()
     await expect(page.locator('.workspace-inspector')).toBeHidden()
+    await expect(page.locator('.workspace-requirements')).toBeHidden()
+    await page.getByRole('tab', { name: '岗位要求' }).click()
+    await expect(page.locator('.workspace-requirements')).toBeVisible()
     await expect.poll(() => page.evaluate(() => {
       const list = document.querySelector('.requirement-list')?.getBoundingClientRect()
       const selected = document.querySelector('.requirement-item.is-selected')?.getBoundingClientRect()
       return Boolean(list && selected && selected.left >= list.left - 1 && selected.right <= list.right + 1)
     })).toBe(true)
+    await page.getByRole('tab', { name: '编辑简历' }).click()
     const appMetrics = await page.locator('.app-page').evaluate((element) => ({ scrollHeight: element.scrollHeight, clientHeight: element.clientHeight, scrollTop: element.scrollTop, scrollWidth: element.scrollWidth, clientWidth: element.clientWidth }))
     expect(appMetrics.scrollHeight).toBeLessThanOrEqual(appMetrics.clientHeight + 1)
     expect(appMetrics.scrollWidth).toBeLessThanOrEqual(appMetrics.clientWidth + 1)

@@ -26,7 +26,13 @@ const canonicalSource = {
     id: 'experience', kind: 'EXPERIENCE', title: '工作经历', entries: [{
       id: 'entry-1', organization: '某科技公司', role: '后端工程师', school: null, degree: null,
       major: null, startDate: '2021', endDate: '2024', location: null, group: null, skillItems: null,
-      bullets: [{ id: 'bullet-1', text: '负责 Java 后端服务开发与维护' }],
+      bullets: [
+        { id: 'bullet-1', text: '负责 Java 后端服务开发与维护' },
+        ...Array.from({ length: 18 }, (_, index) => ({
+          id: `bullet-${index + 2}`,
+          text: `持续建设服务稳定性与交付流程 ${index + 2}`,
+        })),
+      ],
     }],
   }],
 }
@@ -201,73 +207,56 @@ test.describe('Job Analysis fixed evidence workspace', () => {
       await expectFixedViewport(page)
       expect(await page.evaluate(() => (window as Window & { __jobAnalysisWheelListeners?: number }).__jobAnalysisWheelListeners)).toBe(0)
       const metrics = await pageMetrics(page)
-      if (viewport.width <= 1119) {
-        expect(metrics.list!.scrollWidth).toBeGreaterThan(metrics.list!.clientWidth)
-      } else {
-        expect(metrics.list!.scrollHeight).toBeGreaterThan(metrics.list!.clientHeight)
-      }
-      expect(metrics.detail!.scrollHeight).toBeGreaterThan(metrics.detail!.clientHeight)
+      expect(metrics.detail!.clientHeight).toBeGreaterThan(0)
     })
   }
 
-  test('assigns scrolling to the left list and right evidence detail without scroll chaining', async ({ page }) => {
+  test('assigns scrolling to the requirement rail and frozen SOURCE canvas without scroll chaining', async ({ page }) => {
     await page.setViewportSize({ width: 1366, height: 768 })
-    await openAnalysis(page)
+    await openAnalysis(page, evidenceResult(Array.from({ length: 18 }, () => 'MATCHED')))
     await expect(page.locator('.analysis-review-layout')).toBeVisible()
     const list = page.locator('.requirement-list')
-    const detail = page.locator('.analysis-evidence-detail')
-    await page.locator('.requirement-item').nth(1).click()
+    const source = page.locator('.source-preview-scroll')
 
-    const beforeLeft = await pageMetrics(page)
+    const before = await pageMetrics(page)
     await page.mouse.move(8, 760)
     await page.mouse.wheel(0, 600)
-    expect((await pageMetrics(page)).appPage!.scrollTop).toBe(beforeLeft.appPage!.scrollTop)
+    expect((await pageMetrics(page)).appPage!.scrollTop).toBe(before.appPage!.scrollTop)
 
     await list.evaluate((element) => { element.scrollTop = 0 })
     await list.hover()
     await page.mouse.wheel(0, 500)
     await expect.poll(async () => (await list.evaluate((element) => element.scrollTop))).toBeGreaterThan(0)
-    expect((await pageMetrics(page)).appPage!.scrollTop).toBe(beforeLeft.appPage!.scrollTop)
+    expect((await pageMetrics(page)).appPage!.scrollTop).toBe(0)
 
-    await detail.evaluate((element) => { element.scrollTop = 0 })
-    await detail.hover({ position: { x: 8, y: 8 } })
+    await source.evaluate((element) => { element.scrollTop = 0 })
+    await source.hover()
     await page.mouse.wheel(0, 700)
-    await expect.poll(async () => (await detail.evaluate((element) => element.scrollTop))).toBeGreaterThan(0)
+    await expect.poll(async () => (await source.evaluate((element) => element.scrollTop))).toBeGreaterThan(0)
     expect((await pageMetrics(page)).appPage!.scrollTop).toBe(0)
 
     await list.evaluate((element) => { element.scrollTop = element.scrollHeight })
-    await expect.poll(async () => page.evaluate(() => {
-      const listBox = document.querySelector('.requirement-list')?.getBoundingClientRect()
-      const lastBox = document.querySelector('.requirement-item:last-child')?.getBoundingClientRect()
-      return Boolean(listBox && lastBox && lastBox.bottom <= listBox.bottom + 1)
-    })).toBe(true)
     await list.hover()
     await page.mouse.wheel(0, 900)
     expect((await pageMetrics(page)).appPage!.scrollTop).toBe(0)
 
-    await detail.evaluate((element) => { element.scrollTop = element.scrollHeight })
-    await detail.hover({ position: { x: 8, y: 8 } })
+    await source.evaluate((element) => { element.scrollTop = element.scrollHeight })
+    await source.hover()
     await page.mouse.wheel(0, 900)
     expect((await pageMetrics(page)).appPage!.scrollTop).toBe(0)
-    await expect.poll(async () => page.evaluate(() => {
-      const detailBox = document.querySelector('.analysis-evidence-detail')?.getBoundingClientRect()
-      const actionBox = document.querySelector('.analysis-suggestion-block')?.getBoundingClientRect()
-      return Boolean(detailBox && actionBox && actionBox.bottom <= detailBox.bottom + 1)
-    })).toBe(true)
   })
 
   test('resets detail scroll position when selecting another requirement and preserves the workspace route query', async ({ page }) => {
     await page.setViewportSize({ width: 1366, height: 768 })
     await openAnalysis(page)
     await expect(page.locator('.analysis-review-layout')).toBeVisible()
-    const detail = page.locator('.analysis-evidence-detail')
+    const selectedBar = page.locator('.analysis-selected-requirement-bar')
     await page.locator('.requirement-item').nth(1).click()
-    await detail.evaluate((element) => { element.scrollTop = element.scrollHeight })
-    expect(await detail.evaluate((element) => element.scrollTop)).toBeGreaterThan(0)
+    await expect(selectedBar).toContainText('要求 02 /')
     await page.locator('.requirement-item').nth(3).click()
-    await expect.poll(async () => (await detail.evaluate((element) => element.scrollTop))).toBe(0)
+    await expect(selectedBar).toContainText('要求 04 /')
     await page.route('**/api/workspace/**', (route) => route.fulfill(response({})))
-    await page.getByRole('button', { name: '修改简历 →' }).last().click()
+    await page.getByRole('button', { name: '修改简历', exact: true }).click()
     await expect(page).toHaveURL('/workspace/42?requirement=4')
   })
 
@@ -401,14 +390,13 @@ test.describe('Job Analysis fixed evidence workspace', () => {
       await page.locator('.requirement-item').nth(1).click()
       await expectFixedViewport(page)
       const metrics = await pageMetrics(page)
-      expect(metrics.list!.scrollWidth).toBeGreaterThan(metrics.list!.clientWidth)
-      expect(metrics.detail!.scrollHeight).toBeGreaterThan(metrics.detail!.clientHeight)
+      expect(metrics.detail!.clientHeight).toBeGreaterThan(0)
       await expect(page.locator('.analysis-evidence-detail')).toHaveAttribute('aria-label', '当前岗位要求的证据详情，可滚动')
-      await page.locator('.analysis-evidence-detail').focus()
-      await expect(page.locator('.analysis-evidence-detail')).toBeFocused()
-      await page.locator('.analysis-evidence-detail').hover({ position: { x: 8, y: 8 } })
+      const source = page.locator('.source-preview-scroll')
+      await source.evaluate((element) => { element.scrollTop = 0 })
+      await source.hover()
       await page.mouse.wheel(0, 700)
-      await expect.poll(async () => (await page.locator('.analysis-evidence-detail').evaluate((element) => element.scrollTop))).toBeGreaterThan(0)
+      await expect.poll(async () => (await source.evaluate((element) => element.scrollTop))).toBeGreaterThan(0)
     }
   })
 
