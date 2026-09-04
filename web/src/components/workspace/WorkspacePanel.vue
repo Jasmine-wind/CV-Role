@@ -410,7 +410,9 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
         >
           <button
             type="button"
+            id="workspace-tab-editor"
             role="tab"
+            aria-controls="workspace-panel-editor"
             :aria-selected="mobilePanel === 'editor'"
             :class="{ 'is-active': mobilePanel === 'editor' }"
             @click="mobilePanel = 'editor'; inspectorOpen = false"
@@ -419,7 +421,9 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
           </button>
           <button
             type="button"
+            id="workspace-tab-requirements"
             role="tab"
+            aria-controls="workspace-panel-requirements"
             :aria-selected="mobilePanel === 'requirements'"
             :class="{ 'is-active': mobilePanel === 'requirements' }"
             @click="mobilePanel = 'requirements'; inspectorOpen = false"
@@ -428,7 +432,9 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
           </button>
           <button
             type="button"
+            id="workspace-tab-suggestions"
             role="tab"
+            aria-controls="workspace-panel-suggestions"
             :aria-selected="mobilePanel === 'suggestions'"
             :class="{ 'is-active': mobilePanel === 'suggestions' }"
             @click="openInspector"
@@ -454,12 +460,22 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
         <div class="workspace-layout" :class="{ 'is-inspector-open': inspectorOpen }">
           <WorkspaceRequirements
             v-if="!isNarrowScreen || mobilePanel === 'requirements'"
+            id="workspace-panel-requirements"
+            role="tabpanel"
+            aria-labelledby="workspace-tab-requirements"
             :requirements="requirements"
             :selected-requirement-id="effectiveSelectedRequirementId"
             @select="selectRequirement"
           />
 
-          <section v-if="!isNarrowScreen || mobilePanel === 'editor'" class="resume-stage" aria-label="简历编辑器">
+          <section
+            v-if="!isNarrowScreen || mobilePanel === 'editor'"
+            id="workspace-panel-editor"
+            class="resume-stage"
+            role="tabpanel"
+            aria-labelledby="workspace-tab-editor"
+            aria-label="简历编辑器"
+          >
             <div class="workspace-document-toolbar" aria-label="文档工具">
               <span class="document-toolbar-label">简历正文</span>
               <div class="document-toolbar-actions">
@@ -516,6 +532,9 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
 
           <WorkspaceSuggestions
             v-if="(!isNarrowScreen && inspectorOpen) || (isNarrowScreen && mobilePanel === 'suggestions')"
+            id="workspace-panel-suggestions"
+            role="tabpanel"
+            aria-labelledby="workspace-tab-suggestions"
             :result="analysisResult"
             :loading="analysisLoading"
             :error="analysisError"
@@ -562,62 +581,6 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
   overflow: hidden;
   color: var(--app-text);
   background: var(--app-stage);
-}
-
-.workspace-toolbar {
-  display: flex;
-  flex: 0 0 auto;
-  min-height: 48px;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--app-space-4);
-  padding: 0 var(--app-content-gutter);
-  background: var(--app-stage);
-  border-bottom: 1px solid var(--app-border-strong);
-}
-
-.workspace-toolbar-context,
-.workspace-toolbar-actions {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-}
-
-.workspace-toolbar-context {
-  gap: var(--app-space-2);
-  overflow: hidden;
-  color: var(--app-text-muted);
-  font-size: var(--app-font-size-xs);
-  white-space: nowrap;
-}
-
-.workspace-toolbar-kicker {
-  color: var(--app-text-muted);
-  font-weight: 700;
-}
-
-.workspace-toolbar-context strong {
-  overflow: hidden;
-  color: var(--app-text);
-  font-weight: 700;
-  text-overflow: ellipsis;
-}
-
-.workspace-selected-requirement {
-  overflow: hidden;
-  max-width: min(420px, 32vw);
-  border-left: 1px solid var(--app-border-strong);
-  padding-left: var(--app-space-2);
-  color: var(--app-text-secondary);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.workspace-toolbar-actions {
-  flex: 0 0 auto;
-  justify-content: flex-end;
-  gap: var(--app-space-2);
-  flex-wrap: wrap;
 }
 
 .workspace-mobile-switch {
@@ -795,22 +758,13 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
   flex-direction: column;
 }
 
-.workspace-mobile-switch {
-  display: none;
-}
-
 .workspace-layout {
   display: grid;
-  grid-template-columns: 20% minmax(0, 60%) 20%;
   height: 0;
   min-width: 0;
   min-height: 0;
   flex: 1 1 0;
   overflow: hidden;
-}
-
-.workspace-layout.is-inspector-closed {
-  grid-template-columns: 20% minmax(0, 80%);
 }
 
 .workspace-layout :deep(.requirements-rail) {
@@ -824,10 +778,6 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
   overflow-y: auto;
   overscroll-behavior-y: contain;
   scrollbar-gutter: stable;
-}
-
-.workspace-layout :deep(.requirement-copy) {
-  display: none;
 }
 
 .resume-stage {
@@ -863,35 +813,7 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
   border-radius: var(--app-radius-md);
 }
 
-@media (max-width: 1250px) and (min-width: 1120px) {
-  .workspace-layout.is-inspector-closed {
-    grid-template-columns: 20% minmax(0, 80%);
-  }
-
-  .workspace-toolbar {
-    padding-right: var(--app-space-5);
-    padding-left: var(--app-space-5);
-  }
-}
-
 @media (max-width: 1119px) {
-  .workspace-toolbar {
-    min-height: 46px;
-    padding: 0 var(--app-content-gutter-narrow);
-  }
-
-  .workspace-toolbar-context {
-    width: 100%;
-  }
-
-  .workspace-selected-requirement {
-    max-width: 45vw;
-  }
-
-  .workspace-toolbar-actions {
-    flex-wrap: nowrap;
-  }
-
   .workspace-mobile-switch {
     display: inline-flex;
     width: calc(100% - 32px);
@@ -919,12 +841,6 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
 
   .workspace-layout :deep(.rail-header) {
     padding: 11px 15px 9px;
-  }
-
-  .workspace-layout :deep(.rail-intro),
-  .workspace-layout :deep(.rail-meta),
-  .workspace-layout :deep(.rail-context) {
-    display: none;
   }
 
   .workspace-layout :deep(.requirement-list) {
@@ -958,10 +874,6 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
 }
 
 @media (max-width: 640px) {
-  .workspace-toolbar {
-    display: none;
-  }
-
   .workspace-panel :deep(.task-workflow) {
     gap: var(--app-space-1);
   }

@@ -78,6 +78,11 @@ async function previewAndExportAll(page: Page, testInfo: TestInfo, prefix: strin
     page.locator('.preflight-section').getByText('可以导出', { exact: true }),
   ).toBeVisible({ timeout: 45_000 })
   await expect(page.getByTitle('简历 PDF 预览')).toBeVisible({ timeout: 45_000 })
+  const previewInspector = page.getByRole('complementary', { name: '导出检查器' })
+  await expect(previewInspector.getByText('模板', { exact: true })).toBeVisible()
+  await expect(previewInspector.getByText('预览状态', { exact: true })).toBeVisible()
+  await expect(previewInspector.getByText('导出前检查', { exact: true })).toBeVisible()
+  await expect(previewInspector.getByText('导出', { exact: true })).toBeVisible()
 
   for (const template of ['classic', 'modern', 'minimal']) {
     if (template !== 'classic') {

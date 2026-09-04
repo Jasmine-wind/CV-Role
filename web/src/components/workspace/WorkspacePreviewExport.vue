@@ -469,7 +469,7 @@ onBeforeUnmount(() => {
 
       <aside class="preview-inspector" aria-label="导出检查器">
         <section class="preview-inspector-section preview-template-section">
-          <span class="preview-section-label">TEMPLATE</span>
+          <span class="preview-section-label">模板</span>
           <h2>选择简历模板</h2>
           <el-radio-group v-model="templateId" size="small" aria-label="选择简历模板">
             <el-radio-button
@@ -486,7 +486,7 @@ onBeforeUnmount(() => {
 
         <section class="preview-inspector-section">
           <div class="preview-section-heading">
-            <span class="preview-section-label">PREVIEW STATE</span>
+            <span class="preview-section-label">预览状态</span>
             <strong>{{ previewStateLabel }}</strong>
           </div>
           <p v-if="!canOperate" class="operate-hint">{{ operateHint }}</p>
@@ -509,11 +509,11 @@ onBeforeUnmount(() => {
 
         <section v-if="previewPreflight" class="preview-inspector-section preflight-section">
           <div class="preview-section-heading">
-            <span class="preview-section-label">DOCUMENT CHECK</span>
+            <span class="preview-section-label">导出前检查</span>
             <strong :class="preflightStatusClass">{{ preflightStatusLabel }}</strong>
           </div>
           <div class="preflight-summary">
-            <strong>{{ previewPreflight.pageCount }} pages</strong>
+            <strong>{{ previewPreflight.pageCount }} 页</strong>
             <span v-if="previewPreflight.pageLimitExceeded" class="is-advisory">超过建议的 2 页</span>
           </div>
           <ul class="preflight-check-list" role="list">
@@ -544,7 +544,7 @@ onBeforeUnmount(() => {
 
         <section class="preview-inspector-section preview-export-action">
           <div class="preview-section-heading">
-            <span class="preview-section-label">EXPORT</span>
+            <span class="preview-section-label">导出</span>
             <strong v-if="exportSuccess" class="is-success">PDF 已生成</strong>
           </div>
           <p v-if="exportSuccess" class="export-success-copy">
@@ -560,7 +560,7 @@ onBeforeUnmount(() => {
 
         <details class="export-history" @toggle="handleHistoryToggle">
           <summary>
-            <span class="preview-section-label">EXPORT HISTORY</span>
+            <span class="preview-section-label">导出记录</span>
             <span>最近导出</span>
           </summary>
           <div class="export-history-content">
@@ -581,7 +581,7 @@ onBeforeUnmount(() => {
                 <div class="artifact-info">
                   <span class="artifact-name">{{ artifact.fileName }}</span>
                   <span class="artifact-meta">
-                    {{ TEMPLATE_LABELS[artifact.templateId] }} · revision {{ artifact.contentRevision }} ·
+                    {{ TEMPLATE_LABELS[artifact.templateId] }} ·
                     {{ artifact.pageCount }} 页 · {{ Math.ceil(artifact.fileSize / 1024) }} KB ·
                     {{ artifact.status === 'DELETE_PENDING' ? '待删除' : '已就绪' }} ·
                     {{ formatCreatedAt(artifact.createdAt) }}
