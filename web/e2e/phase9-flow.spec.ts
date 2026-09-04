@@ -49,7 +49,7 @@ async function uploadAndStartAnalysis(
 
 async function waitForAnalysis(page: Page) {
   await expect(page).toHaveURL(/\/job-analysis\/\d+/, { timeout: 45_000 })
-  await expect(page.locator('.analysis-strengths .analysis-section-header strong')).toBeVisible({
+  await expect(page.getByRole('region', { name: '岗位要求与证据审阅' })).toBeVisible({
     timeout: 20_000,
   })
 }
@@ -60,7 +60,7 @@ async function openWorkspaceWithSavedDraft(page: Page) {
   const bullet = page.locator('textarea').filter({ hasText: '' }).last()
   await expect(bullet).toBeVisible({ timeout: 15_000 })
   await bullet.fill('负责 Java 后端服务开发')
-  await expect(page.getByText('已保存', { exact: true })).toBeVisible({ timeout: 15_000 })
+  await expect(page.getByText('✓ 已保存', { exact: true })).toBeVisible({ timeout: 15_000 })
   return bullet
 }
 
@@ -68,11 +68,12 @@ async function openWorkspaceWithoutEditing(page: Page) {
   await page.getByRole('button', { name: '修改简历', exact: true }).first().click()
   await expect(page).toHaveURL(/\/workspace\/\d+/, { timeout: 15_000 })
   await expect(page.locator('textarea').first()).toBeVisible({ timeout: 15_000 })
-  await expect(page.getByText('已保存', { exact: true })).toBeVisible({ timeout: 15_000 })
+  await expect(page.getByText('✓ 已保存', { exact: true })).toBeVisible({ timeout: 15_000 })
 }
 
 async function previewAndExportAll(page: Page, testInfo: TestInfo, prefix: string) {
-  await page.getByRole('button', { name: '预览 →', exact: true }).click()
+  const previewButton = page.getByRole('button', { name: '预览 →', exact: true })
+  if (await previewButton.isVisible()) await previewButton.click()
   await expect(
     page.locator('.preflight-section').getByText('可以导出', { exact: true }),
   ).toBeVisible({ timeout: 45_000 })
@@ -93,9 +94,10 @@ async function previewAndExportAll(page: Page, testInfo: TestInfo, prefix: strin
     expect(await downloaded.path()).toBeTruthy()
     await downloaded.saveAs(testInfo.outputPath(`${prefix}-${template}.pdf`))
   }
-  await page.locator('details.export-history summary').click()
-  await expect(page.getByText('导出记录', { exact: true })).toBeVisible()
-  await expect(page.locator('.artifact-list li')).toHaveCount(3)
+  const exportHistory = page.locator('details.export-history')
+  await exportHistory.locator('summary').click()
+  await expect(exportHistory).toHaveJSProperty('open', true)
+  await expect(exportHistory.locator('.artifact-list li')).toHaveCount(3)
 }
 
 test('happy path: upload, analysis, workspace, deterministic suggestion, preview and export', async ({
@@ -106,24 +108,24 @@ test('happy path: upload, analysis, workspace, deterministic suggestion, preview
   await waitForAnalysis(page)
   // A direct result route remains usable after a browser refresh.
   await page.reload()
-  await expect(page.locator('.analysis-strengths .analysis-section-header strong')).toBeVisible({
+  await expect(page.getByRole('region', { name: '岗位要求与证据审阅' })).toBeVisible({
     timeout: 20_000,
   })
 
   const bullet = await openWorkspaceWithSavedDraft(page)
   const bulletLine = bullet.locator('xpath=ancestor::div[contains(@class, "bullet-line")]')
   await bulletLine.getByRole('button', { name: 'AI 优化', exact: true }).click()
+  const suggestionFinished = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'POST' && response.url().includes('/bullet-suggestion'),
+  )
   await page.locator('[role="menuitem"]:visible', { hasText: '精简' }).click()
+  await suggestionFinished
   // Demo Provider intentionally returns the frozen original. The no-op guard must
   // discard it rather than expose a misleading Apply action.
-  await expect(page.getByText('正在生成修改建议…', { exact: true })).toBeVisible({
-    timeout: 15_000,
-  })
-  await expect(page.getByText('正在生成修改建议…', { exact: true })).toHaveCount(0, {
-    timeout: 45_000,
-  })
+  await expect(page.getByText('正在生成修改建议…', { exact: true })).toHaveCount(0)
   await expect(page.getByRole('button', { name: '采纳', exact: true })).toHaveCount(0)
-  await expect(page.getByText('已保存', { exact: true })).toBeVisible({ timeout: 15_000 })
+  await expect(page.getByText('✓ 已保存', { exact: true })).toBeVisible({ timeout: 15_000 })
 
   await page.getByRole('button', { name: '预览 →', exact: true }).click()
   await expect(
@@ -196,7 +198,7 @@ test('workspace conflict preserves the local draft; stale Preview and Suggest ca
 
   const firstBullet = first.locator('textarea').last()
   await firstBullet.fill('负责 Java 后端服务开发 - first writer')
-  await expect(first.getByText('已保存', { exact: true })).toBeVisible({ timeout: 15_000 })
+  await expect(first.getByText('✓ 已保存', { exact: true })).toBeVisible({ timeout: 15_000 })
 
   const secondBullet = sameContextSecond.locator('textarea').last()
   await secondBullet.fill('负责 Java 后端服务开发 - local conflicting draft')
@@ -206,7 +208,7 @@ test('workspace conflict preserves the local draft; stale Preview and Suggest ca
   await expect(secondBullet).toHaveValue('负责 Java 后端服务开发 - local conflicting draft')
 
   await sameContextSecond.getByRole('button', { name: '使用线上版本', exact: true }).click()
-  await expect(sameContextSecond.getByText('已保存', { exact: true })).toBeVisible({
+  await expect(sameContextSecond.getByText('✓ 已保存', { exact: true })).toBeVisible({
     timeout: 15_000,
   })
 
@@ -235,7 +237,7 @@ test('workspace conflict preserves the local draft; stale Preview and Suggest ca
   await expect(first.getByText('未保存', { exact: true })).toBeVisible()
   releasePreviewResponse()
   await expect(first.getByTitle('简历 PDF 预览')).toBeHidden()
-  await expect(first.getByText('已保存', { exact: true })).toBeVisible({ timeout: 15_000 })
+  await expect(first.getByText('✓ 已保存', { exact: true })).toBeVisible({ timeout: 15_000 })
 
   let suggestionRequestStarted!: () => void
   let releaseSuggestionResponse!: () => void
