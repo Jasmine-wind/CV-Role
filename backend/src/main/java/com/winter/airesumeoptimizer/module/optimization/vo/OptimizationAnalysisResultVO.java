@@ -17,6 +17,9 @@ public class OptimizationAnalysisResultVO {
 
     private Long sourceResumeVersionId;
 
+    @Schema(description = "本次分析冻结的 SOURCE canonical 文档 JSON；无法定位时为空")
+    private String sourceCanonicalDocument;
+
     private Long targetResumeVersionId;
 
     private Long jobTargetId;

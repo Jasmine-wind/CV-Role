@@ -159,6 +159,20 @@ public class OptimizationTaskServiceImpl implements OptimizationTaskService {
     }
 
     @Override
+    public String getFrozenSourceCanonicalDocument(Long userId, Long optimizationTaskId) {
+        OptimizationTask task = getOwnedTask(userId, optimizationTaskId);
+        ResumeVersion sourceVersion = getOwnedVersion(userId, task.getSourceResumeVersionId());
+        if (!VERSION_SOURCE.equals(sourceVersion.getVersionType())
+                || sourceVersion.getSourceVersionId() != null
+                || sourceVersion.getJobTargetId() != null
+                || !CONTENT_READY.equals(sourceVersion.getContentStatus())
+                || isBlank(sourceVersion.getStructuredContent())) {
+            return null;
+        }
+        return sourceVersion.getStructuredContent();
+    }
+
+    @Override
     public OptimizationTaskVO findByLegacyInputs(Long userId, Long resumeId, Long jobDescriptionId) {
         getOwnedResume(userId, resumeId);
         getOwnedJobDescription(userId, jobDescriptionId);

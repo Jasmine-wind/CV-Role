@@ -21,6 +21,7 @@ import com.winter.airesumeoptimizer.module.evidence.mapper.RequirementEvidenceMa
 import com.winter.airesumeoptimizer.module.insight.service.JobDirectionInsightService;
 import com.winter.airesumeoptimizer.module.insight.vo.JobDirectionCohortVO;
 import com.winter.airesumeoptimizer.module.observability.service.ProductObservabilityService;
+import com.winter.airesumeoptimizer.module.optimization.controller.OptimizationTaskController;
 import com.winter.airesumeoptimizer.module.optimization.entity.JobTarget;
 import com.winter.airesumeoptimizer.module.optimization.entity.OptimizationTask;
 import com.winter.airesumeoptimizer.module.optimization.entity.ResumeVersion;
@@ -28,7 +29,10 @@ import com.winter.airesumeoptimizer.module.optimization.mapper.JobTargetMapper;
 import com.winter.airesumeoptimizer.module.optimization.mapper.OptimizationTaskMapper;
 import com.winter.airesumeoptimizer.module.optimization.mapper.ResumeVersionMapper;
 import com.winter.airesumeoptimizer.module.resume.entity.Resume;
+import com.winter.airesumeoptimizer.module.resume.entity.ResumeParseResult;
 import com.winter.airesumeoptimizer.module.resume.mapper.ResumeMapper;
+import com.winter.airesumeoptimizer.module.resume.mapper.ResumeParseResultMapper;
+import com.winter.airesumeoptimizer.security.AuthenticatedUser;
 import com.winter.airesumeoptimizer.module.user.entity.User;
 import com.winter.airesumeoptimizer.module.user.mapper.UserMapper;
 import java.time.LocalDateTime;
@@ -41,6 +45,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.security.authentication.TestingAuthenticationToken;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -54,9 +59,13 @@ import org.springframework.transaction.support.TransactionTemplate;
 class Phase9PostgresFlywayIntegrationTest {
 
     private static final String SNAPSHOT = "{\"name\":\"Integration User\",\"rawText\":\"Java\\n负责 Java 后端服务开发\"}";
+    private static final String SOURCE_A_DOCUMENT = "{\"schemaVersion\":\"RESUME_DOCUMENT_V1\",\"marker\":\"SOURCE_A\"}";
+    private static final String SOURCE_B_DOCUMENT = "{\"schemaVersion\":\"RESUME_DOCUMENT_V1\",\"marker\":\"SOURCE_B\"}";
 
     @Autowired
     private Flyway flyway;
+    @Autowired
+    private OptimizationTaskController optimizationTaskController;
     @Autowired
     private DataSource dataSource;
     @Autowired
@@ -65,6 +74,8 @@ class Phase9PostgresFlywayIntegrationTest {
     private UserMapper userMapper;
     @Autowired
     private ResumeMapper resumeMapper;
+    @Autowired
+    private ResumeParseResultMapper resumeParseResultMapper;
     @Autowired
     private JobTargetMapper jobTargetMapper;
     @Autowired
@@ -115,6 +126,54 @@ class Phase9PostgresFlywayIntegrationTest {
         assertThat(observabilityService.snapshot(
                 LocalDateTime.now().minusDays(30), LocalDateTime.now().plusMinutes(1))
                 .getAnalysisSuccesses()).isGreaterThanOrEqualTo(8);
+    }
+
+    @Test
+    void historicalAnalysisResultUsesTaskFrozenSourceAfterCurrentCanonicalPointerMoves() {
+        User owner = user("frozen-source-owner");
+        Resume resume = resume(owner.getId());
+        seedFormalTask(owner.getId(), resume.getId(), 0);
+
+        OptimizationTask task = optimizationTaskMapper.selectOne(new LambdaQueryWrapper<OptimizationTask>()
+                .eq(OptimizationTask::getUserId, owner.getId())
+                .orderByDesc(OptimizationTask::getCreatedAt)
+                .last("LIMIT 1"));
+        ResumeVersion sourceA = resumeVersionMapper.selectById(task.getSourceResumeVersionId());
+        sourceA.setStructuredContent(SOURCE_A_DOCUMENT);
+        resumeVersionMapper.updateById(sourceA);
+
+        ResumeVersion sourceB = new ResumeVersion();
+        sourceB.setUserId(owner.getId());
+        sourceB.setResumeId(resume.getId());
+        sourceB.setVersionType("SOURCE");
+        sourceB.setSourceType("PARSED_UPLOAD");
+        sourceB.setContentStatus("READY");
+        sourceB.setStructuredContent(SOURCE_B_DOCUMENT);
+        sourceB.setContentRevision(0L);
+        sourceB.setCreatedAt(LocalDateTime.now());
+        sourceB.setUpdatedAt(LocalDateTime.now());
+        resumeVersionMapper.insert(sourceB);
+
+        ResumeParseResult currentParse = new ResumeParseResult();
+        currentParse.setResumeId(resume.getId());
+        currentParse.setParseStatus("SUCCESS");
+        currentParse.setQualityStatus("READY");
+        currentParse.setUnresolvedItems("[]");
+        currentParse.setCanonicalSourceVersionId(sourceB.getId());
+        currentParse.setCreatedAt(LocalDateTime.now());
+        currentParse.setUpdatedAt(LocalDateTime.now());
+        resumeParseResultMapper.insert(currentParse);
+
+        var result = optimizationTaskController.getAnalysisResult(
+                task.getId(),
+                new TestingAuthenticationToken(
+                        new AuthenticatedUser(owner.getId(), owner.getUsername()), "phase9-test"));
+
+        assertThat(result.getData().getSourceCanonicalDocument()).isEqualTo(SOURCE_A_DOCUMENT);
+        assertThat(result.getData().getSourceCanonicalDocument()).doesNotContain("SOURCE_B");
+        RequirementEvidence evidence = requirementEvidenceMapper.selectOne(new LambdaQueryWrapper<RequirementEvidence>()
+                .eq(RequirementEvidence::getUserId, owner.getId()));
+        assertThat(evidence.getSourceResumeVersionId()).isEqualTo(sourceA.getId());
     }
 
     @Test

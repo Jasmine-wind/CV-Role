@@ -57,6 +57,7 @@ const evidenceResult = (levels: string[] = ['MATCHED', 'PARTIAL_EVIDENCE', 'NO_E
   jobTitle: 'Java 后端工程师',
   resumeName: '我的简历',
   analysisMode: 'EVIDENCE',
+  sourceCanonicalDocument: JSON.stringify(canonicalSource),
   evidenceAnalysis: {
     evidenceAnalysisId: 7,
     matchedCount: levels.filter((level) => level === 'MATCHED').length,
@@ -119,7 +120,11 @@ async function openAnalysis(page: Page, result: unknown = evidenceResult()) {
 }
 
 async function openSourcePreview(page: Page, result: unknown, source = canonicalSource) {
-  await openAnalysis(page, result)
+  const resultWithSource = {
+    ...(result as Record<string, unknown>),
+    sourceCanonicalDocument: JSON.stringify(source),
+  }
+  await openAnalysis(page, resultWithSource)
   await page.route('**/api/resumes/1/review', (route) => route.fulfill(response({
     resumeId: 1,
     qualityStatus: 'READY',
@@ -225,7 +230,7 @@ test.describe('Job Analysis fixed evidence workspace', () => {
     expect((await pageMetrics(page)).appPage!.scrollTop).toBe(beforeLeft.appPage!.scrollTop)
 
     await detail.evaluate((element) => { element.scrollTop = 0 })
-    await detail.hover()
+    await detail.hover({ position: { x: 8, y: 8 } })
     await page.mouse.wheel(0, 700)
     await expect.poll(async () => (await detail.evaluate((element) => element.scrollTop))).toBeGreaterThan(0)
     expect((await pageMetrics(page)).appPage!.scrollTop).toBe(0)
@@ -241,7 +246,7 @@ test.describe('Job Analysis fixed evidence workspace', () => {
     expect((await pageMetrics(page)).appPage!.scrollTop).toBe(0)
 
     await detail.evaluate((element) => { element.scrollTop = element.scrollHeight })
-    await detail.hover()
+    await detail.hover({ position: { x: 8, y: 8 } })
     await page.mouse.wheel(0, 900)
     expect((await pageMetrics(page)).appPage!.scrollTop).toBe(0)
     await expect.poll(async () => page.evaluate(() => {
@@ -275,6 +280,31 @@ test.describe('Job Analysis fixed evidence workspace', () => {
     await expect(page.locator('.source-preview-section.is-focused')).toBeVisible()
     await expect(page.locator('.source-preview-entry mark')).toHaveText('负责 Java 后端服务开发与维护')
     await expectFixedViewport(page)
+  })
+
+  test('uses the task-frozen SOURCE instead of the resume current canonical document', async ({ page }) => {
+    const result = { ...evidenceResult(['MATCHED']), resumeId: 1 }
+    const evidence = result.evidenceAnalysis.requirements[0]?.evidences[0]
+    if (evidence) evidence.evidenceText = '负责 Java 后端服务开发与维护'
+    const currentSource = JSON.parse(JSON.stringify(canonicalSource)) as typeof canonicalSource
+    currentSource.sections[0]!.entries[0]!.bullets[0]!.text = '后续 reparse 得到的 SOURCE B'
+    let currentReviewRequested = false
+
+    await mockShell(page, result)
+    await page.route('**/api/resumes/1/review', async (route) => {
+      currentReviewRequested = true
+      await route.fulfill(response({
+        resumeId: 1,
+        qualityStatus: 'READY',
+        qualityIssues: null,
+        unresolvedItems: '[]',
+        canonicalDocument: JSON.stringify(currentSource),
+      }))
+    })
+    await page.goto('/job-analysis/42')
+
+    await expect(page.locator('.source-preview-entry mark')).toHaveText('负责 Java 后端服务开发与维护')
+    expect(currentReviewRequested).toBe(false)
   })
 
   test('fails closed when a quote matches multiple SOURCE bullets', async ({ page }) => {
@@ -376,7 +406,7 @@ test.describe('Job Analysis fixed evidence workspace', () => {
       await expect(page.locator('.analysis-evidence-detail')).toHaveAttribute('aria-label', '当前岗位要求的证据详情，可滚动')
       await page.locator('.analysis-evidence-detail').focus()
       await expect(page.locator('.analysis-evidence-detail')).toBeFocused()
-      await page.locator('.analysis-evidence-detail').hover()
+      await page.locator('.analysis-evidence-detail').hover({ position: { x: 8, y: 8 } })
       await page.mouse.wheel(0, 700)
       await expect.poll(async () => (await page.locator('.analysis-evidence-detail').evaluate((element) => element.scrollTop))).toBeGreaterThan(0)
     }

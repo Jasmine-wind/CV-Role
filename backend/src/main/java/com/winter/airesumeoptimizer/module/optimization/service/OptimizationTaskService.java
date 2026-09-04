@@ -40,6 +40,9 @@ public interface OptimizationTaskService {
 
     OptimizationTaskVO get(Long userId, Long optimizationTaskId);
 
+    /** Returns only the task-frozen SOURCE document; never falls back to the resume's current canonical pointer. */
+    String getFrozenSourceCanonicalDocument(Long userId, Long optimizationTaskId);
+
     OptimizationTaskVO findByLegacyInputs(Long userId, Long resumeId, Long jobDescriptionId);
 
     ExecutionContext getExecutionContext(Long userId, Long optimizationTaskId);

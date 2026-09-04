@@ -10,7 +10,6 @@ import type { AiJobMatchItem } from '@/types/ai-job-match'
 import ResumeSourcePreview from '@/components/resume/ResumeSourcePreview.vue'
 import type { ResumeDocument } from '@/types/resume-document'
 import type { OptimizationAnalysisResult } from '@/types/job-analysis'
-import { getResumeReview } from '@/api/resume'
 import { sortEvidenceRequirements } from '@/utils/analysisPresentation'
 
 const route = useRoute()
@@ -213,21 +212,18 @@ const goToWorkspace = (requirementId = selectedRequirement.value?.evidenceRequir
 const loadSourceDocument = async (result: OptimizationAnalysisResult) => {
   sourceDocument.value = null
   sourceDocumentError.value = null
-  if (!result.resumeId || result.analysisMode !== 'EVIDENCE') return
+  if (result.analysisMode !== 'EVIDENCE') return
   sourceDocumentLoading.value = true
   try {
-    const review = await getResumeReview(result.resumeId)
-    if (!review.canonicalDocument) {
-      sourceDocumentError.value = '当前简历没有可供定位的已确认内容。'
+    if (!result.sourceCanonicalDocument) {
+      sourceDocumentError.value = '本次分析冻结的简历原文无法定位。'
       return
     }
     try {
-      sourceDocument.value = JSON.parse(review.canonicalDocument) as ResumeDocument
+      sourceDocument.value = JSON.parse(result.sourceCanonicalDocument) as ResumeDocument
     } catch {
-      sourceDocumentError.value = '当前简历内容格式不正确，暂时无法定位。'
+      sourceDocumentError.value = '本次分析冻结的简历内容格式不正确，暂时无法定位。'
     }
-  } catch (error) {
-    sourceDocumentError.value = error instanceof Error ? error.message : '暂时无法读取简历原文'
   } finally {
     sourceDocumentLoading.value = false
   }

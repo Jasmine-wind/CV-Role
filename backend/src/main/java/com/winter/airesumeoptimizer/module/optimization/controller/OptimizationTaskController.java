@@ -87,6 +87,10 @@ public class OptimizationTaskController {
                 .optimizationTaskId(task.getOptimizationTaskId())
                 .resumeId(task.getResumeId())
                 .sourceResumeVersionId(task.getSourceResumeVersionId())
+                .sourceCanonicalDocument(evidenceAnalysis == null
+                        ? null
+                        : optimizationTaskService.getFrozenSourceCanonicalDocument(
+                                user.getUserId(), optimizationTaskId))
                 .targetResumeVersionId(task.getTargetResumeVersionId())
                 .jobTargetId(task.getJobTargetId())
                 .status(task.getStatus())

@@ -25,6 +25,8 @@ export interface OptimizationAnalysisResult {
   /** Present for formal tasks; omitted by historical compatibility fixtures. */
   resumeId?: number
   sourceResumeVersionId: number
+  /** Canonical document frozen on this task's SOURCE version; absent for legacy or unavailable content. */
+  sourceCanonicalDocument?: string | null
   targetResumeVersionId: number
   jobTargetId: number
   status: string
