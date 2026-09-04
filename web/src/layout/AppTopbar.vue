@@ -21,6 +21,26 @@ const displayName = computed(() => {
 
 const userEmail = computed(() => authStore.currentUser?.email || '当前账号')
 
+const avatarInitials = computed(() => {
+  const name = displayName.value.trim()
+  if (!name) return 'CV'
+
+  const glyphs = Array.from(name.replace(/\s+/gu, ''))
+  const firstGlyph = glyphs[0]
+  const firstCodePoint = firstGlyph?.codePointAt(0) ?? 0
+  if (firstGlyph && firstCodePoint > 0x7f) return firstGlyph
+
+  const words = name.split(/[\s._-]+/u).filter(Boolean)
+  if (words.length > 1) {
+    return words
+      .slice(0, 2)
+      .map((word) => Array.from(word)[0] ?? '')
+      .join('')
+      .toUpperCase()
+  }
+  return glyphs.slice(0, 2).join('').toUpperCase() || 'CV'
+})
+
 const primaryNavItems = [
   { label: '开始优化', route: '/app' },
   { label: '我的简历', route: '/resumes' },
@@ -41,18 +61,19 @@ const handleAccountCommand = (command: string) => {
 <template>
   <header class="app-topbar">
     <div class="app-topbar-left">
-      <el-button
+      <button
+        type="button"
         class="app-topbar-menu-button"
-        text
-        aria-label="打开导航菜单"
+        :aria-label="menuOpen ? '关闭导航菜单' : '打开导航菜单'"
         aria-controls="app-primary-navigation"
         :aria-expanded="menuOpen"
         @click="emit('toggleMenu')"
       >
-        菜单
-      </el-button>
+        <span class="app-menu-icon" aria-hidden="true"><i /><i /><i /></span>
+        <span class="app-menu-label">菜单</span>
+      </button>
       <RouterLink to="/app" class="app-topbar-brand" aria-label="简历优化首页">
-        <span class="app-sidebar-mark">CV</span>
+        <span class="app-sidebar-mark" aria-hidden="true">CV</span>
         <span>简历优化</span>
       </RouterLink>
       <nav class="app-topbar-nav" aria-label="主导航">
@@ -69,9 +90,18 @@ const handleAccountCommand = (command: string) => {
 
     <div class="app-topbar-account">
       <el-dropdown trigger="click" @command="handleAccountCommand">
-        <button type="button" class="app-account-trigger" aria-label="账号菜单">
-          <strong>{{ displayName }}</strong>
-          <small>{{ userEmail }}</small>
+        <button
+          type="button"
+          class="app-account-trigger"
+          aria-haspopup="menu"
+          :aria-label="`账号菜单：${displayName}`"
+        >
+          <span class="app-account-avatar" aria-hidden="true">{{ avatarInitials }}</span>
+          <span class="app-account-copy">
+            <strong>{{ displayName }}</strong>
+            <small>{{ userEmail }}</small>
+          </span>
+          <span class="app-account-chevron" aria-hidden="true" />
         </button>
         <template #dropdown>
           <el-dropdown-menu>
