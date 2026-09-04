@@ -101,7 +101,7 @@ onBeforeUnmount(() => {
       :open="menuOpen"
       :drawer="isNarrowScreen"
       @close="closeMenu(true)"
-      @navigate="closeMenu(false)"
+      @navigate="closeMenu(true)"
     />
     <button
       v-if="menuOpen && isNarrowScreen"
