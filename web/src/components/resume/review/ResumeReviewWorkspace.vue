@@ -257,65 +257,178 @@ const handleKeydown = (event: KeyboardEvent) => {
   gap: var(--app-space-3);
 }
 
-.resume-review-progress-track {
-  height: 2px;
-  overflow: hidden;
-  background: var(--app-border);
-}
-
-.resume-review-progress-track span {
-  display: block;
-  height: 100%;
-  background: var(--app-primary);
-}
-
 .resume-review-progress-meta {
   display: flex;
+  align-items: baseline;
   justify-content: space-between;
   gap: var(--app-space-4);
   color: var(--app-text-secondary);
   font-size: var(--app-font-size-xs);
 }
 
-.resume-review-progress-meta span:first-child {
-  color: var(--app-text);
-  font-weight: 700;
+.resume-review-progress-current {
+  color: var(--app-text-secondary);
 }
 
-.resume-review-progress-items {
+.resume-review-progress-current strong {
+  color: var(--app-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.resume-review-index {
+  border-top: 1px solid var(--app-border);
+  border-bottom: 1px solid var(--app-border);
+}
+
+.resume-review-index summary {
   display: flex;
-  min-width: 0;
-  gap: var(--app-space-2);
-  overflow-x: auto;
-  padding: 2px 2px 5px;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--app-space-3);
+  padding: 9px 0;
+  color: var(--app-primary-active);
+  font-size: var(--app-font-size-xs);
+  font-weight: 700;
+  cursor: pointer;
+  list-style: none;
+}
+
+.resume-review-index summary::-webkit-details-marker {
+  display: none;
+}
+
+.resume-review-index summary::after {
+  margin-left: auto;
+  color: var(--app-text-muted);
+  content: '＋';
+  font-size: 14px;
+  font-weight: 400;
+}
+
+.resume-review-index[open] summary::after {
+  content: '－';
+}
+
+.resume-review-index summary:hover,
+.resume-review-index summary:focus-visible {
+  color: var(--app-primary);
+}
+
+.resume-review-index-count {
+  min-width: 20px;
+  color: var(--app-text-muted);
+  font-family: var(--app-font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  text-align: right;
+}
+
+.resume-review-index-items {
+  display: grid;
+  max-height: min(380px, 45vh);
+  gap: var(--app-space-5);
+  overflow-y: auto;
+  border-top: 1px solid var(--app-border);
+  padding: var(--app-space-4) 2px var(--app-space-4) 0;
   scrollbar-color: var(--app-scroll-thumb) transparent;
   scrollbar-width: thin;
 }
 
-.resume-review-progress-item {
-  min-width: 34px;
-  flex: 0 0 auto;
-  min-height: 30px;
-  border: 1px solid var(--app-border);
-  border-radius: var(--app-radius-sm);
-  color: var(--app-text-secondary);
-  font-family: var(--app-font-mono);
+.resume-review-index-group {
+  display: grid;
+  gap: var(--app-space-2);
+}
+
+.resume-review-index-group-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--app-space-3);
+}
+
+.resume-review-index-group-header h3 {
+  margin: 0;
+  color: var(--app-text);
   font-size: var(--app-font-size-xs);
-  background: var(--app-surface);
+  font-weight: 750;
+}
+
+.resume-review-index-group-header span {
+  color: var(--app-text-muted);
+  font-family: var(--app-font-mono);
+  font-size: 10px;
+}
+
+.resume-review-index-group-items {
+  display: grid;
+  gap: 2px;
+}
+
+.resume-review-index-item {
+  display: grid;
+  grid-template-columns: 27px minmax(0, 1fr);
+  gap: 8px;
+  min-width: 0;
+  border: 0;
+  border-left: 2px solid transparent;
+  padding: 7px 8px 7px 5px;
+  color: var(--app-text-secondary);
+  text-align: left;
+  background: transparent;
   cursor: pointer;
 }
 
-.resume-review-progress-item:hover,
-.resume-review-progress-item:focus-visible,
-.resume-review-progress-item.is-active {
-  border-color: var(--app-primary);
-  color: var(--app-primary-active);
+.resume-review-index-item:hover,
+.resume-review-index-item:focus-visible {
+  background: var(--app-bg-soft);
+}
+
+.resume-review-index-item.is-active {
+  border-left-color: var(--app-primary);
   background: var(--app-primary-soft);
 }
 
-.resume-review-progress-item:disabled {
+.resume-review-index-item:disabled {
   cursor: not-allowed;
   opacity: 0.55;
+}
+
+.resume-review-index-number {
+  color: var(--app-text-muted);
+  font-family: var(--app-font-mono);
+  font-size: 10px;
+  line-height: 1.5;
+  text-align: right;
+}
+
+.resume-review-index-item.is-active .resume-review-index-number {
+  color: var(--app-primary-active);
+  font-weight: 700;
+}
+
+.resume-review-index-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.resume-review-index-copy strong,
+.resume-review-index-copy span {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resume-review-index-copy strong {
+  color: var(--app-text);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.resume-review-index-copy span {
+  color: var(--app-text-secondary);
+  font-size: 11px;
 }
 
 .resume-review-candidate {

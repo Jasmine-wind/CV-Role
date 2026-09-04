@@ -1,4 +1,5 @@
 import type { ResumeReviewUnresolvedItem } from '@/api/resume'
+import { getResumeContactTypeLabel } from '@/components/resume/resumeContactPresentation'
 import type { ResumeDocumentBullet } from '@/types/resume-document'
 
 export interface ReviewDraftContact {
@@ -37,6 +38,25 @@ export interface ReviewCandidatePresentation {
   description: string
   primaryAction: string
   canDelete: boolean
+}
+
+export type ReviewNavigationGroupKey = 'BASIC' | 'EXPERIENCE' | 'OTHER'
+
+export interface ReviewNavigationItemPresentation {
+  groupKey: ReviewNavigationGroupKey
+  groupLabel: string
+  typeLabel: string
+  summary: string
+}
+
+export interface ReviewNavigationGroup {
+  key: ReviewNavigationGroupKey
+  label: string
+  items: Array<{
+    state: ReviewItemState
+    index: number
+    presentation: ReviewNavigationItemPresentation
+  }>
 }
 
 const parseDraft = <T,>(draft: string): T => {
@@ -131,6 +151,73 @@ export const getReviewEntryTitle = (kind?: string | null) => {
     default:
       return '经历条目'
   }
+}
+
+const getReviewNavigationGroupKey = (kind: string): ReviewNavigationGroupKey => {
+  if (kind === 'NAME_CANDIDATE' || kind === 'REQUIRED_CONTACT_CANDIDATE' || kind === 'CONTACT_CANDIDATE') {
+    return 'BASIC'
+  }
+  if (kind === 'ENTRY_CANDIDATE') return 'EXPERIENCE'
+  return 'OTHER'
+}
+
+const REVIEW_NAVIGATION_GROUP_LABELS: Record<ReviewNavigationGroupKey, string> = {
+  BASIC: '基本信息',
+  EXPERIENCE: '经历内容',
+  OTHER: '其他内容',
+}
+
+const entryStateSummary = (entry: ReviewDraftEntry) => {
+  const title = entry.organization || entry.school || entry.group || '待确认条目'
+  const details = [
+    entry.role,
+    entry.degree,
+    entry.major,
+    [entry.startDate, entry.endDate].filter(Boolean).join(' — '),
+    entry.skillItems?.filter(Boolean).join('、'),
+  ].filter((value): value is string => Boolean(value && value.trim()))
+  return [title, details[0]].filter(Boolean).join(' · ')
+}
+
+export const getReviewItemNavigationPresentation = (
+  state: ReviewItemState,
+): ReviewNavigationItemPresentation => {
+  const groupKey = getReviewNavigationGroupKey(state.item.kind)
+  if (state.item.kind === 'NAME_CANDIDATE') {
+    return { groupKey, groupLabel: REVIEW_NAVIGATION_GROUP_LABELS[groupKey], typeLabel: '姓名', summary: state.text.trim() || '需要确认姓名' }
+  }
+  if (state.item.kind === 'REQUIRED_CONTACT_CANDIDATE' || state.item.kind === 'CONTACT_CANDIDATE') {
+    const typeLabel = state.item.kind === 'REQUIRED_CONTACT_CANDIDATE'
+      ? '必要联系方式'
+      : getResumeContactTypeLabel(state.contact.type)
+    return { groupKey, groupLabel: REVIEW_NAVIGATION_GROUP_LABELS[groupKey], typeLabel, summary: state.contact.value?.trim() || '需要确认联系方式' }
+  }
+  if (state.item.kind === 'ENTRY_CANDIDATE') {
+    return { groupKey, groupLabel: REVIEW_NAVIGATION_GROUP_LABELS[groupKey], typeLabel: getReviewEntryTitle(state.entry.kind), summary: entryStateSummary(state.entry) }
+  }
+  return {
+    groupKey,
+    groupLabel: REVIEW_NAVIGATION_GROUP_LABELS[groupKey],
+    typeLabel: state.item.kind === 'TEXT_FRAGMENT' ? '未归类内容' : '待确认内容',
+    summary: state.text.trim() || '需要你确认这项内容',
+  }
+}
+
+export const groupReviewItems = (items: ReviewItemState[]): ReviewNavigationGroup[] => {
+  const groups = new Map<ReviewNavigationGroupKey, ReviewNavigationGroup>()
+  for (const [index, state] of items.entries()) {
+    const presentation = getReviewItemNavigationPresentation(state)
+    const group = groups.get(presentation.groupKey) ?? {
+      key: presentation.groupKey,
+      label: presentation.groupLabel,
+      items: [],
+    }
+    group.items.push({ state, index, presentation })
+    groups.set(presentation.groupKey, group)
+  }
+  return (['BASIC', 'EXPERIENCE', 'OTHER'] as ReviewNavigationGroupKey[])
+    .map((key) => groups.get(key))
+    .filter((group): group is ReviewNavigationGroup => Boolean(group))
 }
 
 export const getInitialReviewItemId = (items: ReviewItemState[]) =>

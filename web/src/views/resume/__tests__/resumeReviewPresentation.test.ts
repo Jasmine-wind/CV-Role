@@ -6,7 +6,9 @@ import {
   getInitialReviewItemId,
   getReviewCandidatePresentation,
   getReviewEntryTitle,
+  getReviewItemNavigationPresentation,
   getReviewProgressLabel,
+  groupReviewItems,
   selectReviewItemAfterResolve,
 } from '../resumeReviewPresentation'
 
@@ -21,7 +23,10 @@ const state = (
     canonicalDraft: JSON.stringify(draft),
     reason: null,
   } as ResumeReviewUnresolvedItem,
-  contact: { type: 'EMAIL', value: 'candidate@example.com' },
+  contact: {
+    type: typeof draft.type === 'string' ? draft.type : 'EMAIL',
+    value: typeof draft.value === 'string' ? draft.value : 'candidate@example.com',
+  },
   entry: {
     kind: typeof draft.kind === 'string' ? draft.kind : undefined,
     organization: typeof draft.organization === 'string' ? draft.organization : null,
@@ -184,5 +189,27 @@ describe('resumeReviewPresentation', () => {
       details: ['后端工程师'],
       bullets: ['负责服务开发'],
     })
+  })
+
+  it('groups navigation presentation without changing item order', () => {
+    const items = [
+      state('ENTRY_CANDIDATE', 'experience', { kind: 'EXPERIENCE', organization: '示例公司', role: '后端工程师' }),
+      state('CONTACT_CANDIDATE', 'email', { value: 'email@example.com' }),
+      state('ENTRY_CANDIDATE', 'education', { kind: 'EDUCATION', school: '示例大学', degree: '本科' }),
+      state('TEXT_FRAGMENT', 'fragment', { text: '负责跨团队推进' }),
+      state('UNKNOWN_KIND', 'unknown', { text: '未知片段' }),
+      state('CONTACT_CANDIDATE', 'phone', { value: '13800138000' }),
+    ]
+
+    expect(groupReviewItems(items).map((group) => [group.label, group.items.map((item) => item.state.item.id)])).toEqual([
+      ['基本信息', ['email', 'phone']],
+      ['经历内容', ['experience', 'education']],
+      ['其他内容', ['fragment', 'unknown']],
+    ])
+    expect(getReviewItemNavigationPresentation(items[0]!).summary).toBe('示例公司 · 后端工程师')
+    expect(getReviewItemNavigationPresentation(items[1]!).typeLabel).toBe('邮箱')
+    expect(getReviewItemNavigationPresentation(items[2]!).summary).toBe('示例大学 · 本科')
+    expect(getReviewItemNavigationPresentation(items[3]!).summary).toBe('负责跨团队推进')
+    expect(getReviewItemNavigationPresentation(items[4]!).typeLabel).toBe('待确认内容')
   })
 })

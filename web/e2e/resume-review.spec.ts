@@ -85,6 +85,20 @@ const educationItem = {
   reason: '请核对这段教育经历。',
 }
 
+const projectItem = {
+  id: 'project-1',
+  kind: 'ENTRY_CANDIDATE',
+  canonicalDraft: JSON.stringify({
+    kind: 'PROJECT',
+    organization: '推荐系统项目',
+    role: '后端负责人',
+    startDate: '2023',
+    endDate: '2024',
+    bullets: [{ id: 'project-bullet', text: '负责推荐服务开发' }],
+  }),
+  reason: '请核对这段项目经历。',
+}
+
 const confirmedDocument = JSON.stringify({
   schemaVersion: 'RESUME_DOCUMENT_V1',
   basics: {
@@ -123,6 +137,21 @@ const reviewPayload = (
   unresolvedItems: JSON.stringify(items),
   canonicalDocument,
 })
+
+const longReviewItems = [
+  nameItem,
+  requiredContactItem,
+  contactItem,
+  experienceItem,
+  projectItem,
+  educationItem,
+  ...Array.from({ length: 28 }, (_, index) => ({
+    id: `fragment-long-${index + 1}`,
+    kind: 'TEXT_FRAGMENT',
+    canonicalDraft: JSON.stringify({ text: `一段较长的未归类内容 ${index + 1}，需要你确认它是否属于简历正文。` }),
+    reason: null,
+  })),
+]
 
 async function mockReviewShell(page: Page, resumes: unknown[] = [reviewResume]) {
   await page.addInitScript(() => {
@@ -175,8 +204,10 @@ test.describe('Resume Review Workspace', () => {
     await expect(page.locator('.resume-review-label')).toHaveText('内容审阅')
     await expect(page.getByRole('heading', { name: '内容确认' })).toBeVisible()
     await expect(page.locator('.resume-review-header-description')).toContainText('无法安全判断')
-    await expect(page.locator('.resume-review-progress-meta')).toContainText('第 1 项 / 共 3 项')
-    await expect(page.locator('.resume-review-progress-item')).toHaveCount(3)
+    await expect(page.locator('.resume-review-progress-meta')).toContainText('第 1 项')
+    await expect(page.locator('.resume-review-progress-meta')).toContainText('当前还有 3 项待确认')
+    await page.getByText('查看全部待确认内容', { exact: true }).click()
+    await expect(page.locator('.resume-review-index-item')).toHaveCount(3)
     await expect(page.getByText('联系方式类型', { exact: true })).toBeVisible()
     await expect(page.getByText('联系方式内容', { exact: true })).toBeVisible()
     await expect(page.getByRole('button', { name: '保留这项联系方式' })).toBeVisible()
@@ -193,7 +224,14 @@ test.describe('Resume Review Workspace', () => {
     ]))))
     await openReview(page)
 
-    await page.locator('.resume-review-progress-item').nth(1).click()
+    const reviewWorkspace = page.locator('.resume-review-workspace')
+    await reviewWorkspace.focus()
+    await page.keyboard.press('ArrowRight')
+    await expect(page.getByRole('heading', { name: '教育经历' })).toBeVisible()
+    await page.keyboard.press('ArrowLeft')
+    await expect(page.getByRole('heading', { name: '联系方式' })).toBeVisible()
+    await page.getByText('查看全部待确认内容', { exact: true }).click()
+    await page.getByRole('button', { name: /教育经历/ }).click()
     await expect(page.getByRole('heading', { name: '教育经历' })).toBeVisible()
     await expect(page.getByText('学校', { exact: true })).toBeVisible()
     await expect(page.getByText('学历', { exact: true })).toBeVisible()
@@ -202,6 +240,67 @@ test.describe('Resume Review Workspace', () => {
     await expect(page.getByText('结束时间', { exact: true })).toBeVisible()
     await expect(page.getByText('内容 1', { exact: true })).toBeVisible()
     await expect(page.locator('.resume-review-field-pair')).toHaveCount(2)
+  })
+
+  test('keeps a 34-item review scannable without changing linear resolve order', async ({ page }) => {
+    let remaining = [...longReviewItems]
+    const payloads: Array<Record<string, unknown>> = []
+    await mockReviewShell(page)
+    await page.route('**/api/resumes/2/review', (route) => route.fulfill(response(reviewPayload(remaining))))
+    await page.route('**/api/resumes/2/review/resolve', async (route) => {
+      const payload = route.request().postDataJSON() as Record<string, unknown>
+      payloads.push(payload)
+      remaining = remaining.filter((item) => item.id !== payload.itemId)
+      await route.fulfill(response(reviewPayload(remaining)))
+    })
+    await openReview(page)
+
+    await expect(page.locator('.resume-review-progress-meta')).toContainText('第 1 项')
+    await expect(page.locator('.resume-review-progress-meta')).toContainText('当前还有 34 项待确认')
+    await page.getByText('查看全部待确认内容', { exact: true }).click()
+    await expect(page.locator('.resume-review-index-item')).toHaveCount(34)
+    await expect(page.getByRole('heading', { name: '基本信息' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: '经历内容' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: '其他内容' })).toBeVisible()
+
+    const projectNavigation = page.getByRole('button', { name: /项目经历.*推荐系统项目/ })
+    await projectNavigation.click()
+    await expect(page.getByRole('heading', { name: '项目经历' })).toBeVisible()
+    await expect(projectNavigation).toHaveAttribute('aria-current', 'step')
+    await page.getByRole('button', { name: '保留这段项目经历' }).click()
+    await expect(page.getByRole('heading', { name: '教育经历' })).toBeVisible()
+    await expect(page.getByRole('button', { name: /教育经历.*示例大学/ })).toHaveAttribute('aria-current', 'step')
+    await expect(page.locator('.resume-review-progress-meta')).toContainText('当前还有 33 项待确认')
+
+    const lastFragment = page.getByRole('button', { name: /一段较长的未归类内容 28/ })
+    await lastFragment.click()
+    await expect(page.getByRole('heading', { name: '未归类内容' })).toBeVisible()
+    await page.getByRole('button', { name: '不加入简历' }).click()
+    await expect(page.getByRole('heading', { name: '未归类内容' })).toBeVisible()
+    await expect(page.getByRole('button', { name: /一段较长的未归类内容 27/ })).toHaveAttribute('aria-current', 'step')
+    expect(payloads.map((payload) => payload.itemId)).toEqual(['project-1', 'fragment-long-28'])
+  })
+
+  test('keeps the long review index usable on narrow screens', async ({ page }) => {
+    await mockReviewShell(page)
+    await page.route('**/api/resumes/2/review', (route) => route.fulfill(response(reviewPayload(longReviewItems))))
+
+    for (const viewport of [{ width: 390, height: 844 }, { width: 430, height: 932 }]) {
+      await page.setViewportSize(viewport)
+      await page.goto('/resumes')
+      await page.getByRole('button', { name: /确认 product-analytics-review/ }).click()
+      await expect(page.getByRole('heading', { name: '内容确认' })).toBeVisible()
+      await page.getByText('查看全部待确认内容', { exact: true }).click()
+      await expect(page.locator('.resume-review-index-items')).toBeVisible()
+      await expect(page.getByRole('button', { name: /一段较长的未归类内容 28/ })).toBeVisible()
+      const layout = await page.evaluate(() => ({
+        scrollWidth: document.documentElement.scrollWidth,
+        clientWidth: document.documentElement.clientWidth,
+      }))
+      expect(layout.scrollWidth).toBeLessThanOrEqual(layout.clientWidth)
+      await page.getByRole('button', { name: /一段较长的未归类内容 28/ }).click()
+      await expect(page.getByRole('heading', { name: '未归类内容' })).toBeVisible()
+    }
   })
 
   test('keeps reject and accept payloads, then moves to the next item and completes', async ({ page }) => {
@@ -227,7 +326,8 @@ test.describe('Resume Review Workspace', () => {
 
     await page.getByRole('button', { name: '不加入简历' }).click()
     await expect(page.getByRole('heading', { name: '未归类内容' })).toBeVisible()
-    await expect(page.locator('.resume-review-progress-meta')).toContainText('第 1 项 / 共 1 项')
+    await expect(page.locator('.resume-review-progress-meta')).toContainText('第 1 项')
+    await expect(page.locator('.resume-review-progress-meta')).toContainText('当前还有 1 项待确认')
     await page.getByRole('button', { name: '保留这段内容' }).click()
     await expect(page.locator('.resume-review-workspace')).toBeHidden()
     await expect(page.locator('.resume-library-row')).toContainText('可用于岗位分析')
@@ -256,7 +356,8 @@ test.describe('Resume Review Workspace', () => {
     await expect(page.locator('#resume-contact-type-required-contact-1 option')).toHaveCount(2)
     await expect(page.getByRole('button', { name: '保存这项联系方式' })).toBeVisible()
     await expect(page.getByRole('button', { name: '不加入简历' })).toBeHidden()
-    await page.locator('.resume-review-progress-item').nth(1).click()
+    await page.getByText('查看全部待确认内容', { exact: true }).click()
+    await page.getByRole('button', { name: /姓名/ }).click()
     await expect(page.getByRole('heading', { name: '姓名' })).toBeVisible()
     await expect(page.getByRole('button', { name: '使用这个姓名' })).toBeVisible()
     await expect(page.getByRole('button', { name: '不加入简历' })).toBeHidden()
