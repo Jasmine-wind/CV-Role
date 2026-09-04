@@ -227,7 +227,15 @@
 }
 
 .app-shell.is-task-layout .app-page {
+  display: flex;
   width: 100%;
+  flex-direction: column;
+}
+
+.app-shell.is-task-layout .app-content.is-focused {
+  height: auto;
+  min-height: 0;
+  flex: 1 1 auto;
 }
 
 .app-shell.is-task-layout .app-topbar {
