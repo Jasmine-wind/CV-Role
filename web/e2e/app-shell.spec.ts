@@ -93,19 +93,50 @@ test.describe('authenticated app shell', () => {
     const drawer = page.locator('#app-primary-navigation')
     await expect(drawer).toHaveAttribute('aria-hidden', 'false')
     const closeButton = drawer.getByRole('button', { name: '关闭导航菜单' })
+    await expect(closeButton).toHaveCount(1)
     await expect(closeButton).toBeVisible()
+    await expect(page.getByRole('button', { name: '关闭导航菜单' })).toHaveCount(1)
     await expect(drawer.locator('.app-sidebar-link').first()).toBeFocused()
     await expect(page.locator('.app-page')).toHaveJSProperty('inert', true)
+    await expect(page.locator('.app-shell-overlay')).toHaveAttribute('aria-hidden', 'true')
 
     await closeButton.click()
     await expect(drawer).toHaveAttribute('aria-hidden', 'true')
     await expect(menuButton).toBeFocused()
     await expect(page.locator('.app-page')).toHaveJSProperty('inert', false)
 
+    await menuButton.click()
+    await page.keyboard.press('Escape')
+    await expect(drawer).toHaveAttribute('aria-hidden', 'true')
+    await expect(menuButton).toBeFocused()
+
     const metrics = await page.evaluate(() => ({
       scrollWidth: document.documentElement.scrollWidth,
       clientWidth: document.documentElement.clientWidth,
     }))
     expect(metrics.scrollWidth).toBeLessThanOrEqual(metrics.clientWidth)
+  })
+
+  test('keeps the shell within the viewport across supported breakpoints', async ({ page }) => {
+    for (const width of [390, 430, 768, 1024, 1366, 1440, 1920]) {
+      await page.setViewportSize({ width, height: width < 1000 ? 844 : 900 })
+      await page.goto('/app')
+      await expect(page.locator('#app-main-content')).toBeVisible()
+      const metrics = await page.evaluate(() => ({
+        scrollWidth: document.documentElement.scrollWidth,
+        clientWidth: document.documentElement.clientWidth,
+      }))
+      expect(metrics.scrollWidth, `shell overflows at ${width}px`).toBeLessThanOrEqual(
+        metrics.clientWidth,
+      )
+      const isNarrow = width <= 960
+      if (isNarrow) {
+        await expect(page.getByRole('button', { name: '打开导航菜单' })).toBeVisible()
+        await expect(page.locator('.app-topbar-nav')).toBeHidden()
+      } else {
+        await expect(page.getByRole('button', { name: '打开导航菜单' })).toBeHidden()
+        await expect(page.locator('.app-topbar-nav')).toBeVisible()
+      }
+    }
   })
 })

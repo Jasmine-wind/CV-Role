@@ -68,7 +68,7 @@
   height: 34px;
   place-items: center;
   border-radius: var(--app-radius-md);
-  color: #fff;
+  color: var(--app-on-primary);
   font-size: 13px;
   font-weight: 800;
   background: var(--app-primary);
