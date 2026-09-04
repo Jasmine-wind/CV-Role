@@ -108,7 +108,7 @@ onBeforeUnmount(() => {
       type="button"
       tabindex="-1"
       class="app-shell-overlay"
-      aria-label="关闭导航菜单"
+      aria-hidden="true"
       @click="closeMenu(true)"
     />
     <div ref="appPage" class="app-page" :inert="menuOpen && isNarrowScreen">
