@@ -17,6 +17,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.baomidou.mybatisplus.core.conditions.AbstractWrapper;
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.winter.airesumeoptimizer.common.exception.BusinessException;
@@ -37,6 +38,7 @@ import com.winter.airesumeoptimizer.module.resume.mapper.ResumeMapper;
 import com.winter.airesumeoptimizer.module.resume.mapper.ResumeParseResultMapper;
 import com.winter.airesumeoptimizer.module.optimization.mapper.ResumeVersionMapper;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeBlockDTO;
+import com.winter.airesumeoptimizer.module.resume.dto.ResumeDisplayNameUpdateRequestDTO;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeParseOptionsDTO;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeParseQualityResultDTO;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeAiStructuredParseResultDTO;
@@ -194,6 +196,7 @@ class ResumeServiceImplTest {
 
         assertThat(uploadVO.getId()).isEqualTo(100L);
         assertThat(uploadVO.getOriginalFilename()).isEqualTo("resume.pdf");
+        assertThat(uploadVO.getDisplayName()).isEqualTo("resume");
         assertThat(uploadVO.getFileType()).isEqualTo("PDF");
         assertThat(uploadVO.getFileSize()).isEqualTo(file.getSize());
         assertThat(uploadVO.getUploadStatus()).isEqualTo("UPLOADED");
@@ -214,6 +217,42 @@ class ResumeServiceImplTest {
         assertThat(command.originalFilename()).isEqualTo("resume.pdf");
         assertThat(command.contentType()).isEqualTo("application/pdf");
         assertThat(command.size()).isEqualTo(file.getSize());
+    }
+
+    @Test
+    void renameShouldTrimAndPersistWithoutChangingOriginalFilename() {
+        Resume resume = new Resume();
+        resume.setId(100L);
+        resume.setUserId(1L);
+        resume.setOriginalFilename("resume.pdf");
+        resume.setDisplayName("旧名称");
+        when(resumeMapper.selectOne(any(Wrapper.class))).thenReturn(resume);
+        when(resumeMapper.update(isNull(), any(Wrapper.class))).thenAnswer(invocation -> {
+            AbstractWrapper<?, ?, ?> updateWrapper = (AbstractWrapper<?, ?, ?>) invocation.getArgument(1);
+            assertThat(updateWrapper.getParamNameValuePairs().values()).contains("新名称");
+            resume.setDisplayName("新名称");
+            return 1;
+        });
+
+        ResumeDisplayNameUpdateRequestDTO request = new ResumeDisplayNameUpdateRequestDTO();
+        request.setDisplayName("  新名称  ");
+        var renamed = service.updateDisplayName(1L, 100L, request);
+
+        assertThat(renamed.getDisplayName()).isEqualTo("新名称");
+        assertThat(resume.getOriginalFilename()).isEqualTo("resume.pdf");
+        verify(resumeMapper).update(isNull(), any(Wrapper.class));
+    }
+
+    @Test
+    void renameShouldRejectResumeOwnedByAnotherUser() {
+        when(resumeMapper.selectOne(any(Wrapper.class))).thenReturn(null);
+        ResumeDisplayNameUpdateRequestDTO request = new ResumeDisplayNameUpdateRequestDTO();
+        request.setDisplayName("新名称");
+
+        assertThatThrownBy(() -> service.updateDisplayName(2L, 100L, request))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("简历不存在");
+        verify(resumeMapper, never()).update(isNull(), any(Wrapper.class));
     }
 
     @Test

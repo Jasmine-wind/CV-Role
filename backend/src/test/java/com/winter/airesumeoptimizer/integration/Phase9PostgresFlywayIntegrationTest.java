@@ -39,6 +39,7 @@ import org.flywaydb.core.api.MigrationVersion;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -91,7 +92,7 @@ class Phase9PostgresFlywayIntegrationTest {
 
     @Test
     void freshFlywaySchemaEnforcesOwnershipAndDerivesInsightWithoutPersistedAggregate() {
-        assertThat(flyway.info().current().getVersion().getVersion()).isEqualTo("24");
+        assertThat(flyway.info().current().getVersion().getVersion()).isEqualTo("25");
         User owner = user("integration-owner");
         User other = user("integration-other");
         Resume resume = resume(owner.getId());
@@ -163,6 +164,23 @@ class Phase9PostgresFlywayIntegrationTest {
             releasedV22.migrate();
             assertThat(releasedV22.info().current().getVersion().getVersion()).isEqualTo("22");
 
+            Long legacyUserId = jdbcTemplate.queryForObject(
+                    "INSERT INTO " + schema + ".users (username, email, password_hash) VALUES (?, ?, ?) RETURNING id",
+                    Long.class,
+                    "phase9-legacy-user-" + schema,
+                    "phase9-legacy-" + schema + "@example.invalid",
+                    "phase9-test-password");
+            Long legacyResumeId = jdbcTemplate.queryForObject(
+                    "INSERT INTO " + schema + ".resumes (user_id, original_filename, file_type, file_size, object_key, upload_status) "
+                            + "VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
+                    Long.class,
+                    legacyUserId,
+                    "legacy-java.pdf",
+                    "PDF",
+                    100L,
+                    "resumes/legacy/legacy-java.pdf",
+                    "UPLOADED");
+
             Flyway upgraded = Flyway.configure()
                     .dataSource(dataSource)
                     .schemas(schema)
@@ -172,7 +190,22 @@ class Phase9PostgresFlywayIntegrationTest {
                     .load();
             upgraded.migrate();
 
-            assertThat(upgraded.info().current().getVersion().getVersion()).isEqualTo("24");
+            assertThat(upgraded.info().current().getVersion().getVersion()).isEqualTo("25");
+            assertThat(jdbcTemplate.queryForObject(
+                    "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = ? AND table_name = 'resumes' AND column_name = 'display_name'",
+                    Integer.class,
+                    schema)).isEqualTo(1);
+            assertThat(jdbcTemplate.queryForObject(
+                    "SELECT display_name FROM " + schema + ".resumes WHERE id = ?",
+                    String.class,
+                    legacyResumeId)).isEqualTo("legacy-java");
+            assertThat(jdbcTemplate.queryForObject(
+                    "SELECT is_nullable FROM information_schema.columns WHERE table_schema = ? AND table_name = 'resumes' AND column_name = 'display_name'",
+                    String.class,
+                    schema)).isEqualTo("NO");
+            assertThatThrownBy(() -> jdbcTemplate.update(
+                    "UPDATE " + schema + ".resumes SET display_name = NULL WHERE id = ?",
+                    legacyResumeId)).isInstanceOf(DataIntegrityViolationException.class);
             assertThat(jdbcTemplate.queryForObject(
                     "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = ? AND table_name = 'ai_usage_records'",
                     Integer.class,
@@ -309,6 +342,7 @@ class Phase9PostgresFlywayIntegrationTest {
         Resume resume = new Resume();
         resume.setUserId(userId);
         resume.setOriginalFilename("integration-java.pdf");
+        resume.setDisplayName("integration-java");
         resume.setFileType("PDF");
         resume.setFileSize(100L);
         resume.setObjectKey("resumes/" + userId + "/integration-java.pdf");

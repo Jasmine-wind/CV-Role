@@ -180,6 +180,7 @@ public class DemoDataInitializer implements ApplicationRunner {
         Resume resume = new Resume();
         resume.setUserId(user.getId());
         resume.setOriginalFilename(stored.originalFilename());
+        resume.setDisplayName("Java 后端岗位示例简历");
         resume.setFileType("PDF");
         resume.setFileSize(stored.size());
         resume.setObjectKey(stored.storageKey());

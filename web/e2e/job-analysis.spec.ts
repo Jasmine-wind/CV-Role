@@ -118,6 +118,18 @@ async function openAnalysis(page: Page, result: unknown = evidenceResult()) {
   await page.goto('/job-analysis/42')
 }
 
+async function openSourcePreview(page: Page, result: unknown, source = canonicalSource) {
+  await openAnalysis(page, result)
+  await page.route('**/api/resumes/1/review', (route) => route.fulfill(response({
+    resumeId: 1,
+    qualityStatus: 'READY',
+    qualityIssues: null,
+    unresolvedItems: '[]',
+    canonicalDocument: JSON.stringify(source),
+  })))
+  await page.reload()
+}
+
 async function pageMetrics(page: Page) {
   return page.evaluate(() => {
     const appPage = document.querySelector<HTMLElement>('.app-page')
@@ -259,18 +271,49 @@ test.describe('Job Analysis fixed evidence workspace', () => {
     const result = { ...evidenceResult(['MATCHED']), resumeId: 1 }
     const evidence = result.evidenceAnalysis.requirements[0]?.evidences[0]
     if (evidence) evidence.evidenceText = '负责 Java 后端服务开发与维护'
-    await openAnalysis(page, result)
-    await page.route('**/api/resumes/1/review', (route) => route.fulfill(response({
-      resumeId: 1,
-      qualityStatus: 'READY',
-      qualityIssues: null,
-      unresolvedItems: '[]',
-      canonicalDocument: JSON.stringify(canonicalSource),
-    })))
-    await page.reload()
+    await openSourcePreview(page, result)
     await expect(page.locator('.source-preview-section.is-focused')).toBeVisible()
     await expect(page.locator('.source-preview-entry mark')).toHaveText('负责 Java 后端服务开发与维护')
     await expectFixedViewport(page)
+  })
+
+  test('fails closed when a quote matches multiple SOURCE bullets', async ({ page }) => {
+    const result = { ...evidenceResult(['MATCHED']), resumeId: 1 }
+    const evidence = result.evidenceAnalysis.requirements[0]?.evidences[0]
+    if (evidence) evidence.evidenceText = '重复证据'
+    const source = JSON.parse(JSON.stringify(canonicalSource)) as typeof canonicalSource
+    const entry = source.sections[0]!.entries[0]!
+    entry.bullets = [{ id: 'bullet-a', text: '重复证据' }, { id: 'bullet-b', text: '重复证据' }]
+
+    await openSourcePreview(page, result, source)
+    await expect(page.locator('.source-preview-entry mark')).toHaveCount(0)
+  })
+
+  test('does not search other sections when sectionLabel cannot be resolved', async ({ page }) => {
+    const result = { ...evidenceResult(['MATCHED']), resumeId: 1 }
+    const evidence = result.evidenceAnalysis.requirements[0]?.evidences[0]
+    if (evidence) {
+      evidence.sectionLabel = '不存在的章节'
+      evidence.evidenceText = '跨章节证据'
+    }
+    const source = JSON.parse(JSON.stringify(canonicalSource)) as typeof canonicalSource
+    source.sections.push({
+      id: 'projects', kind: 'PROJECT', title: '项目经历', entries: [{
+        id: 'project-1', organization: null, role: null, school: null, degree: null, major: null,
+        startDate: null, endDate: null, location: null, group: null, skillItems: null,
+        bullets: [{ id: 'project-bullet', text: '跨章节证据' }],
+      }],
+    })
+
+    await openSourcePreview(page, result, source)
+    await expect(page.locator('.source-preview-entry mark')).toHaveCount(0)
+    await expect(page.locator('.source-preview-section.is-focused')).toHaveCount(0)
+  })
+
+  test('does not create a SOURCE anchor for NO_EVIDENCE', async ({ page }) => {
+    await openSourcePreview(page, { ...evidenceResult(['NO_EVIDENCE']), resumeId: 1 })
+    await expect(page.locator('.source-preview-entry mark')).toHaveCount(0)
+    await expect(page.locator('.source-preview-section.is-focused')).toHaveCount(0)
   })
 
   test('keeps matched, partial and missing summaries inside the fixed frame', async ({ page }) => {
