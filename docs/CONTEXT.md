@@ -148,7 +148,7 @@ Phase 1–9 已正式完成；后续能力仍须依 `PLAN.md` 和新的产品决
 - 渲染依赖部署环境的 Typst 二进制与 CJK 字体：后端镜像与 CI 已内置固定版本（typst v0.15.1 + Noto CJK），非容器化部署必须自行安装；二进制缺失时渲染接口 fail closed，其它链路不受影响。
 - Phase 7 前本环境未使用真实公网 Provider Credential 执行 smoke；Phase 8 浏览器 E2E 已在本地以真实 DeepSeek Credential 走通 JD 解析、证据匹配、单 Bullet Suggest 与 Preview / Export（需上述 fake-ip DNS 规避）。不同公网 Provider 的兼容性仍是部署环境相关风险。
 - Snapshot-hash cohort 会在材料变化后拆分样本，字面锚点策略也会保守地少聚合；这是避免混合不同材料或错误语义合并的既定取舍。
-- Demo 仅允许 `demo` profile 与 `APP_DEMO_ENABLED=true` 的独立数据库/存储环境；当前没有用户全量删除入口，Phase 9 不应被表述为已完成账号生命周期。
+- Demo 仅允许 `demo` profile 与 `APP_DEMO_ENABLED=true` 的独立数据库/存储环境；当前没有用户全量删除入口；Home 已提供当前用户最近 OptimizationTask 列表，按 updatedAt / id 倒序，可继续成功任务或重试失败任务。Phase 9 不应被表述为已完成账号生命周期。
 - 本机使用 Java 25 时需要显式开启 annotation processing 才能生成 Lombok 代码；CI 的标准运行环境是 Java 21。
 - Slice A 的确定性验证与覆盖判定是有意的保守规则：联系方式格式、章节结构、跨章节重复、类型错位、短行碎片与未表示行进入未决候选；它不追求完美解析，只保证可确定则接受、不确定则确认、明显错误则阻断。覆盖判定使用整行包含、明确标签后的全量事实 token、联系方式短标签残差与结构标题白名单；不以 70% 比例掩盖遗漏。
 

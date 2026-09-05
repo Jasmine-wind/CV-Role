@@ -133,6 +133,8 @@ const reviewQualityStatus = ref<string | null>(null)
 const reviewName = ref('')
 const reviewNameMissing = ref(false)
 const reviewItems = ref<ReviewItemState[]>([])
+const dirtyReviewItemIds = ref(new Set<string>())
+const reviewNameDirty = ref(false)
 const activeReviewItemId = ref<string | null>(null)
 const resolvingItemId = ref<string | null>(null)
 const reviewTrigger = ref<HTMLElement | null>(null)
@@ -191,11 +193,15 @@ const updateReviewState = (
 ) => {
   reviewQualityStatus.value = review.qualityStatus
   const document = parseDraft<Partial<ResumeDocument>>(review.canonicalDocument ?? '{}')
-  reviewName.value = document.basics?.name?.trim() ?? ''
+  if (!reviewNameDirty.value) reviewName.value = document.basics?.name?.trim() ?? ''
   reviewNameMissing.value = !reviewName.value
   const previousItems = reviewItems.value
   const nextItems = buildReviewItems(review)
-  reviewItems.value = nextItems
+  const serverIds = new Set(nextItems.map((item) => item.item.id))
+  dirtyReviewItemIds.value.forEach((id) => { if (!serverIds.has(id)) dirtyReviewItemIds.value.delete(id) })
+  reviewItems.value = nextItems.map((item) => dirtyReviewItemIds.value.has(item.item.id)
+    ? previousItems.find((previous) => previous.item.id === item.item.id) ?? item
+    : item)
   activeReviewItemId.value = resolvedItemId
     ? selectReviewItemAfterResolve({
         previousItems,
@@ -213,6 +219,8 @@ const loadReview = async (resumeId: number, reset = false) => {
   reviewLoadError.value = null
   if (reset) {
     reviewItems.value = []
+    dirtyReviewItemIds.value.clear()
+    reviewNameDirty.value = false
     activeReviewItemId.value = null
   }
   try {
@@ -261,6 +269,11 @@ const clearReviewState = () => {
 }
 
 const closeReview = async (restoreFocus = true) => {
+  if (dirtyReviewItemIds.value.size || reviewNameDirty.value) {
+    try {
+      await ElMessageBox.confirm('还有未确认的修改，离开后这些修改不会保留。', '确认离开？', { confirmButtonText: '放弃修改', cancelButtonText: '继续确认', type: 'warning' })
+    } catch { return }
+  }
   const resumeId = reviewResumeId.value
   const trigger = reviewTrigger.value
   clearReviewState()
@@ -453,7 +466,10 @@ const moveReviewItem = (offset: number) => {
 
 const updateReviewItem = (nextState: ReviewItemState) => {
   const index = reviewItems.value.findIndex((item) => item.item.id === nextState.item.id)
-  if (index >= 0) reviewItems.value[index] = nextState
+  if (index >= 0) {
+    reviewItems.value[index] = nextState
+    dirtyReviewItemIds.value.add(nextState.item.id)
+  }
 }
 
 const acceptActiveReviewItem = () => {
@@ -897,12 +913,13 @@ onUnmounted(() => {
         @retry-action="retryReviewAction"
         @upload-replacement="openUploadFromReview"
         @back-to-library="closeReview()"
+        @update:review-name="(value) => { reviewName = value; reviewNameDirty = true }"
         @select-item="selectReviewItem"
         @previous-item="moveReviewItem(-1)"
         @next-item="moveReviewItem(1)"
         @accept="acceptActiveReviewItem"
         @reject="deleteActiveReviewItem"
-        @update:review-name="reviewName = $event"
+
         @update:state="updateReviewItem"
       />
     </section>
