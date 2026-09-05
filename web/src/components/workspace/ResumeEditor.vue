@@ -627,7 +627,7 @@ const handleSuggestCommand = (bulletId: string, command: BulletSuggestIntent | '
               class="section-drag-handle"
               type="button"
               draggable="true"
-              aria-label="拖拽调整章节顺序"
+              :aria-label="`拖拽调整${sectionTitle(section)}顺序`"
               @dragstart="startSectionDrag(section.id, $event)"
               @dragend="draggedSectionId = null"
             >
@@ -635,6 +635,7 @@ const handleSuggestCommand = (bulletId: string, command: BulletSuggestIntent | '
             </button>
             <button
               type="button"
+              :aria-label="`上移${sectionTitle(section)}`"
               :disabled="sectionIndex === 0"
               @click="moveSection(sectionIndex, -1)"
             >
@@ -642,6 +643,7 @@ const handleSuggestCommand = (bulletId: string, command: BulletSuggestIntent | '
             </button>
             <button
               type="button"
+              :aria-label="`下移${sectionTitle(section)}`"
               :disabled="sectionIndex === document.sections.length - 1"
               @click="moveSection(sectionIndex, 1)"
             >
@@ -1044,6 +1046,7 @@ const handleSuggestCommand = (bulletId: string, command: BulletSuggestIntent | '
                     <button
                       type="button"
                       class="danger-action"
+                      :aria-label="`删除${entryTitle(entry, section.kind)}中的${entryContentLabel(section.kind)}`"
                       @click="deleteBullet(section.id, entry.id, bullet.id)"
                     >
                       删除此{{ entryContentLabel(section.kind) }}
@@ -1067,6 +1070,7 @@ const handleSuggestCommand = (bulletId: string, command: BulletSuggestIntent | '
               <button
                 type="button"
                 class="danger-action"
+                :aria-label="`删除条目：${entryTitle(entry, section.kind)}`"
                 @click="deleteEntry(section.id, entry.id)"
               >
                 删除此条目

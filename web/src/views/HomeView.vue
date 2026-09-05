@@ -1092,7 +1092,7 @@ onUnmounted(() => {
   margin-bottom: 0;
 }
 
-.home-page :deep(.ui-page-header h2) {
+.home-page :deep(.ui-page-header h1) {
   font-size: clamp(28px, 2.4vw, 34px);
   letter-spacing: -0.035em;
 }
@@ -1543,7 +1543,7 @@ onUnmounted(() => {
     gap: 16px;
   }
 
-  .home-page :deep(.ui-page-header h2) {
+  .home-page :deep(.ui-page-header h1) {
     font-size: 28px;
   }
 

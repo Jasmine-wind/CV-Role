@@ -332,7 +332,7 @@ test.describe('Resume Review Workspace', () => {
     await expect(page.locator('.resume-review-workspace')).toBeHidden()
     await expect(page.locator('.resume-library-row')).toContainText('可用于岗位分析')
     expect(await page.evaluate(() => document.activeElement?.getAttribute('data-resume-row'))).toBe('2')
-    await page.getByRole('button', { name: /product-analytics-ready/ }).click()
+    await page.locator('.resume-source-trigger').filter({ hasText: 'product-analytics-ready' }).click()
     await expect(page.getByRole('heading', { name: '林然' })).toBeVisible()
     await expect(page.locator('.resume-source-preview')).toContainText('示例科技')
     await expect(page.locator('.resume-source-preview')).toContainText('负责服务端接口开发与维护')

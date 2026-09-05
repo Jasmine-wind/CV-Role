@@ -14,7 +14,7 @@ const emit = defineEmits<{
 </script>
 
 <template>
-  <section class="ui-error-state" :class="{ 'is-compact': compact }">
+  <section class="ui-error-state" :class="{ 'is-compact': compact }" role="alert">
     <span class="ui-state-eyebrow">需要处理</span>
     <strong>{{ title }}</strong>
     <p v-if="description">{{ description }}</p>

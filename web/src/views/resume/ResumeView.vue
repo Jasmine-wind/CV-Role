@@ -683,7 +683,7 @@ onUnmounted(() => {
       <header class="resume-upload-header">
         <div>
           <span class="resume-section-label">新增简历</span>
-          <h2 id="resume-upload-title">上传一份真实简历</h2>
+          <h2 id="resume-upload-title" tabindex="-1">上传一份真实简历</h2>
           <p>
             支持 PDF、DOC、DOCX，单份最大 10 MB。上传后系统会自动准备；无法确认的内容会交给你核对。
           </p>
@@ -808,7 +808,12 @@ onUnmounted(() => {
                       <strong>{{ displayNameFor(resume) }}</strong>
                       <small>原始文件：{{ resume.originalFilename }} · {{ formatResumeFileSize(resume.fileSize) }}</small>
                     </button>
-                    <button type="button" class="resume-rename-button" @click="startDisplayNameEdit(resume)">重命名</button>
+                    <button
+                      type="button"
+                      class="resume-rename-button"
+                      :aria-label="`重命名 ${displayNameFor(resume)}`"
+                      @click="startDisplayNameEdit(resume)"
+                    >重命名</button>
                   </div>
                 </template>
               </div>
@@ -847,6 +852,7 @@ onUnmounted(() => {
                 class="resume-delete-button"
                 type="danger"
                 text
+                :aria-label="`删除 ${displayNameFor(resume)}`"
                 :loading="deletingId === resume.id"
                 :disabled="!statusFor(resume).canDelete || Boolean(activeTasks[resume.id])"
                 @click="handleDelete(resume)"

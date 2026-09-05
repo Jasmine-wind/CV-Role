@@ -66,6 +66,10 @@ test.describe('Resume Library', () => {
     })
     expect(layout.display).toBe('block')
     expect(layout.mainWidth).toBeCloseTo(layout.shellWidth, 0)
+    await expect(page.getByRole('button', { name: '重命名 Java 后端 · 两页详细版' })).toBeVisible()
+    await expect(page.getByRole('button', { name: '删除 Java 后端 · 两页详细版' })).toBeVisible()
+    await expect(page.getByRole('button', { name: '重命名 Java 后端 · 通用版' })).toBeVisible()
+    await expect(page.getByRole('button', { name: '删除 Java 后端 · 通用版' })).toBeVisible()
   })
 
   test('keeps the upload action visible in the first mobile viewport', async ({ page }) => {

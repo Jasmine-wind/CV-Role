@@ -551,7 +551,7 @@ onBeforeUnmount(() => {
             {{ exportSuccess.fileName }} · {{ exportSuccess.pageCount }} 页 · {{ Math.ceil(exportSuccess.fileSize / 1024) }} KB
           </p>
           <p v-else-if="!canExport" class="export-blocked-copy">
-            {{ preflightStatusLabel === '尚未检查' ? '生成预览并完成 Document Check 后可导出。' : '请先处理 Document Check 中的阻断项。' }}
+            {{ preflightStatusLabel === '尚未检查' ? '生成预览并完成导出前检查后可导出。' : '请先处理导出前检查中的阻断项。' }}
           </p>
           <el-button type="primary" :loading="exporting" :disabled="!canExport" @click="handleExport">
             导出 PDF
@@ -590,13 +590,20 @@ onBeforeUnmount(() => {
                 <div class="artifact-actions">
                   <el-button
                     size="small"
+                    :aria-label="`下载 ${artifact.fileName}`"
                     :loading="downloadingId === artifact.id"
                     :disabled="artifact.status !== 'READY'"
                     @click="handleDownloadArtifact(artifact)"
                   >
                     下载
                   </el-button>
-                  <el-button size="small" type="danger" plain @click="handleDeleteArtifact(artifact)">
+                  <el-button
+                    size="small"
+                    type="danger"
+                    plain
+                    :aria-label="`${artifact.status === 'DELETE_PENDING' ? '重试删除' : '删除'} ${artifact.fileName}`"
+                    @click="handleDeleteArtifact(artifact)"
+                  >
                     {{ artifact.status === 'DELETE_PENDING' ? '重试删除' : '删除' }}
                   </el-button>
                 </div>

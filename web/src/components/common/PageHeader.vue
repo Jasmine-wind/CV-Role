@@ -10,7 +10,7 @@ defineProps<{
   <header class="ui-page-header">
     <div>
       <p v-if="eyebrow" class="ui-page-eyebrow">{{ eyebrow }}</p>
-      <h2>{{ title }}</h2>
+      <h1>{{ title }}</h1>
       <p v-if="description">{{ description }}</p>
     </div>
     <div v-if="$slots.actions" class="ui-page-actions">

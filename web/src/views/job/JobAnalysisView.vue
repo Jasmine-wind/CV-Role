@@ -368,7 +368,7 @@ onMounted(loadResult)
               <strong>{{ legacyPriorityItems.length }}</strong><span>建议完善</span>
             </span>
             <span class="analysis-summary-item is-missing">
-              <strong>{{ legacyResult.missingSkills.length }}</strong><span>当前未体现</span>
+              <strong>{{ legacyResult.missingSkills.length }}</strong><span>当前材料未体现</span>
             </span>
           </div>
           <p>这是较早版本的分析结果。当前页面保留读取兼容；重新分析该岗位可以获得逐条可追溯的证据核对。</p>
@@ -376,9 +376,9 @@ onMounted(loadResult)
 
         <section class="analysis-legacy-layout" aria-label="历史分析兼容内容">
           <div class="legacy-warning">
-            <span class="analysis-detail-eyebrow">LEGACY COMPATIBILITY</span>
+            <span class="analysis-detail-eyebrow">历史兼容</span>
             <strong>这是较早版本的分析结果</strong>
-            <p>历史结果可以继续查看，但不会启用新的逐条证据建议。重新分析后，系统才会建立当前材料与岗位要求的 Evidence 关系。</p>
+            <p>历史结果可以继续查看，但不会启用新的逐条证据建议。重新分析后，系统才会建立当前材料与岗位要求的证据关系。</p>
             <el-button type="primary" @click="router.push('/app')">重新分析岗位</el-button>
           </div>
           <div class="legacy-detail-list">
