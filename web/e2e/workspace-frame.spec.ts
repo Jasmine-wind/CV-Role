@@ -361,8 +361,13 @@ test.describe('Workspace editor frame', () => {
     await page.getByRole('button', { name: /岗位要求 4/ }).click()
     await expect(editorTab).toHaveAttribute('aria-selected', 'true')
     await expect(page.locator('[data-section-id="section-0"] .section-collapse-toggle')).toHaveAttribute('aria-expanded', 'true')
-    await expect(page.locator('[data-bullet-id="other-bullet-0"]')).toHaveClass(/is-evidence-focus/)
-    await expect(page.locator('[data-bullet-id="other-bullet-0"]')).toBeInViewport()
+    const mobileAnchoredBullet = page.locator('[data-bullet-id="other-bullet-0"]')
+    await expect(mobileAnchoredBullet).toHaveClass(/is-evidence-focus/)
+    await expect(mobileAnchoredBullet).toBeInViewport()
+    await mobileAnchoredBullet.locator('textarea').fill('移动端完全改写后的证据表达。')
+    await expect(page.getByText('✓ 已保存', { exact: true })).toBeVisible({ timeout: 5_000 })
+    await expect(mobileAnchoredBullet).toHaveClass(/is-evidence-focus/)
+    await expect(mobileAnchoredBullet).toBeInViewport()
     await expect(page.locator('[data-section-id="section-1"] .section-collapse-toggle')).toHaveAttribute('aria-expanded', 'false')
     const layout = await page.evaluate(() => {
       const app = document.querySelector<HTMLElement>('.app-page')!
