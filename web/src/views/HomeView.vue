@@ -7,6 +7,8 @@ import ErrorState from '@/components/common/ErrorState.vue'
 import SkeletonBlock from '@/components/common/SkeletonBlock.vue'
 import { retryJobAnalysis, startJobAnalysis } from '@/api/job-analysis'
 import { getJobDirectionInsights } from '@/api/job-direction-insight'
+import { getRecentOptimizationTasks } from '@/api/optimization-tasks'
+import type { OptimizationTask } from '@/types/optimization-task'
 import { getResumeList, requestResumePreparation, uploadResume } from '@/api/resume'
 import { startAsyncTaskPolling } from '@/utils/asyncTaskPolling'
 import type { AsyncTaskPollingController } from '@/utils/asyncTaskPolling'
@@ -48,6 +50,9 @@ const startingAnalysis = ref(false)
 const preparationTaskIds = ref<Record<number, number>>({})
 const preparationMessages = ref<Record<number, string>>({})
 const hasJobDirectionInsight = ref(false)
+const recentTasks = ref<OptimizationTask[]>([])
+const recentTasksFailed = ref(false)
+const recentTasksLoading = ref(false)
 let analysisPolling: AsyncTaskPollingController | null = null
 const preparationPolling = new Map<number, AsyncTaskPollingController>()
 
@@ -411,6 +416,15 @@ const restoreActiveAnalysis = () => {
   window.sessionStorage.removeItem(ACTIVE_ANALYSIS_STORAGE_KEY)
 }
 
+const loadRecentTasks = async () => {
+  recentTasksLoading.value = true
+  recentTasksFailed.value = false
+  try { recentTasks.value = await getRecentOptimizationTasks() } catch { recentTasksFailed.value = true }
+  finally { recentTasksLoading.value = false }
+}
+const taskStatusLabel = (status: string) => ({ PENDING: '分析中', RUNNING: '分析中', SUCCESS: '已完成', FAILED: '分析失败', CANCELLED: '已取消' }[status] || '分析中')
+const taskTime = (value?: string) => value ? new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : ''
+
 onMounted(async () => {
   await loadResumes(preferredResumeId.value)
   const pendingResumes = resumes.value.filter(
@@ -428,6 +442,7 @@ onMounted(async () => {
   )
   restoreActiveAnalysis()
   void loadInsightAvailability()
+  void loadRecentTasks()
 })
 
 onUnmounted(() => {
@@ -643,6 +658,17 @@ onUnmounted(() => {
           </div>
         </div>
       </div>
+    </section>
+
+    <section class="home-recent-section" aria-labelledby="recent-title">
+      <h2 id="recent-title">最近优化</h2>
+      <p v-if="recentTasksFailed">暂时无法读取最近优化 <button type="button" @click="loadRecentTasks">重新加载</button></p>
+      <p v-else-if="!recentTasksLoading && !recentTasks.length">还没有岗位优化记录。完成第一次岗位分析后，可以从这里继续之前的工作。</p>
+      <article v-for="task in recentTasks" :key="task.optimizationTaskId" class="recent-task">
+        <div><strong>{{ task.jobTitle || '未命名岗位' }}</strong><span>{{ task.resumeName }} · {{ taskTime(task.updatedAt || task.createdAt) }}</span><small>{{ taskStatusLabel(task.status) }}</small></div>
+        <el-button v-if="task.status === 'SUCCESS'" link type="primary" @click="router.push({ name: 'job-analysis', params: { optimizationTaskId: task.optimizationTaskId } })">继续</el-button>
+        <el-button v-else-if="task.status === 'FAILED'" link type="primary" @click="retryJobAnalysis(task.optimizationTaskId).then(loadRecentTasks)">重新分析</el-button>
+      </article>
     </section>
 
     <section v-if="hasJobDirectionInsight" class="home-insight-row" aria-label="岗位方向洞察">

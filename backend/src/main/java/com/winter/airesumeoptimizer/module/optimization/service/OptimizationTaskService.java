@@ -40,6 +40,8 @@ public interface OptimizationTaskService {
 
     OptimizationTaskVO get(Long userId, Long optimizationTaskId);
 
+    java.util.List<OptimizationTaskVO> listRecent(Long userId, int limit);
+
     /** Returns only the task-frozen SOURCE document; never falls back to the resume's current canonical pointer. */
     String getFrozenSourceCanonicalDocument(Long userId, Long optimizationTaskId);
 

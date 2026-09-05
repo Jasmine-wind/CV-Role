@@ -89,11 +89,11 @@ const resolveErrorMessage = (error: AxiosError<ApiResult<unknown>>) => {
   }
 
   if (!error.response) {
-    return '无法连接后端服务，请确认后端已启动'
+    return '当前无法连接服务，请检查网络后重试'
   }
 
   if (error.response.status >= 500) {
-    return '服务器处理失败，请稍后重试'
+    return '服务器暂时无法处理请求，请稍后重试'
   }
 
   return error.message || '请求失败'

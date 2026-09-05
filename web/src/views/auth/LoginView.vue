@@ -47,8 +47,8 @@ const handleSubmit = async () => {
     ElMessage.success('登录成功')
     const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : '/app'
     await router.push(redirect)
-  } catch {
-    submitError.value = '用户名或密码错误，请检查后重试。'
+  } catch (error) {
+    submitError.value = error instanceof Error ? error.message : '登录暂时失败，请稍后重试。'
     ElMessage.error(submitError.value)
   }
 }

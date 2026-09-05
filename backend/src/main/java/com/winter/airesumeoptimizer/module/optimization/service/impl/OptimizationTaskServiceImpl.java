@@ -159,6 +159,17 @@ public class OptimizationTaskServiceImpl implements OptimizationTaskService {
     }
 
     @Override
+    public java.util.List<OptimizationTaskVO> listRecent(Long userId, int limit) {
+        int bounded = Math.max(1, Math.min(limit, 20));
+        return optimizationTaskMapper.selectList(new LambdaQueryWrapper<OptimizationTask>()
+                        .eq(OptimizationTask::getUserId, userId)
+                        .orderByDesc(OptimizationTask::getUpdatedAt)
+                        .orderByDesc(OptimizationTask::getId)
+                        .last("LIMIT " + bounded))
+                .stream().map(task -> get(userId, task.getId())).toList();
+    }
+
+    @Override
     public String getFrozenSourceCanonicalDocument(Long userId, Long optimizationTaskId) {
         OptimizationTask task = getOwnedTask(userId, optimizationTaskId);
         ResumeVersion sourceVersion = getOwnedVersion(userId, task.getSourceResumeVersionId());

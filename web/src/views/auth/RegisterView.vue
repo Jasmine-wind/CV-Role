@@ -62,8 +62,8 @@ const handleSubmit = async () => {
     })
     ElMessage.success('注册成功，请登录')
     await router.push('/login')
-  } catch {
-    submitError.value = '注册未完成，请检查填写的信息后重试。'
+  } catch (error) {
+    submitError.value = error instanceof Error ? error.message : '注册暂时失败，请稍后重试。'
     ElMessage.error(submitError.value)
   } finally {
     loading.value = false

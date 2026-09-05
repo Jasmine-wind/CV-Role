@@ -19,6 +19,7 @@ import jakarta.validation.constraints.Positive;
 import org.springframework.security.core.Authentication;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -48,6 +49,15 @@ public class OptimizationTaskController {
         this.jobAnalysisService = jobAnalysisService;
         this.evidenceMatchService = evidenceMatchService;
         this.analysisVoAssembler = analysisVoAssembler;
+    }
+
+    @GetMapping("/recent")
+    @Operation(summary = "读取最近岗位优化")
+    public Result<java.util.List<OptimizationTaskVO>> recent(
+            @RequestParam(defaultValue = "5") @Positive(message = "limit 必须大于 0") Integer limit,
+            Authentication authentication) {
+        AuthenticatedUser user = (AuthenticatedUser) authentication.getPrincipal();
+        return Result.success(optimizationTaskService.listRecent(user.getUserId(), limit));
     }
 
     @GetMapping("/{optimizationTaskId}")
