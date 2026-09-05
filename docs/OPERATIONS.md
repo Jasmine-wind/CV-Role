@@ -188,23 +188,30 @@ docker compose -f docker-compose.prod.yml --env-file .env logs -f redis
 docker compose -f docker-compose.prod.yml --env-file .env logs -f minio
 ```
 
-重启后端：
+常规应用重启（默认只重启 Backend 和 Nginx）：
+
+```bash
+scripts/ops/restart-services.sh
+# 或显式指定：
+scripts/ops/restart-services.sh backend nginx
+```
+
+直接重启后端或 Nginx：
 
 ```bash
 docker compose -f docker-compose.prod.yml --env-file .env restart backend
-```
-
-重启 Nginx：
-
-```bash
 docker compose -f docker-compose.prod.yml --env-file .env restart nginx
 ```
 
-重启所有服务：
+数据服务需要单独、谨慎操作，并在重启后检查 health 与 smoke：
 
 ```bash
-docker compose -f docker-compose.prod.yml --env-file .env restart
+scripts/ops/restart-services.sh redis
+scripts/ops/restart-services.sh minio
+scripts/ops/restart-services.sh postgres
 ```
+
+不要将整个 Compose project 无差别执行 `restart`。`minio-init` 是 fresh startup 时运行一次的 one-shot bucket 初始化服务，`certbot` 是按需运行的证书命令；两者都不应作为常规 restart 目标。
 
 ---
 
@@ -859,6 +866,8 @@ BASE_URL=https://resume.dawn04.xyz ./scripts/ops/smoke-check.sh
 BASE_URL=http://localhost ./scripts/ops/smoke-check.sh
 # 生产环境显式指定：BASE_URL=https://resume.dawn04.xyz ./scripts/ops/smoke-check.sh
 ```
+
+Restart contract：fresh startup 时 `minio-init` 必须完成并以 exit code 0 退出；之后只重启长期运行服务。Backend、Redis、Nginx 重启后必须重新达到 healthy 并通过 smoke。MinIO 或 PostgreSQL 重启属于数据服务维护，除 health 外还要验证应用恢复与 synthetic/维护窗口内的数据持久性；不要重启 `minio-init` 或 certbot one-shot command。
 
 检查服务、日志和容量：
 

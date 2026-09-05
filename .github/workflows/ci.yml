@@ -157,6 +157,197 @@ jobs:
       - name: Build production frontend / Nginx image
         run: docker build -f web/Dockerfile -t cv-role-web-ci .
 
+  runtime-restart:
+    name: Production Runtime Restart Validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      OPS_PROJECT: cv-role-ops-ci-${{ github.run_id }}
+      OPS_HTTP_PORT: "18080"
+      OPS_HTTPS_PORT: "18443"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run production-shaped runtime restart Gate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          OPS_ENV="$RUNNER_TEMP/cv-role-ops-runtime.env"
+          COMPOSE=(docker compose -p "$OPS_PROJECT" -f docker-compose.prod.yml --env-file "$OPS_ENV")
+          MC_IMAGE="minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727"
+          DB_MARKER="cv-role-runtime-restart-${GITHUB_RUN_ID}"
+          OBJECT_MARKER="cv-role-runtime-restart-${GITHUB_RUN_ID}\n"
+          OBJECT_FILE="$RUNNER_TEMP/cv-role-runtime-marker.txt"
+          printf '%b' "$OBJECT_MARKER" > "$OBJECT_FILE"
+
+          cat > "$OPS_ENV" <<EOF
+          POSTGRES_DB=cv_role_ops_ci
+          POSTGRES_USER=cv_role_ops_ci
+          POSTGRES_PASSWORD=ci-postgres-placeholder
+          REDIS_PASSWORD=ci-redis-placeholder
+          MINIO_ROOT_USER=cv-role-ci-minio
+          MINIO_ROOT_PASSWORD=ci-minio-placeholder
+          MINIO_ACCESS_KEY=cv-role-ci-minio
+          MINIO_SECRET_KEY=ci-minio-placeholder
+          MINIO_BUCKET=cv-role-ops-ci
+          JWT_SECRET=ci-jwt-secret-at-least-32-characters-long
+          AI_API_KEY=ci-ai-placeholder
+          AI_BASE_URL=https://example.invalid/v1
+          AI_MODEL=ci-model
+          EMBEDDING_API_KEY=ci-embedding-placeholder
+          EMBEDDING_BASE_URL=https://example.invalid/v1
+          EMBEDDING_MODEL=ci-embedding-model
+          APP_CORS_ALLOWED_ORIGIN_PATTERNS=http://127.0.0.1:${OPS_HTTP_PORT}
+          DEPLOY_DOMAIN=example.invalid
+          CERTBOT_EMAIL=ci@example.invalid
+          NGINX_HTTP_PORT=${OPS_HTTP_PORT}
+          NGINX_HTTPS_PORT=${OPS_HTTPS_PORT}
+          EOF
+
+          diagnostics() {
+            echo '--- docker compose ps ---'
+            "${COMPOSE[@]}" ps || true
+            for service in postgres redis minio backend nginx; do
+              echo "--- $service logs (tail 200) ---"
+              "${COMPOSE[@]}" logs --no-color --tail=200 "$service" || true
+            done
+          }
+
+          cleanup() {
+            local result=$?
+            if [[ "$result" -ne 0 ]]; then
+              diagnostics
+            fi
+            "${COMPOSE[@]}" down -v --remove-orphans || true
+            exit "$result"
+          }
+          trap cleanup EXIT
+
+          wait_healthy() {
+            local service="$1"
+            local container state health
+            for attempt in {1..180}; do
+              container=$("${COMPOSE[@]}" ps -q "$service" 2>/dev/null || true)
+              if [[ -n "$container" ]]; then
+                state=$(docker inspect -f '{{.State.Status}}' "$container")
+                health=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container")
+                if [[ "$state" == running && "$health" == healthy ]]; then
+                  echo "$service: running/healthy"
+                  return 0
+                fi
+              fi
+              sleep 2
+            done
+            echo "Timed out waiting for $service to become running/healthy" >&2
+            return 1
+          }
+
+          wait_completed() {
+            local service="$1"
+            local container state exit_code
+            for attempt in {1..120}; do
+              container=$("${COMPOSE[@]}" ps -a -q "$service" 2>/dev/null || true)
+              if [[ -n "$container" ]]; then
+                state=$(docker inspect -f '{{.State.Status}}' "$container")
+                exit_code=$(docker inspect -f '{{.State.ExitCode}}' "$container")
+                if [[ "$state" == exited && "$exit_code" == 0 ]]; then
+                  echo "$service: completed successfully"
+                  return 0
+                fi
+                if [[ "$state" == exited && "$exit_code" != 0 ]]; then
+                  echo "$service exited with code $exit_code" >&2
+                  return 1
+                fi
+              fi
+              sleep 2
+            done
+            echo "Timed out waiting for $service to complete" >&2
+            return 1
+          }
+
+          wait_core() {
+            wait_healthy postgres
+            wait_healthy redis
+            wait_healthy minio
+            wait_completed minio-init
+            wait_healthy backend
+            wait_healthy nginx
+          }
+
+          smoke() {
+            BASE_URL="http://127.0.0.1:${OPS_HTTP_PORT}" scripts/ops/smoke-check.sh
+          }
+
+          db_marker() {
+            "${COMPOSE[@]}" exec -T postgres sh -c \
+              'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atqc "SELECT marker FROM ops_ci_restart_marker WHERE id = 1"'
+          }
+
+          put_object_marker() {
+            docker run --rm --network "${OPS_PROJECT}_default" \
+              -e MINIO_ROOT_USER=cv-role-ci-minio \
+              -e MINIO_ROOT_PASSWORD=ci-minio-placeholder \
+              -e MINIO_BUCKET=cv-role-ops-ci \
+              -v "$OBJECT_FILE:/tmp/runtime-marker.txt:ro" \
+              --entrypoint /bin/sh "$MC_IMAGE" -c \
+              'mc alias set local http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null && mc cp /tmp/runtime-marker.txt "local/$MINIO_BUCKET/runtime-restart-marker.txt" >/dev/null'
+          }
+
+          object_sha() {
+            docker run --rm --network "${OPS_PROJECT}_default" \
+              -e MINIO_ROOT_USER=cv-role-ci-minio \
+              -e MINIO_ROOT_PASSWORD=ci-minio-placeholder \
+              -e MINIO_BUCKET=cv-role-ops-ci \
+              --entrypoint /bin/sh "$MC_IMAGE" -c \
+              'mc alias set local http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null && mc cat "local/$MINIO_BUCKET/runtime-restart-marker.txt" | sha256sum | cut -d " " -f1'
+          }
+
+          echo 'Starting isolated production-shaped Compose project'
+          "${COMPOSE[@]}" up -d --build
+          wait_core
+          smoke
+
+          "${COMPOSE[@]}" exec -T postgres sh -c \
+            "psql -v ON_ERROR_STOP=1 -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -c \"CREATE TABLE IF NOT EXISTS ops_ci_restart_marker (id integer PRIMARY KEY, marker text NOT NULL); INSERT INTO ops_ci_restart_marker (id, marker) VALUES (1, '$DB_MARKER') ON CONFLICT (id) DO UPDATE SET marker = EXCLUDED.marker;\""
+          put_object_marker
+          EXPECTED_OBJECT_SHA=$(sha256sum "$OBJECT_FILE" | cut -d ' ' -f1)
+          [[ "$(object_sha)" == "$EXPECTED_OBJECT_SHA" ]]
+
+          echo 'Restarting backend only'
+          "${COMPOSE[@]}" restart backend
+          wait_healthy backend
+          wait_healthy nginx
+          smoke
+          if "${COMPOSE[@]}" logs --no-color backend | grep -Eiq 'flyway.*(error|fail)|migration.*(error|fail)'; then
+            echo 'Backend logs contain a Flyway/migration failure' >&2
+            exit 1
+          fi
+
+          echo 'Restarting Redis only'
+          "${COMPOSE[@]}" restart redis
+          wait_healthy redis
+          wait_healthy backend
+          wait_healthy nginx
+          smoke
+
+          echo 'Restarting Nginx only'
+          "${COMPOSE[@]}" restart nginx
+          wait_healthy nginx
+          smoke
+
+          echo 'Restarting MinIO only'
+          "${COMPOSE[@]}" restart minio
+          wait_healthy minio
+          wait_healthy backend
+          wait_healthy nginx
+          [[ "$(object_sha)" == "$EXPECTED_OBJECT_SHA" ]]
+          smoke
+
+          [[ "$(db_marker)" == "$DB_MARKER" ]]
+          echo 'Production-shaped runtime restart Gate passed'
+
   phase9-e2e:
     name: Phase 9 Browser E2E
     runs-on: ubuntu-latest
