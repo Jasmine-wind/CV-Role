@@ -104,6 +104,8 @@ pnpm-debug.log*
 tmp/
 temp/
 *.tmp
+backups/
+.restore/
 
 # =========================
 # Upload / local storage

@@ -110,6 +110,53 @@ jobs:
       - name: Build frontend
         run: npm run build
 
+  ops:
+    name: Production Compose / Ops Validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate ops scripts
+        run: |
+          bash -n scripts/ops/*.sh
+          bash -n deploy/nginx/entrypoint/40-configure-production.sh
+
+      - name: Render local Compose configuration
+        run: docker compose config >/dev/null
+
+      - name: Render production Compose configuration with safe placeholders
+        run: |
+          cat > "$RUNNER_TEMP/cv-role-production.env" <<'EOF'
+          POSTGRES_DB=cv_role_ci
+          POSTGRES_USER=cv_role_ci
+          POSTGRES_PASSWORD=ci-postgres-placeholder
+          REDIS_PASSWORD=ci-redis-placeholder
+          MINIO_ROOT_USER=cv-role-ci-minio
+          MINIO_ROOT_PASSWORD=ci-minio-placeholder
+          MINIO_ACCESS_KEY=cv-role-ci-minio
+          MINIO_SECRET_KEY=ci-minio-placeholder
+          MINIO_BUCKET=cv-role-ci
+          JWT_SECRET=ci-jwt-secret-at-least-32-characters-long
+          AI_API_KEY=ci-ai-placeholder
+          AI_BASE_URL=https://example.invalid/v1
+          AI_MODEL=ci-model
+          EMBEDDING_API_KEY=ci-embedding-placeholder
+          EMBEDDING_BASE_URL=https://example.invalid/v1
+          EMBEDDING_MODEL=ci-embedding-model
+          APP_CORS_ALLOWED_ORIGIN_PATTERNS=https://example.invalid
+          DEPLOY_DOMAIN=example.invalid
+          CERTBOT_EMAIL=ci@example.invalid
+          EOF
+          docker compose -f docker-compose.prod.yml --env-file "$RUNNER_TEMP/cv-role-production.env" config >/dev/null
+
+      - name: Build production backend image
+        run: docker build -f backend/Dockerfile -t cv-role-backend-ci .
+
+      - name: Build production frontend / Nginx image
+        run: docker build -f web/Dockerfile -t cv-role-web-ci .
+
   phase9-e2e:
     name: Phase 9 Browser E2E
     runs-on: ubuntu-latest

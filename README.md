@@ -117,10 +117,11 @@ cd web && npm run build
 ## 生产部署
 
 ```bash
-cp .env.production.example .env.production
-# 替换全部生产密码、域名、JWT 和 API Key
+cp .env.production.example .env
+# 替换全部生产密码、域名、JWT 和 API Key；生产 Compose 要求这些变量显式存在。
 
-docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
+docker compose -f docker-compose.prod.yml --env-file .env config
+docker compose -f docker-compose.prod.yml --env-file .env up -d --build
 ```
 
 部署、HTTPS、更新、备份和排障见 [docs/OPERATIONS.md](docs/OPERATIONS.md)。

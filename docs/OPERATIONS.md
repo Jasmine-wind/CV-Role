@@ -56,9 +56,9 @@ AI / Embedding API
 ├── deploy/
 │   └── nginx/
 │       └── conf.d/
-│           └── ai-resume.conf
+│           └── ai-resume.prod.conf.template
 ├── docker-compose.prod.yml
-├── .env
+├── .env                 # 唯一生产运行时环境文件（不提交 Git）
 ├── docs/
 └── README.md
 ```
@@ -70,14 +70,13 @@ postgres_data
 redis_data
 minio_data
 backend_logs
-nginx_logs
 certbot_www
 letsencrypt
 ```
 
 注意：
 
-- `.env` 只存在服务器本地，不提交 Git。
+- `.env` 是生产 Compose 和 `scripts/ops/` 的统一运行时环境文件，只存在服务器本地，不提交 Git。仓库中的 `.env.production.example` 仅是模板，部署时复制为 `.env`。
 - 真实 API Key、数据库密码、JWT Secret、MinIO 密钥都只放在服务器 `.env`。
 - 不要随意执行 `docker compose down -v`，否则可能删除数据库、MinIO 文件和证书数据。
 
@@ -137,6 +136,8 @@ APP_CORS_ALLOWED_ORIGIN_PATTERNS=https://resume.dawn04.xyz
 - 后端访问 MinIO 使用 `http://minio:9000`。
 - 前端通过 Nginx 同域名 `/api` 访问后端。
 - HTTPS 成功后，CORS 建议只保留 `https://resume.dawn04.xyz`。
+- 上传 contract 是应用文件 10 MB、multipart request 12 MB；Nginx 也限制为 12 MB，避免前端允许的 10 MB 文件被网关提前截断。
+- timeout chain 保持有界：AI 90 秒、Embedding 120 秒、Typst render 30 秒，Nginx `/api` read timeout 150 秒；分析主流程本身是异步任务，不靠延长网关 timeout 假造进度。
 - `AI_CREDENTIALS_ENABLED=false` 时数据库中即使存在 ACTIVE BYOK，新任务也使用 System Default；历史 BYOK Task 在需要再次调用 AI 时仍 fail closed。
 - 启用 BYOK 前，`AI_CREDENTIALS_KEY_RING` 必须使用 `keyId=base64url-32-byte-key;nextKeyId=...` 格式，且 `AI_CREDENTIALS_ACTIVE_KEY_ID` 必须存在于 key ring；配置错误会阻止后端启动。
 - 轮换主密钥时先同时部署旧 / 新 key 并切换 active key；应用会在 Credential 使用时重加密且不改变 `credential_revision`。确认数据库不再引用旧 `encryption_key_version` 后才能移除旧 key。
@@ -362,7 +363,8 @@ docker compose -f docker-compose.prod.yml --env-file .env up -d --build
 例如修改了：
 
 ```text
-deploy/nginx/conf.d/ai-resume.conf
+deploy/nginx/conf.d/ai-resume.prod.conf.template
+deploy/nginx/entrypoint/40-configure-production.sh
 ```
 
 先检查 Nginx 配置：
@@ -495,8 +497,11 @@ https://resume.dawn04.xyz
 Nginx 配置文件：
 
 ```text
-deploy/nginx/conf.d/ai-resume.conf
+deploy/nginx/conf.d/ai-resume.prod.conf.template
+deploy/nginx/entrypoint/40-configure-production.sh
 ```
+
+生产模板会在证书存在时启用 HTTPS 和 HTTP → HTTPS redirect；首次无证书时使用 HTTP fallback，以便完成 ACME challenge。
 
 证书目录：
 
@@ -531,7 +536,15 @@ curl -I http://resume.dawn04.xyz
 
 ---
 
-## 7. 证书续期
+## 7. 证书首次申请与续期
+
+首次部署没有证书时，Nginx 会安全地以 HTTP fallback 启动；申请成功后重启 Nginx，entrypoint 会切换到 HTTPS 配置：
+
+```bash
+docker compose -f docker-compose.prod.yml --env-file .env up -d --build nginx
+docker compose -f docker-compose.prod.yml --env-file .env --profile certbot run --rm certbot
+docker compose -f docker-compose.prod.yml --env-file .env restart nginx
+```
 
 测试证书续期：
 
@@ -541,7 +554,7 @@ cd /opt/ai-resume-optimizer
 docker compose -f docker-compose.prod.yml --env-file .env --profile certbot run --rm certbot renew --dry-run
 ```
 
-如果测试通过，可以配置 crontab：
+如果测试通过，可以配置 crontab（续期成功后重启 Nginx，使 entrypoint 重新读取证书）：
 
 ```bash
 crontab -e
@@ -740,9 +753,11 @@ ss -tulpn | grep ':443'
 backup-postgres.sh   PostgreSQL 备份
 restore-postgres.sh  PostgreSQL 恢复
 backup-minio.sh      MinIO 备份
+restore-minio.sh     MinIO 恢复（显式 target + confirm）
 backup-uploads.sh    local 存储目录备份
 restart-services.sh  Compose 服务重启
 show-logs.sh         汇总查看服务日志
+smoke-check.sh       无副作用在线检查
 ```
 
 执行前先阅读脚本参数并确认服务器目录、环境文件和目标备份位置。恢复脚本会修改数据，必须先做现状备份并在维护窗口执行。
@@ -752,7 +767,8 @@ show-logs.sh         汇总查看服务日志
 ```text
 .env
 docker-compose.prod.yml
-deploy/nginx/conf.d/ai-resume.conf
+deploy/nginx/conf.d/ai-resume.prod.conf.template
+deploy/nginx/entrypoint/40-configure-production.sh
 PostgreSQL 数据
 MinIO 文件
 ```
@@ -761,23 +777,102 @@ MinIO 文件
 
 ```bash
 mkdir -p /opt/ai-resume-optimizer/backups/config
+chmod 700 /opt/ai-resume-optimizer/backups/config
 
 cp /opt/ai-resume-optimizer/.env /opt/ai-resume-optimizer/backups/config/.env.$(date +%F)
 cp /opt/ai-resume-optimizer/docker-compose.prod.yml /opt/ai-resume-optimizer/backups/config/docker-compose.prod.yml.$(date +%F)
-cp /opt/ai-resume-optimizer/deploy/nginx/conf.d/ai-resume.conf /opt/ai-resume-optimizer/backups/config/ai-resume.conf.$(date +%F)
+cp /opt/ai-resume-optimizer/deploy/nginx/conf.d/ai-resume.prod.conf.template /opt/ai-resume-optimizer/backups/config/ai-resume.prod.conf.template.$(date +%F)
+cp /opt/ai-resume-optimizer/deploy/nginx/entrypoint/40-configure-production.sh /opt/ai-resume-optimizer/backups/config/40-configure-production.sh.$(date +%F)
+chmod 600 /opt/ai-resume-optimizer/backups/config/*
 ```
 
-备份 PostgreSQL：
-
-```bash
-mkdir -p /opt/ai-resume-optimizer/backups/postgres
-
-docker compose -f docker-compose.prod.yml --env-file .env exec postgres   sh -lc 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB"'   > /opt/ai-resume-optimizer/backups/postgres/ai_resume_$(date +%F).sql
-```
+PostgreSQL、MinIO 和 local uploads 的实际备份命令统一见下一节；不要绕过脚本直接重定向 `pg_dump`，否则会跳过对象数量、空文件和 checksum 验证。
 
 ---
 
-## 13. 部署验收清单
+## 13. 备份与恢复
+
+生产 Compose 和 `scripts/ops/` 默认读取 `.env`；可用 `ENV_FILE=/path/to/.env` 显式覆盖。备份目录默认是 Git 之外的 `backups/`，脚本使用 `umask 077` 并设置目录 / 文件权限。不要把 `.env`、dump、对象或日志复制到 issue 或聊天记录。
+
+PostgreSQL 备份脚本会验证 SQL 头、schema 对象、源库对象数量和 SHA-256 sidecar：
+
+```bash
+cd /opt/ai-resume-optimizer
+./scripts/ops/backup-postgres.sh
+```
+
+MinIO 备份通过 S3 API 镜像真实 bucket objects，不复制运行中的内部 `/data`；会生成 `objects/`、`METADATA` 和 `SHA256SUMS`：
+
+```bash
+./scripts/ops/backup-minio.sh
+```
+
+仅在 `APP_STORAGE_TYPE=local` 时额外备份本地 uploads：
+
+```bash
+./scripts/ops/backup-uploads.sh
+```
+
+恢复是 destructive operation。必须先取得当前备份，并在维护窗口明确指定 target 与确认开关。PostgreSQL 目标默认必须为空；脚本使用 `ON_ERROR_STOP` + 单事务，验证文件 / checksum / SQL 格式，并在恢复后验证数据库对象：
+
+```bash
+RESTORE_ALLOW_NONEMPTY=no \
+  ./scripts/ops/restore-postgres.sh \
+  backups/postgres/postgres-YYYY-MM-DD_HH-MM-SS.sql \
+  --target-database "$POSTGRES_DB" --confirm
+```
+
+MinIO 恢复会让目标 bucket 与备份镜像一致并删除目标中多余对象，因此必须显式指定 bucket：
+
+```bash
+./scripts/ops/restore-minio.sh \
+  backups/minio/minio-data-YYYY-MM-DD_HH-MM-SS \
+  --target-bucket cv-role-recovery-drill --confirm
+```
+
+恢复脚本先验证 manifest、对象数量和 checksum，再 mirror 到目标并重新读取对象验证 checksum。PostgreSQL metadata 与 MinIO object 共同构成简历事实，只恢复一边不算完成。所有 drill 使用临时数据库、临时 bucket 和 synthetic marker；禁止使用个人开发库、生产库或真实简历。
+
+每月至少执行一次 recovery drill：源测试数据库写入 marker、源测试 bucket 上传 fixture，分别备份，恢复到隔离 target，查询 `flyway_schema_history` 与核心表（以当前 migrations 为准），并比较对象 SHA-256。至少演练备份路径不存在和篡改 dump / manifest；两者都必须在写入 target 前 fail closed。
+
+## 14. 回滚、健康与容量
+
+每次部署前记录当前 SHA 和 known-good SHA：
+
+```bash
+git rev-parse HEAD
+docker compose -f docker-compose.prod.yml --env-file .env ps
+```
+
+code-only 回滚必须 checkout known-good commit、重新 build、通过 smoke check；不要只重启旧容器：
+
+```bash
+git checkout <known-good-sha>
+docker compose -f docker-compose.prod.yml --env-file .env up -d --build
+BASE_URL=https://resume.dawn04.xyz ./scripts/ops/smoke-check.sh
+```
+
+如果发布已运行 Flyway migration，不能简单 checkout 旧 SHA。迁移按 forward-only 处理；先保留当前 PostgreSQL + MinIO 配对备份，确认旧应用是否兼容当前 schema，必要时制定向前兼容修复或经批准后从完整备份恢复。生产不执行 `flyway clean` 或未经批准的 downgrade。
+
+基础 smoke check 不登录、不创建用户、不上传文件、不触发 AI：
+
+```bash
+BASE_URL=http://localhost ./scripts/ops/smoke-check.sh
+# 生产环境显式指定：BASE_URL=https://resume.dawn04.xyz ./scripts/ops/smoke-check.sh
+```
+
+检查服务、日志和容量：
+
+```bash
+docker compose -f docker-compose.prod.yml --env-file .env ps
+docker compose -f docker-compose.prod.yml --env-file .env logs --tail=200 backend nginx postgres redis minio
+df -h
+docker system df
+du -sh backups/* 2>/dev/null || true
+```
+
+Backend 文件日志有 Logback 14 天 / 1 GB 上限，Compose stdout/stderr 也设置了每容器 10 MB × 5 的 json-file 上限；Nginx 日志直接进入 Docker 日志。当前不自动删除旧备份，避免误删；保留策略应由 operator 先 dry-run 列出超过 30 天的文件并确认异地备份完整后再手动删除。
+
+## 15. 部署验收清单
 
 每次部署或更新后，至少检查：
 
@@ -798,7 +893,7 @@ docker compose -f docker-compose.prod.yml --env-file .env exec postgres   sh -lc
 
 ---
 
-## 14. Phase 9 非生产 Demo
+## 16. Phase 9 非生产 Demo
 
 Demo 是运维隔离环境，不是生产共享账号或 `DemoAccount` 领域模型。它使用合成普通 User、同一 JWT / ownership / Workspace / Typst / Storage 路径，以及确定性 in-process Provider；BYOK 和外部 AI 均关闭。
 
@@ -822,7 +917,7 @@ DEMO_RESET_CONFIRM=RESET_DEMO_ENVIRONMENT \
 
 AI Usage 原始 attempt metadata 由应用每日按默认 90 天 retention 清理；它不包含 Resume/JD/Prompt/Output/API Key/Provider URL，不能作为产品漏斗或用户行为历史。
 
-## 15. 当前正式入口
+## 17. 当前正式入口
 
 项目正式访问地址：
 

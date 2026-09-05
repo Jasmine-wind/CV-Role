@@ -1,4 +1,4 @@
-FROM maven:3.9.9-eclipse-temurin-21 AS build
+FROM maven@sha256:3a4ab3276a087bf276f79cae96b1af04f53731bec53fb2e651aca79e4b10211e AS build
 
 WORKDIR /workspace
 
@@ -7,7 +7,7 @@ COPY backend/src backend/src
 
 RUN mvn -f backend/pom.xml -DskipTests package
 
-FROM eclipse-temurin:21-jre-jammy AS runtime
+FROM eclipse-temurin@sha256:18d5699313d4ba48c1e2d46a56f7d9a760bac61eec826456e0bb675dc72edd76 AS runtime
 
 WORKDIR /app
 
