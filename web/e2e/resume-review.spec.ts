@@ -406,6 +406,20 @@ test.describe('Resume Review Workspace', () => {
     await expect(page.locator('.resume-review-workspace')).toBeHidden()
   })
 
+  test('does not open source preview when dirty review exit is cancelled', async ({ page }) => {
+    await mockReviewShell(page, [reviewResume, readyResume])
+    await page.route('**/api/resumes/2/review', (route) => route.fulfill(response(reviewPayload([fragmentItem]))))
+    await page.route('**/api/resumes/1/review', (route) => route.fulfill(response(reviewPayload([], 'READY', confirmedDocument))))
+    await openReview(page)
+    await page.locator('#resume-fragment-fragment-1').fill('尚未确认的内容')
+    await page.locator('.resume-source-trigger').filter({ hasText: 'product-analytics-ready' }).click()
+    await expect(page.getByText('还有未确认的修改，离开后这些修改不会保留。')).toBeVisible()
+    await page.getByRole('button', { name: '继续确认' }).click()
+    await expect(page.locator('.resume-review-workspace')).toBeVisible()
+    await expect(page.locator('.resume-source-preview')).toBeHidden()
+    await expect(page.locator('#resume-fragment-fragment-1')).toHaveValue('尚未确认的内容')
+  })
+
   test('clears a dirty review name when the final server response is READY', async ({ page }) => {
     await mockReviewShell(page)
     let listReady = false

@@ -29,6 +29,13 @@ describe('workspace evidence anchor', () => {
     const anchor = resolveWorkspaceEvidenceAnchor(makeRequirement(), makeDocument())
     expect(retainWorkspaceEvidenceAnchor(anchor, makeDocument([]))).toEqual({ ...anchor, bulletId: null })
   })
+  it('keeps the anchor when sections and entries are reordered', () => {
+    const base = makeDocument()
+    const section = base.sections[0]!
+    const anchor = resolveWorkspaceEvidenceAnchor(makeRequirement(), base)
+    const reordered: ResumeDocument = { ...base, sections: [{ ...section, entries: [...section.entries].reverse() }] }
+    expect(retainWorkspaceEvidenceAnchor(anchor, reordered)).toEqual(anchor)
+  })
   it('keeps section only for ambiguous quotes', () => {
     const anchor = resolveWorkspaceEvidenceAnchor(makeRequirement(3, '内容'), makeDocument([{ id: 'b1', text: '内容一' }, { id: 'b2', text: '内容二' }]))
     expect(anchor).toEqual({ requirementId: 3, sectionId: 'experience', bulletId: null })
