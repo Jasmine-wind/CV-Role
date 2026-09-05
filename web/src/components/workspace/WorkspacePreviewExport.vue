@@ -461,6 +461,7 @@ onBeforeUnmount(() => {
           class="preview-frame"
           title="简历 PDF 预览"
         />
+        <a v-if="previewUrl" class="preview-open-link" :href="previewUrl" target="_blank" rel="noopener">在新窗口打开 PDF</a>
         <div v-else class="preview-placeholder">
           <strong>预览将在这里显示</strong>
           <span>生成预览后，可以在导出前检查最终文档。</span>
@@ -644,6 +645,14 @@ onBeforeUnmount(() => {
   overflow: hidden;
   border-right: 1px solid var(--app-border-strong);
   background: var(--app-pdf-canvas);
+}
+
+.preview-open-link {
+  display: inline-block;
+  margin-top: var(--app-space-3);
+  color: var(--app-primary-active);
+  font-size: var(--app-font-size-sm);
+  font-weight: 700;
 }
 
 .preview-frame {
@@ -990,8 +999,8 @@ onBeforeUnmount(() => {
 
 @media (max-width: 640px) {
   .preview-document {
-    height: min(72dvh, 640px);
-    min-height: 480px;
+    height: min(64dvh, 560px);
+    min-height: 360px;
   }
 
   .preview-inspector-section {

@@ -44,8 +44,15 @@ const unwrapResponse = <T>(response: AxiosResponse<ApiResult<T>>) => {
   const result = response.data
 
   if (result.code !== 200) {
+    // 认证失败和服务端故障使用稳定的用户文案，避免把后端内部详情泄露到登录 / 注册表单。
+    const isAuthEndpoint = response.config.url?.includes('/api/auth/') === true
+    const message = isAuthEndpoint && result.code === 401
+      ? '用户名或密码错误，请检查后重试。'
+      : isAuthEndpoint && result.code >= 500
+        ? '服务器暂时无法处理请求，请稍后重试'
+        : (result.message || '请求失败')
     // 附带业务码（如 409 revision 失效），调用方可据此做失效处理而不是只提示。
-    const apiError = new Error(result.message || '请求失败') as Error & { code?: number }
+    const apiError = new Error(message) as Error & { code?: number }
     apiError.code = result.code
     throw apiError
   }
@@ -79,6 +86,14 @@ service.interceptors.response.use(undefined, (error: AxiosError<ApiResult<unknow
 })
 
 const resolveErrorMessage = (error: AxiosError<ApiResult<unknown>>) => {
+  const status = error.response?.status
+  const code = error.response?.data?.code
+  if (status === 401 || code === 401) {
+    return '用户名或密码错误，请检查后重试。'
+  }
+  if ((status !== undefined && status >= 500) || (code !== undefined && code >= 500)) {
+    return '服务器暂时无法处理请求，请稍后重试'
+  }
   const serverMessage = error.response?.data?.message
   if (serverMessage) {
     return serverMessage

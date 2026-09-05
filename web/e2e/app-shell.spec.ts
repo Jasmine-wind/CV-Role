@@ -21,6 +21,7 @@ const mockAuthenticatedShell = async (page: Page) => {
   await page.route('**/api/job-direction-insights', (route) =>
     route.fulfill(response({ cohorts: [] })),
   )
+  await page.route('**/api/optimization-tasks/recent*', (route) => route.fulfill(response([])))
   await page.route('**/api/settings/ai-provider', (route) =>
     route.fulfill(
       response({

@@ -80,6 +80,50 @@ test.describe('auth pages', () => {
     await expect(page.getByText('internal auth detail')).toHaveCount(0)
   })
 
+  test('classifies login network and server failures separately', async ({ page }) => {
+    await page.route('**/api/auth/login', (route) => route.abort('failed'))
+    await page.goto('/login')
+    await page.getByPlaceholder('请输入用户名或邮箱').fill('polish-user')
+    await page.getByPlaceholder('请输入密码').fill('wrong-password')
+    await page.getByPlaceholder('请输入密码').press('Enter')
+    await expect(page.locator('.auth-form-error')).toHaveText('当前无法连接服务，请检查网络后重试')
+
+    await page.unroute('**/api/auth/login')
+    await page.route('**/api/auth/login', (route) => route.fulfill({
+      status: 500, contentType: 'application/json',
+      body: JSON.stringify({ code: 500, message: 'internal server detail', data: null }),
+    }))
+    await page.getByPlaceholder('请输入密码').press('Enter')
+    await expect(page.locator('.auth-form-error')).toHaveText('服务器暂时无法处理请求，请稍后重试')
+    await expect(page.getByText('internal server detail')).toHaveCount(0)
+  })
+
+  test('classifies registration business, network and server failures without developer wording', async ({ page }) => {
+    await page.route('**/api/auth/register', (route) => route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({ code: 409, message: '邮箱已注册', data: null }),
+    }))
+    await page.goto('/register')
+    await page.getByPlaceholder('请输入用户名').fill('new-user')
+    await page.getByPlaceholder('请输入邮箱').fill('new@example.com')
+    await page.getByPlaceholder('请输入密码').fill('safe-password')
+    await page.getByPlaceholder('不填写也可以').press('Enter')
+    await expect(page.locator('.auth-form-error')).toHaveText('邮箱已注册')
+
+    await page.unroute('**/api/auth/register')
+    await page.route('**/api/auth/register', (route) => route.abort('failed'))
+    await page.getByPlaceholder('不填写也可以').press('Enter')
+    await expect(page.locator('.auth-form-error')).toHaveText('当前无法连接服务，请检查网络后重试')
+
+    await page.unroute('**/api/auth/register')
+    await page.route('**/api/auth/register', (route) => route.fulfill({
+      status: 500, contentType: 'application/json',
+      body: JSON.stringify({ code: 500, message: 'internal register detail', data: null }),
+    }))
+    await page.getByPlaceholder('不填写也可以').press('Enter')
+    await expect(page.locator('.auth-form-error')).toHaveText('服务器暂时无法处理请求，请稍后重试')
+  })
+
   test('registers and returns to login, with the optional nickname visually secondary', async ({ page }) => {
     await page.route('**/api/auth/register', (route) => route.fulfill(result({ userId: 8 })))
     await page.goto('/register')
@@ -179,7 +223,7 @@ test.describe('AI settings', () => {
     await page.getByLabel('API 密钥').fill('secret-key')
     await page.getByRole('button', { name: '保存配置' }).click()
     await expect(page.getByText('保存配置失败', { exact: true })).toBeVisible()
-    await expect(page.locator('.settings-configuration').getByText('save failed', { exact: true })).toBeVisible()
+    await expect(page.locator('.settings-configuration').getByText('服务器暂时无法处理请求，请稍后重试', { exact: true })).toBeVisible()
   })
 
   test('confirms deletion and returns to the system AI state', async ({ page }) => {
@@ -298,6 +342,7 @@ test.describe('job direction insights', () => {
     }))
     await page.reload()
     await expect(page.getByText('方向洞察加载失败')).toBeVisible()
-    await expect(page.getByText('service unavailable')).toBeVisible()
+    await expect(page.getByText('服务器暂时无法处理请求，请稍后重试')).toBeVisible()
+    await expect(page.getByText('service unavailable')).toHaveCount(0)
   })
 })

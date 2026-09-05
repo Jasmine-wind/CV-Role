@@ -102,6 +102,37 @@ class OptimizationTaskServiceImplTest {
     }
 
     @Test
+    void listRecentReturnsUserOwnedTaskViewsInMapperOrder() {
+        OptimizationTask first = task("SUCCESS");
+        first.setId(51L);
+        first.setUpdatedAt(java.time.LocalDateTime.of(2026, 1, 2, 10, 0));
+        OptimizationTask second = task("RUNNING");
+        second.setId(50L);
+        second.setUpdatedAt(java.time.LocalDateTime.of(2026, 1, 1, 10, 0));
+        when(optimizationTaskMapper.selectList(any())).thenReturn(java.util.List.of(first, second));
+        when(optimizationTaskMapper.selectOne(any())).thenReturn(first, second);
+        when(jobTargetMapper.selectOne(any())).thenReturn(jobTarget());
+
+        java.util.List<OptimizationTaskVO> result = service.listRecent(1L, 5);
+
+        assertThat(result).extracting(OptimizationTaskVO::getOptimizationTaskId)
+                .containsExactly(51L, 50L);
+        assertThat(result).extracting(OptimizationTaskVO::getStatus)
+                .containsExactly("SUCCESS", "RUNNING");
+        verify(optimizationTaskMapper).selectList(any());
+    }
+
+    @Test
+    void listRecentBoundsRequestedLimitBeforeBuildingQuery() {
+        when(optimizationTaskMapper.selectList(any())).thenReturn(java.util.List.of());
+
+        service.listRecent(1L, 0);
+        service.listRecent(1L, 99);
+
+        verify(optimizationTaskMapper, org.mockito.Mockito.times(2)).selectList(any());
+    }
+
+    @Test
     void createShouldDeriveTargetedVersionWithoutChangingSourceResume() {
         OptimizationTaskVO result = service.create(
                 1L,

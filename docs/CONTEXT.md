@@ -123,7 +123,7 @@ Preview 与 Export 是同步渲染：只读取服务端已保存的 TARGET `stru
 - 缺少事实时向用户询问并记录真实补充 / 确认；Slice A 已实现解析层最小确认流（未决候选的接受 / 编辑 / 删除），更完整的事实补充仍属后续。
 - 用户 Profile / Rules 与平台策略的完整分层；Phase 5 只有平台默认策略和本次自定义要求。
 - Markdown / JSON 迁移导出仍属后续 P1；不属于 Phase 6。
-- 用户数据导出 / 全量删除和最近优化列表。
+- 用户数据导出 / 全量删除仍未实现。Home 已提供最近优化列表，可继续成功任务或重试失败任务。Resume Review 会在当前会话保留未确认的本地 candidate 草稿，离开前需要显式放弃；Workspace 当前 Requirement 的 Evidence navigation anchor 在 TARGET 文本编辑和 autosave 中保持稳定，仅在切换 Requirement 或目标 ID 消失时更新。
 
 Phase 1–9 已正式完成；后续能力仍须依 `PLAN.md` 和新的产品决策推进，当前没有批准或创建 Phase 10。
 
@@ -133,13 +133,13 @@ Phase 1–9 已正式完成；后续能力仍须依 `PLAN.md` 和新的产品决
 - V19 / V20 的新增表尚未经过生产规模数据验证；V20.1 会原位改变正式枚举和列语义，旧 Phase 3 应用不能运行在迁移后 Schema 上，部署必须同步升级应用与 Flyway 并遵循备份流程。
 - Workspace 已有真实 PostgreSQL + Playwright 双页面 CAS conflict / 本地草稿恢复覆盖；更大规模多线程争用与数据库故障注入仍未做压力验证。
 - Workspace 转换器对未知 / 错误类型、超限内容和无法完整转换的旧快照会整体 fail closed；少量旧数据可能需要重新解析，不能用不完整投影覆盖 TARGET。
-- 初始 Workspace 元素 ID 按位置派生，只对同一冻结快照的重复转换稳定，并非语义或内容寻址 ID；Restore 会恢复基线位置 ID。当前 Phase 5 还绑定 revision、草稿序号和原文哈希，未来功能不得只凭元素 ID 判断候选仍有效。
+- 初始 Workspace 元素 ID 按位置派生，只对同一冻结快照的重复转换稳定，并非语义或内容寻址 ID；Restore 会恢复基线位置 ID。Workspace 的当前 Evidence 导航 anchor 只在建立时使用 section label / evidence quote 定位，后续只按 sectionId / bulletId 验证存活，不随 TARGET 文本或 autosave 重新匹配。当前 Phase 5 还绑定 revision、草稿序号和原文哈希，未来功能不得只凭元素 ID 判断候选仍有效。
 - 正式 Evidence 目前只保存 SOURCE 版本、section label 和逐字 quote，没有 Workspace 元素 ID 或字符范围。当前单 Bullet 手动选择绕开了该缺口，但可靠的“查看原文”、从建议跳转到编辑位置和更细来源追踪仍缺正式锚点模型。
 - 正式证据分析依赖 JD 结构化解析质量；解析失败或信息不足时只能返回少量要求或整体失败，不能猜测补全。推理型模型还需要足够输出 token，切换模型或 Provider 时必须重新验证额度。
 - 旧表、接口和服务仍被解析、历史读取、删除和兼容重试依赖，当前不能直接删除。删除 Resume / JobDescription 的级联影响和可能残留的源快照仍需在统一数据生命周期阶段核对。
 - RewriteFactValidator 已从有限危险词拒绝收紧为保守的可证明安全子集：完整 Latin token、数字—单位—对象关系、否定极性、能力程度、责任层级、成果 / 因果、时间 / 范围、Unicode 控制字符及未知中文事实片段无法由当前 Bullet 原文确定支持时一律拒绝。该实现有意允许误拒，用户仍可手工编辑；不得用第二次 LLM、Embedding 或相似度判断放宽真实性门禁。
 - AI Suggest 是同步请求，当前无限流；服务端 AI 默认超时 30 秒、前端请求超时 65 秒。生成窗口内的并发编辑通过候选失效和 CAS 防止落库覆盖，但后续运维仍可评估频控。
-- 首页进行中任务恢复主要依赖会话中保存的任务引用，尚无“最近优化”列表；正式任务本身可按 ID 跨设备查询。
+- 首页进行中的任务仍可通过会话引用恢复；已完成的任务由 Home 最近优化列表按 updatedAt / id 倒序展示，可跨设备继续成功任务或重试失败任务。
 - 前端主 chunk 曾超过 Vite 500 kB 提示阈值；Phase 8 已通过 Element Plus 按需引入 + 路由懒加载消除（入口 chunk 约 160 kB，组件样式随路由分块加载）。
 - 结构化编辑器曾因对响应式 Proxy 调用 structuredClone 导致手工编辑崩溃；已改为与 useWorkspaceEditor 一致的 JSON 克隆并有组件回归测试。
 - 本机开发环境的 DNS 被 VPN 工具劫持为 198.18/15 fake-ip，会被 Phase 7 pinned transport 合法拒绝（UNSAFE_BASE_URL，fail-closed 预期行为）；本地 E2E 需通过 `jdk.net.hosts.file` 提供真实公网 IP 后才能完成真实 Provider 调用。

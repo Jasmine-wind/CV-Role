@@ -1,45 +1,46 @@
-# CV-Role / AI Resume Optimizer
+# CV Role
 
-面向真实求职场景的岗位定向简历优化系统。当前已实现 V2 Phase 1–9：用户选择或上传真实简历、粘贴目标岗位 JD 后即可完成证据分析，在工作区可控编辑，并通过真实 Typst Preview 导出岗位定向 PDF；高级用户可在设置中选择账户级 BYOK。
+基于真实简历证据的岗位定向简历优化系统。
 
-> Phase 1–9 均已通过独立 Final Gate。Phase 9 完成了只读 Multi-JD Insight、最小 Observability、真实 PostgreSQL/Flyway + MinIO + fake Provider + Playwright E2E，以及非生产 Demo；未创建或批准 Phase 10。真实现状与差距见 [docs/CONTEXT.md](docs/CONTEXT.md)。
+CV Role 接收用户已有简历和目标岗位 JD，将岗位要求与简历中的真实材料建立可追溯关系，在不编造经历、技能、数字或成果的前提下，完成岗位版本编辑、AI 单条建议、PDF 预览与导出。
 
+## 核心流程
 
-## 当前已实现
-
-- 注册、登录、JWT 鉴权和用户资源隔离
-- PDF / DOC / DOCX 上传，上传后自动触发文本提取、清洗和结构化准备
-- 首页选择简历、粘贴目标岗位 JD 并一键开始岗位分析
-- 后台自动保存和解析 JD、准备旧简历并生成正式 Evidence / Gap 分析
-- 独立 SOURCE / TARGETED 简历版本、JobTarget、OptimizationTask 和冻结输入 / 配置快照
-- 面向用户语言的已有优势、建议完善和当前材料未体现结果页
-- 两栏优化工作区、结构化编辑、Undo / Redo、自动保存、并发冲突处置和恢复优化前版本
-- 单 Bullet AI Suggest、代码 Diff、Apply / Reject / Regenerate 和事实闭包校验
-- Classic / Modern / Minimal 内置模板、真实 Typst PDF Preview、导出前检查与私有 ExportArtifact 生命周期
-- Landing、首页、分析、工作区与 AI 设置的统一信息层级，以及可恢复的 Loading / Error / Empty / 保存状态
-- 可恢复的异步任务状态查询；旧诊断、建议、局部改写和报告能力仍保留用于兼容
-- 可选账户级 OpenAI-compatible BYOK、加密 Credential、任务级 AI Selection Snapshot 与最小 Usage ledger（独立事务、Task attribution、90 天 retention）
-- 达到样本门槛后可从首页查看只读的多 JD 岗位方向洞察；不改变单 JD 主链或创建能力事实
-- 真实 PostgreSQL/Flyway integration、确定性 fake Provider 与 Playwright Chromium 恢复型 E2E
-- 专用、非生产、普通 User 路径的 Demo Compose / 合成 seed / 显式确认 reset 工具
-- OpenAI-compatible Chat / Platform-only Embedding 接入，pgvector 语义检索
-- PostgreSQL、Redis、MinIO、本地文件存储和 Flyway 迁移
-- Vue 3 前端、Docker Compose、Nginx、HTTPS 和运维脚本
-
-当前用户主链路：
-
-```text
-注册 / 登录
-→ 选择或上传简历（后台自动准备）
-→ 粘贴目标岗位 JD
-→ 开始分析
-→ 查看已有优势、建议完善的材料和当前材料未体现的要求
-→ 进入优化工作区人工编辑，或请求单 Bullet AI 建议
-→ 查看 Diff 后显式采纳或拒绝，采纳内容自动保存
-→ 选择模板预览 PDF 并导出可投递版本
+```mermaid
+flowchart LR
+  A[上传简历] --> B[内容确认]
+  B --> C[目标岗位 JD]
+  C --> D[岗位要求]
+  D --> E[Evidence 核对]
+  E --> F[Workspace 编辑]
+  F --> G[AI 单条建议]
+  G --> H[Diff / Apply]
+  H --> I[PDF Preview]
+  I --> J[Export]
 ```
 
-一级导航仅保留“首页”和“我的简历”。正式 Evidence / Gap、Workspace、单 Bullet 受约束改写与 Typst Preview / PDF 导出均已完成。
+完成的岗位任务会进入“最近优化”，用户可以重新打开历史岗位版本继续工作。
+
+## 为什么不是全文 AI 简历生成器
+
+- **全文生成 → 单 Bullet Suggest**：建议限定在用户明确选择的一条内容。
+- **直接覆盖 → Diff + Explicit Apply**：用户先审阅变化，再明确采纳。
+- **只靠 Prompt 约束 → 代码 Fact Validator**：候选内容还要通过事实闭包校验。
+- **修改原简历 → SOURCE / TARGETED 分离**：岗位版本不会静默污染来源简历。
+- **前端草稿直接导出 → Saved Revision + Preview Receipt**：预览和导出只消费服务端已保存版本。
+- **简单生成 PDF → PDF Quality Gate**：导出前检查联系方式、排版边界、页结构和可读性。
+
+## 当前能力
+
+- 注册、登录、JWT 鉴权与用户资源隔离
+- PDF / DOC / DOCX 简历上传、内容准备与必要的人工确认
+- 岗位要求与冻结简历材料之间的 Evidence / Gap 分析
+- Resume Review、SOURCE / TARGETED 版本、岗位任务与冻结输入快照
+- 工作区结构化编辑、自动保存、Undo / Redo 与 CAS 并发冲突处理
+- 单 Bullet AI 建议、Diff、Apply / Reject / Regenerate 与事实闭包校验
+- 最近优化列表：可继续已完成任务，或重新分析失败任务
+- Typst PDF Preview、导出前检查、私有导出物生命周期与历史记录
+
 
 ## 技术栈
 
@@ -112,7 +113,7 @@ cd backend && ./mvnw test
 cd web && npm run build
 ```
 
-后端测试使用 PostgreSQL/Flyway 与独立 MinIO lifecycle profile；CI 还运行 deterministic fake Provider 的 Chromium E2E。Phase 9 Demo 仅可通过 `deploy/demo/` 的独立环境启动，详见 [docs/OPERATIONS.md](docs/OPERATIONS.md)。
+后端测试使用 PostgreSQL/Flyway 与独立 MinIO lifecycle profile；CI 还运行 deterministic fake Provider 的 Chromium E2E。部署、备份和运行约束见 [docs/OPERATIONS.md](docs/OPERATIONS.md)。
 
 ## 生产部署
 

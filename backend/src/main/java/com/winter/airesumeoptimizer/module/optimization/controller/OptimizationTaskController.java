@@ -15,6 +15,7 @@ import com.winter.airesumeoptimizer.security.AuthenticatedUser;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Positive;
 import org.springframework.security.core.Authentication;
 import org.springframework.validation.annotation.Validated;
@@ -54,7 +55,7 @@ public class OptimizationTaskController {
     @GetMapping("/recent")
     @Operation(summary = "读取最近岗位优化")
     public Result<java.util.List<OptimizationTaskVO>> recent(
-            @RequestParam(defaultValue = "5") @Positive(message = "limit 必须大于 0") Integer limit,
+            @RequestParam(defaultValue = "5") @Positive(message = "limit 必须大于 0") @Max(value = 20, message = "limit 不能超过 20") Integer limit,
             Authentication authentication) {
         AuthenticatedUser user = (AuthenticatedUser) authentication.getPrincipal();
         return Result.success(optimizationTaskService.listRecent(user.getUserId(), limit));

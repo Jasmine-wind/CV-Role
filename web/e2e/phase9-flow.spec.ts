@@ -145,7 +145,21 @@ test('happy path: upload, analysis, workspace, deterministic suggestion, preview
   await previewAndExportAll(page, testInfo, 'mixed')
 })
 
-test('standard and legal two-page fixtures export all templates', async ({ page, browser }, testInfo) => {
+test('returning user can reopen the same optimization from recent tasks', async ({ page }) => {
+  await registerAndLogin(page)
+  await uploadAndStartAnalysis(page, englishPlatformJobDescription, mixedFixture)
+  await waitForAnalysis(page)
+  const taskId = new URL(page.url()).pathname.split('/').pop()
+  await openWorkspaceWithSavedDraft(page)
+  await page.goto('/app')
+  await expect(page.getByRole('heading', { name: '最近优化' })).toBeVisible({ timeout: 15_000 })
+  const recentTask = page.locator('.recent-task').first()
+  await expect(recentTask).toContainText('继续')
+  await recentTask.getByRole('button', { name: '继续' }).click()
+  await expect(page).toHaveURL(new RegExp(`/job-analysis/${taskId}$`))
+})
+
+test('standard and legal two-page fixtures export all templates', async ({ page, browser }, testInfo: TestInfo) => {
   await registerAndLogin(page)
   await uploadAndStartAnalysis(page, chineseJavaJobDescription, standardFixture)
   await waitForAnalysis(page)
@@ -341,6 +355,10 @@ test.describe('narrow viewport', () => {
     ).toBeVisible({ timeout: 45_000 })
     const frame = page.getByTitle('简历 PDF 预览')
     await expect(frame).toBeVisible({ timeout: 45_000 })
+    const openPdf = page.getByRole('link', { name: '在新窗口打开 PDF' })
+    await expect(openPdf).toBeVisible()
+    await expect(openPdf).toHaveAttribute('target', '_blank')
+    await expect(openPdf).toHaveAttribute('href', /blob:/)
     const narrowShell = await page.evaluate(() => ({
       clientWidth: document.documentElement.clientWidth,
       scrollWidth: document.documentElement.scrollWidth,

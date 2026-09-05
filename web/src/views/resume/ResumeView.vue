@@ -114,7 +114,8 @@ const openUploadFromEmpty = async () => {
 }
 
 const openUploadFromReview = async () => {
-  await closeReview(false)
+  const closed = await closeReview(false)
+  if (!closed) return
   uploadOpen.value = true
   await nextTick()
   uploadPanel.value?.scrollIntoView({ behavior: 'auto', block: 'start' })
@@ -314,7 +315,10 @@ const loadSourcePreview = async (resumeId: number) => {
 const openSourcePreview = async (resume: ResumeListItem) => {
   if (!canOpenSource(resume)) return
   sourcePreviewTrigger.value = document.activeElement instanceof HTMLElement ? document.activeElement : null
-  if (reviewResumeId.value !== null) await closeReview(false)
+  if (reviewResumeId.value !== null) {
+    const closed = await closeReview(false)
+    if (!closed) return
+  }
   displayNameEditingId.value = null
   sourcePreviewId.value = resume.id
   sourcePreviewDocument.value = null
@@ -368,7 +372,8 @@ const saveDisplayName = async (resume: ResumeListItem) => {
 }
 
 const finishReview = async (resumeId: number) => {
-  await closeReview(false)
+  const closed = await closeReview(false)
+  if (!closed) return
   await loadResumes()
   await nextTick()
   focusReviewRow(resumeId)

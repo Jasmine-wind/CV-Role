@@ -46,6 +46,7 @@ async function mockHome(
   })))
   await page.route('**/api/resumes', (route) => route.fulfill(response(resumes)))
   await page.route('**/api/job-direction-insights', (route) => route.fulfill(response(insights)))
+  await page.route('**/api/optimization-tasks/recent*', (route) => route.fulfill(response([])))
 }
 
 test.describe('Job Target Composer', () => {

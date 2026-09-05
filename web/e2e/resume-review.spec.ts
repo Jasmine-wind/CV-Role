@@ -374,6 +374,57 @@ test.describe('Resume Review Workspace', () => {
     await expect.poll(() => page.evaluate(() => document.activeElement?.getAttribute('data-resume-row'))).toBe('2')
   })
 
+  test('preserves a dirty candidate while a different candidate resolves', async ({ page }) => {
+    await mockReviewShell(page)
+    await page.route('**/api/resumes/2/review', (route) => route.fulfill(response(reviewPayload([fragmentItem, contactItem]))))
+    await page.route('**/api/resumes/2/review/resolve', async (route) => {
+      await route.fulfill(response(reviewPayload([fragmentItem])))
+    })
+    await openReview(page)
+
+    const fragmentEditor = page.locator('#resume-fragment-fragment-1')
+    await fragmentEditor.fill('用户修改后的候选 A')
+    await page.getByText('查看全部待确认内容', { exact: true }).click()
+    await page.getByRole('button', { name: /邮箱/ }).click()
+    await page.getByRole('button', { name: '保留这项联系方式' }).click()
+    await expect(page.getByRole('heading', { name: '未归类内容' })).toBeVisible()
+    await expect(fragmentEditor).toHaveValue('用户修改后的候选 A')
+  })
+
+  test('keeps the review open when a dirty draft leaves through the close guard', async ({ page }) => {
+    await mockReviewShell(page)
+    await page.route('**/api/resumes/2/review', (route) => route.fulfill(response(reviewPayload([fragmentItem]))))
+    await openReview(page)
+    await page.locator('#resume-fragment-fragment-1').fill('尚未确认的内容')
+    await page.getByRole('button', { name: '收起' }).click()
+    await expect(page.getByText('还有未确认的修改，离开后这些修改不会保留。')).toBeVisible()
+    await page.getByRole('button', { name: '继续确认' }).click()
+    await expect(page.locator('.resume-review-workspace')).toBeVisible()
+    await expect(page.locator('#resume-fragment-fragment-1')).toHaveValue('尚未确认的内容')
+    await page.getByRole('button', { name: '收起' }).click()
+    await page.getByRole('button', { name: '放弃修改' }).click()
+    await expect(page.locator('.resume-review-workspace')).toBeHidden()
+  })
+
+  test('clears a dirty review name when the final server response is READY', async ({ page }) => {
+    await mockReviewShell(page)
+    let listReady = false
+    await page.unroute('**/api/resumes')
+    await page.route('**/api/resumes', (route) => route.fulfill(response(listReady ? [readyResume] : [reviewResume])))
+    await page.route('**/api/resumes/2/review', (route) => route.fulfill(response(reviewPayload([fragmentItem], 'NEEDS_REVIEW', '{"basics":{"name":""}}'))))
+    await page.route('**/api/resumes/2/review/resolve', async (route) => {
+      listReady = true
+      await route.fulfill(response(reviewPayload([], 'READY', JSON.stringify({ schemaVersion: 'RESUME_DOCUMENT_V1', basics: { name: '用户改名', contacts: [] }, sections: [] }))))
+    })
+    await openReview(page)
+
+    await page.locator('#resume-review-name-fragment-1').fill('用户改名')
+    await page.locator('#resume-fragment-fragment-1').fill('确认后的内容')
+    await page.getByRole('button', { name: '保留这段内容' }).click()
+    await expect(page.locator('.resume-review-workspace')).toBeHidden()
+    await expect(page.locator('.resume-library-row')).toContainText('可用于岗位分析')
+  })
+
   test('keeps edited candidate content after resolve failure and offers retry', async ({ page }) => {
     await mockReviewShell(page)
     await page.route('**/api/resumes/2/review', (route) => route.fulfill(response(reviewPayload([fragmentItem]))))

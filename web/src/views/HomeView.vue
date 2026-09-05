@@ -662,8 +662,9 @@ onUnmounted(() => {
 
     <section class="home-recent-section" aria-labelledby="recent-title">
       <h2 id="recent-title">最近优化</h2>
-      <p v-if="recentTasksFailed">暂时无法读取最近优化 <button type="button" @click="loadRecentTasks">重新加载</button></p>
-      <p v-else-if="!recentTasksLoading && !recentTasks.length">还没有岗位优化记录。完成第一次岗位分析后，可以从这里继续之前的工作。</p>
+      <p v-if="recentTasksLoading">正在读取最近优化…</p>
+      <p v-else-if="recentTasksFailed">暂时无法读取最近优化 <button type="button" @click="loadRecentTasks">重新加载</button></p>
+      <p v-else-if="!recentTasks.length">还没有岗位优化记录。完成第一次岗位分析后，可以从这里继续之前的工作。</p>
       <article v-for="task in recentTasks" :key="task.optimizationTaskId" class="recent-task">
         <div><strong>{{ task.jobTitle || '未命名岗位' }}</strong><span>{{ task.resumeName }} · {{ taskTime(task.updatedAt || task.createdAt) }}</span><small>{{ taskStatusLabel(task.status) }}</small></div>
         <el-button v-if="task.status === 'SUCCESS'" link type="primary" @click="router.push({ name: 'job-analysis', params: { optimizationTaskId: task.optimizationTaskId } })">继续</el-button>
@@ -1028,6 +1029,61 @@ onUnmounted(() => {
   gap: var(--app-space-2);
 }
 
+.home-recent-section {
+  display: grid;
+  gap: var(--app-space-3);
+  border-bottom: 1px solid var(--app-border);
+  padding: var(--app-space-4) 0;
+}
+
+.home-recent-section h2 {
+  margin: 0;
+  color: var(--app-text);
+  font-size: var(--app-font-size-md);
+}
+
+.home-recent-section > p {
+  margin: 0;
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-size-sm);
+}
+
+.home-recent-section > p button {
+  border: 0;
+  padding: 0;
+  color: var(--app-primary-active);
+  font: inherit;
+  font-weight: 700;
+  background: transparent;
+  cursor: pointer;
+}
+
+.recent-task {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--app-space-4);
+  min-width: 0;
+  border-top: 1px solid var(--app-border-soft);
+  padding: var(--app-space-3) 0;
+}
+
+.recent-task > div {
+  display: grid;
+  min-width: 0;
+  gap: var(--app-space-1);
+}
+
+.recent-task strong,
+.recent-task span,
+.recent-task small {
+  overflow-wrap: anywhere;
+}
+
+.recent-task strong { color: var(--app-text); font-size: var(--app-font-size-md); }
+.recent-task span { color: var(--app-text-secondary); font-size: var(--app-font-size-sm); }
+.recent-task small { color: var(--app-text-muted); font-size: var(--app-font-size-xs); }
+
 .home-library-link,
 .home-insight-row {
   display: flex;
@@ -1091,9 +1147,14 @@ onUnmounted(() => {
 
   .home-task-bar,
   .home-library-link,
-  .home-insight-row {
+  .home-insight-row,
+  .recent-task {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .recent-task .el-button {
+    align-self: flex-start;
   }
 
   .home-start-actions-buttons {
