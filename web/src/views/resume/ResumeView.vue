@@ -256,6 +256,8 @@ const focusReviewRow = (resumeId: number) => {
 }
 
 const clearReviewState = () => {
+  dirtyReviewItemIds.value.clear()
+  reviewNameDirty.value = false
   reviewResumeId.value = null
   reviewItems.value = []
   activeReviewItemId.value = null
@@ -268,11 +270,11 @@ const clearReviewState = () => {
   lastReviewAction.value = null
 }
 
-const closeReview = async (restoreFocus = true) => {
+const closeReview = async (restoreFocus = true): Promise<boolean> => {
   if (dirtyReviewItemIds.value.size || reviewNameDirty.value) {
     try {
       await ElMessageBox.confirm('还有未确认的修改，离开后这些修改不会保留。', '确认离开？', { confirmButtonText: '放弃修改', cancelButtonText: '继续确认', type: 'warning' })
-    } catch { return }
+    } catch { return false }
   }
   const resumeId = reviewResumeId.value
   const trigger = reviewTrigger.value
@@ -283,6 +285,7 @@ const closeReview = async (restoreFocus = true) => {
     if (trigger?.isConnected) trigger.focus()
     else if (resumeId !== null) focusReviewRow(resumeId)
   }
+  return true
 }
 
 const readCanonicalDocument = (value: string | null) => {
@@ -380,6 +383,9 @@ const applyReview = async (resumeId: number, payload: ResumeReviewResolveRequest
       ...(reviewName.value.trim() ? { name: reviewName.value.trim() } : {}),
     })
     lastReviewAction.value = null
+    const serverName = parseDraft<Partial<ResumeDocument>>(review.canonicalDocument ?? '{}').basics?.name?.trim() ?? ''
+    if (reviewNameDirty.value && serverName === reviewName.value.trim()) reviewNameDirty.value = false
+    dirtyReviewItemIds.value.delete(payload.itemId)
     updateReviewState(review, payload.itemId)
     if (review.qualityStatus === 'READY' && reviewItems.value.length === 0) {
       ElMessage.success('确认完成，简历已可用于岗位分析')
