@@ -25,7 +25,7 @@ export interface BulletSuggestionCandidate {
   sequence: number
   originalText: string
   suggestedText: string
-  reason: string
+  reason: string | null
   reviewCode: string | null
   reviewMessage: string | null
   modelName: string | null
@@ -214,7 +214,7 @@ export function useBulletSuggest(
           sequence: binding.sequence,
           originalText: binding.originalText,
           suggestedText: result.suggestedText,
-          reason: result.reason ?? '',
+          reason: result.reason,
           reviewCode: result.reviewCode,
           reviewMessage: result.reviewMessage,
           modelName: result.modelName,

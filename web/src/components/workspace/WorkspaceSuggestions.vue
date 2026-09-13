@@ -21,9 +21,13 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   retryLoad: []
-  focusContext: []
+  focusContext: [requirementEvidenceId: number]
   close: []
 }>()
+
+const focusEvidence = (requirementEvidenceId: number) => {
+  emit('focusContext', requirementEvidenceId)
+}
 
 const requirements = computed(() => props.result?.evidenceAnalysis?.requirements ?? [])
 const sortedRequirements = computed(() => sortEvidenceRequirements(requirements.value))
@@ -185,7 +189,7 @@ const activeBulletText = computed(() => {
                 type="button"
                 class="evidence-item"
                 :class="{ 'is-primary': index === 0 }"
-                @click="emit('focusContext')"
+                @click="focusEvidence(evidence.requirementEvidenceId)"
               >
                 <div class="evidence-source">
                   <span class="evidence-type">{{ evidence.sectionLabel || '简历材料' }}</span>

@@ -2,9 +2,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { AxiosError, AxiosHeaders } from 'axios'
 import type { AxiosResponse, InternalAxiosRequestConfig } from 'axios'
 
-const { adapter, clearAuthToken } = vi.hoisted(() => ({
+const { adapter, clearAuthToken, clearJobComposerTemporaryState, advanceAuthSessionGeneration } = vi.hoisted(() => ({
   adapter: vi.fn(),
   clearAuthToken: vi.fn(),
+  clearJobComposerTemporaryState: vi.fn(),
+  advanceAuthSessionGeneration: vi.fn(),
 }))
 
 vi.mock('axios', async (importOriginal) => {
@@ -19,6 +21,8 @@ vi.mock('axios', async (importOriginal) => {
   }
 })
 vi.mock('@/utils/auth-token', () => ({ readAuthToken: () => null, clearAuthToken }))
+vi.mock('@/utils/jobComposerPersistence', () => ({ clearJobComposerTemporaryState }))
+vi.mock('@/utils/authSessionGeneration', () => ({ advanceAuthSessionGeneration }))
 
 import request, { downloadBlob } from '@/api/request'
 
@@ -57,6 +61,8 @@ function respond(data: unknown, status = 200, blob = false) {
 beforeEach(() => {
   adapter.mockReset()
   clearAuthToken.mockReset()
+  clearJobComposerTemporaryState.mockReset()
+  advanceAuthSessionGeneration.mockReset()
   vi.stubGlobal('window', { location: { pathname: '/workspace', search: '?id=1', href: '' } })
 })
 
@@ -66,8 +72,17 @@ describe.each(['wrapped', 'http', 'blob', 'http-blob'] as const)('%s AI errors',
     async (identifier, message) => {
       const http = path.startsWith('http')
       const blob = path.includes('blob')
-      const code = http ? 400 : identifier === 'CREDENTIAL_CHANGED' ? 409 : 502
-      respond({ code, message: identifier }, http ? 400 : 200, blob)
+      const code = [
+        'INVALID_CREDENTIAL',
+        'AI_CONFIGURATION_REQUIRED',
+        'CONFIGURATION_INVALID',
+        'UNSAFE_BASE_URL',
+      ].includes(identifier)
+        ? 400
+        : identifier === 'CREDENTIAL_CHANGED'
+          ? 409
+          : 502
+      respond({ code, message: identifier }, http ? code : 200, blob)
       await expect(
         blob ? downloadBlob('/api/preview') : request.post('/api/ai/test'),
       ).rejects.toMatchObject({
@@ -102,6 +117,8 @@ describe('existing request error behavior', () => {
       message: '用户名或密码错误，请检查后重试。',
       code: 401,
     })
+    expect(advanceAuthSessionGeneration).toHaveBeenCalledOnce()
+    expect(clearJobComposerTemporaryState).toHaveBeenCalledOnce()
     expect(clearAuthToken).toHaveBeenCalledOnce()
     expect(window.location.href).toBe('/login?redirect=%2Fworkspace%3Fid%3D1')
   })
@@ -109,11 +126,55 @@ describe('existing request error behavior', () => {
   it.each([
     [503, 400],
     [400, 502],
-  ])('preserves server fallback for HTTP %i / business %i', async (status, code) => {
-    respond({ code, message: 'PROVIDER_UNAVAILABLE' }, status)
+  ])('does not expose an ordinary server message for HTTP %i / business %i', async (status, code) => {
+    respond({ code, message: 'internal stack and SQL detail' }, status)
     await expect(request.get('/api/test')).rejects.toMatchObject({
       message: '服务器暂时无法处理请求，请稍后重试',
       code,
+    })
+  })
+
+  it('keeps the request ID from a real HTTP error envelope', async () => {
+    adapter.mockImplementationOnce((config: InternalAxiosRequestConfig) => {
+      const response: AxiosResponse = {
+        data: { code: 409, message: '内容已更新', requestId: 'request-body-id' },
+        status: 409,
+        statusText: '409',
+        headers: new AxiosHeaders({
+          'content-type': 'application/json',
+          'x-request-id': 'request-header-id',
+        }),
+        config,
+      }
+      return Promise.reject(new AxiosError('HTTP failure', undefined, config, undefined, response))
+    })
+
+    await expect(request.get('/api/test')).rejects.toMatchObject({
+      code: 409,
+      message: '内容已更新',
+      requestId: 'request-body-id',
+    })
+  })
+
+  it('parses a Blob error by its own JSON type when the response header is absent', async () => {
+    adapter.mockImplementationOnce((config: InternalAxiosRequestConfig) => {
+      const response: AxiosResponse = {
+        data: new Blob(
+          [JSON.stringify({ code: 409, message: '内容已更新', requestId: 'blob-request-id' })],
+          { type: 'application/problem+json' },
+        ),
+        status: 409,
+        statusText: '409',
+        headers: new AxiosHeaders(),
+        config,
+      }
+      return Promise.reject(new AxiosError('HTTP failure', undefined, config, undefined, response))
+    })
+
+    await expect(downloadBlob('/api/preview')).rejects.toMatchObject({
+      code: 409,
+      message: '内容已更新',
+      requestId: 'blob-request-id',
     })
   })
 

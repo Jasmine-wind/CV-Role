@@ -75,14 +75,43 @@ const focusRequestKey = ref(0)
 const selectedWorkspaceSectionId = computed(() => evidenceAnchor.value?.sectionId ?? null)
 const selectedWorkspaceBulletId = computed(() => evidenceAnchor.value?.bulletId ?? null)
 
-const resolveSelectedEvidenceAnchor = () => {
-  const requirement = requirements.value.find((item) => item.evidenceRequirementId === effectiveSelectedRequirementId.value)
-  if (!requirement || !editor.draft.value) return
-  if (evidenceAnchor.value?.requirementId === requirement.evidenceRequirementId) return
-  evidenceAnchor.value = resolveWorkspaceEvidenceAnchor(requirement, editor.draft.value)
+const retainSelectedEvidenceAnchor = () => {
+  const requirement = requirements.value.find(
+    (item) => item.evidenceRequirementId === effectiveSelectedRequirementId.value,
+  )
+  const document = editor.draft.value
+  if (!requirement || !document) {
+    evidenceAnchor.value = null
+    return
+  }
+
+  const anchor = evidenceAnchor.value
+  const anchorStillBelongsToRequirement = Boolean(
+    anchor
+    && anchor.requirementId === requirement.evidenceRequirementId
+    && requirement.evidences.some(
+      (evidence) => evidence.requirementEvidenceId === anchor.requirementEvidenceId,
+    ),
+  )
+  if (anchorStillBelongsToRequirement) return
+
+  // Give the selected requirement a deterministic initial context. Explicit row clicks below
+  // always resolve the clicked evidence ID rather than silently falling back to this default.
+  const initialEvidence = requirement.evidences.at(0)
+  evidenceAnchor.value = initialEvidence
+    ? resolveWorkspaceEvidenceAnchor(
+        requirement,
+        document,
+        initialEvidence.requirementEvidenceId,
+      )
+    : null
 }
 
-watch([effectiveSelectedRequirementId, () => Boolean(editor.draft.value)], resolveSelectedEvidenceAnchor, { immediate: true })
+watch(
+  [effectiveSelectedRequirementId, requirements, () => Boolean(editor.draft.value)],
+  retainSelectedEvidenceAnchor,
+  { immediate: true },
+)
 watch(
   () => editor.draft.value?.sections.map((section) => `${section.id}:${section.entries.map((entry) => `${entry.id}:${entry.bullets.map((bullet) => bullet.id).join(',')}`).join('|')}`).join(';'),
   () => {
@@ -142,6 +171,7 @@ const goToAnalysis = () => {
 
 const selectRequirement = (requirementId: number) => {
   selectedRequirementId.value = requirementId
+  evidenceAnchor.value = null
   focusRequestKey.value += 1
   inspectorOpen.value = false
   if (isNarrowScreen.value) mobilePanel.value = 'editor'
@@ -150,9 +180,18 @@ const selectRequirement = (requirementId: number) => {
   })
 }
 
-const focusCurrentContext = () => {
-  if (!evidenceAnchor.value && effectiveSelectedRequirementId.value) {
-    resolveSelectedEvidenceAnchor()
+const focusCurrentContext = (requirementEvidenceId: number) => {
+  const requirement = requirements.value.find(
+    (item) => item.evidenceRequirementId === effectiveSelectedRequirementId.value,
+  )
+  if (requirement && editor.draft.value) {
+    evidenceAnchor.value = resolveWorkspaceEvidenceAnchor(
+      requirement,
+      editor.draft.value,
+      requirementEvidenceId,
+    )
+  } else {
+    evidenceAnchor.value = null
   }
   focusRequestKey.value += 1
   if (isNarrowScreen.value) mobilePanel.value = 'editor'

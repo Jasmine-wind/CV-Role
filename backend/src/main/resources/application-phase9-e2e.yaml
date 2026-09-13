@@ -1,5 +1,13 @@
 # CI/browser integration profile: real PostgreSQL + Flyway and local storage,
 # but a deterministic in-process Provider adapter. No network AI credential is used.
+management:
+  endpoint:
+    health:
+      group:
+        # This profile defaults to local storage for database-only integration tests.
+        readiness:
+          include: readinessState,db
+
 spring:
   datasource:
     url: ${TEST_DB_URL:jdbc:postgresql://localhost:5432/ai_resume_optimizer_test}

@@ -32,7 +32,8 @@ services:
       retries: 5
 
   minio:
-    image: minio/minio:latest
+    # MinIO RELEASE.2025-04-22T22-12-26Z, pinned to the verified multi-arch manifest.
+    image: quay.io/minio/minio@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e
     container_name: ai-resume-optimizer-minio
     restart: unless-stopped
     command: server /data --console-address ":9001"

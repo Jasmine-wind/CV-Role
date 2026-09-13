@@ -601,11 +601,14 @@ test.describe('Workspace editor frame', () => {
 
     await expect(page.getByText('建议版本', { exact: true })).toBeVisible()
     await expect(page.getByText('负责订单服务开发，并使用 Kafka 处理异步消息', { exact: true })).toBeVisible()
-    await expect(page.getByText('请确认内容真实', { exact: true })).toBeVisible()
-    await expect(page.getByRole('button', { name: '确认并采纳', exact: true })).toBeVisible()
+    const reviewNote = page.locator('.suggestion-review-note')
+    await expect(reviewNote).toContainText('新增技术或能力信息')
+    await expect(reviewNote).toContainText('建议包含原文未写明的信息，请确认这些内容确实属于你的真实经历。')
+    await expect(reviewNote).toContainText('不代表系统已验证内容真实性')
+    await expect(page.getByRole('button', { name: '采纳此建议', exact: true })).toBeVisible()
     await expect(page.getByText('没有通过事实校验', { exact: true })).toHaveCount(0)
 
-    await page.getByRole('button', { name: '确认并采纳', exact: true }).click()
+    await page.getByRole('button', { name: '采纳此建议', exact: true }).click()
     await expect(bullet.locator('textarea')).toHaveValue('负责订单服务开发，并使用 Kafka 处理异步消息')
     await expect(page.getByText('✓ 已保存', { exact: true })).toBeVisible({ timeout: 5_000 })
     await page.getByRole('button', { name: '撤销', exact: true }).click()

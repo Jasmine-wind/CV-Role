@@ -120,7 +120,7 @@ class Phase6ExportApiTest {
         mockMvc.perform(get("/api/workspace/42/preview.pdf")
                         .param("expectedRevision", "1")
                         .header("Authorization", AUTHORIZATION))
-                .andExpect(status().isOk())
+                .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value(409))
                 .andExpect(jsonPath("$.message").value("简历内容已更新，预览已失效，请刷新后重试"));
     }

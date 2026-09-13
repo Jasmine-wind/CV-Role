@@ -54,16 +54,30 @@ describe('downloadBlob', () => {
     expect((error as Error & { code?: number }).code).toBe(409)
   })
 
-  it('编译失败等业务错误同样不得被当作 PDF 返回', async () => {
+  it('服务端内部错误不得被当作 PDF 或向用户泄露详情', async () => {
     const errorBody = new Blob(
-      [JSON.stringify({ code: 500, message: '简历排版编译失败，请检查内容后重试' })],
+      [JSON.stringify({ code: 500, message: 'internal Typst command and filesystem detail' })],
       { type: 'application/json' },
     )
     getMock.mockResolvedValueOnce(response('application/json', errorBody))
 
     await expect(
       downloadBlob('/api/workspace/1/preview.pdf?expectedRevision=0'),
-    ).rejects.toThrow('简历排版编译失败，请检查内容后重试')
+    ).rejects.toThrow('服务器暂时无法处理请求，请稍后重试')
+  })
+
+  it('兼容 application/problem+json Blob 并保留 requestId', async () => {
+    const errorBody = new Blob(
+      [JSON.stringify({ code: 409, message: '预览已失效', requestId: 'preview-request-id' })],
+      { type: 'application/problem+json' },
+    )
+    getMock.mockResolvedValueOnce(response('', errorBody))
+
+    await expect(downloadBlob('/api/workspace/1/preview.pdf')).rejects.toMatchObject({
+      code: 409,
+      message: '预览已失效',
+      requestId: 'preview-request-id',
+    })
   })
 
   it('声明为 JSON 但无法解析时 fail closed', async () => {

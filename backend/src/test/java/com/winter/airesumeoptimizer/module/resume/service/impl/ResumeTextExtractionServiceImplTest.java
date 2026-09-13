@@ -14,8 +14,12 @@ import java.awt.Color;
 import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.Base64;
+import java.util.Random;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
+import org.apache.commons.compress.archivers.zip.ZipArchiveEntry;
+import org.apache.commons.compress.archivers.zip.ZipArchiveOutputStream;
 import org.apache.pdfbox.cos.COSDictionary;
 import org.apache.pdfbox.cos.COSName;
 import org.apache.pdfbox.pdmodel.PDDocument;
@@ -45,6 +49,88 @@ class ResumeTextExtractionServiceImplTest {
         String text = service.extractText("resumes/1/resume.docx", "docx");
 
         assertThat(text).contains("Java 后端开发工程师");
+    }
+
+    @Test
+    void extractTextShouldPreserveNestedTableContent() throws IOException {
+        byte[] docxBytes = buildMinimalDocx("""
+                <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+                <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+                  <w:body><w:tbl><w:tr><w:tc>
+                    <w:p><w:r><w:t>外层表格</w:t></w:r></w:p>
+                    <w:tbl><w:tr><w:tc><w:p><w:r><w:t>内层表格</w:t></w:r></w:p></w:tc></w:tr></w:tbl>
+                  </w:tc></w:tr></w:tbl></w:body>
+                </w:document>
+                """);
+        when(fileStorageService.loadAsStream("resumes/1/nested.docx"))
+                .thenReturn(new ByteArrayInputStream(docxBytes));
+
+        String text = service.extractText("resumes/1/nested.docx", "docx");
+
+        assertThat(text).isEqualTo("外层表格\n内层表格");
+    }
+
+    @Test
+    void extractTextShouldFailClosedForMalformedDocx() {
+        when(fileStorageService.loadAsStream("resumes/1/malformed.docx"))
+                .thenReturn(new ByteArrayInputStream("not-an-ooxml-package".getBytes(StandardCharsets.UTF_8)));
+
+        assertThatThrownBy(() -> service.extractText("resumes/1/malformed.docx", "docx"))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("简历文本提取失败");
+    }
+
+    @Test
+    void extractTextShouldRejectDuplicateZipEntries() throws IOException {
+        byte[] docxBytes = buildDuplicateEntryDocx();
+        when(fileStorageService.loadAsStream("resumes/1/duplicate-entry.docx"))
+                .thenReturn(new ByteArrayInputStream(docxBytes));
+
+        assertThatThrownBy(() -> service.extractText("resumes/1/duplicate-entry.docx", "docx"))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("简历文本提取失败");
+    }
+
+    @Test
+    void extractTextShouldRejectHighlyCompressedDocxContent() throws IOException {
+        String repeated = "A".repeat(2 * 1024 * 1024);
+        byte[] docxBytes = buildMinimalDocx("""
+                <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+                <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+                  <w:body><w:p><w:r><w:t>%s</w:t></w:r></w:p></w:body>
+                </w:document>
+                """.formatted(repeated));
+        // Prove the generated package is below POI's default 1% inflate-ratio boundary;
+        // a loose absolute-size assertion could pass without actually exercising zip-bomb protection.
+        assertThat(docxBytes.length).isLessThan(repeated.length() / 100);
+        when(fileStorageService.loadAsStream("resumes/1/compressed.docx"))
+                .thenReturn(new ByteArrayInputStream(docxBytes));
+
+        assertThatThrownBy(() -> service.extractText("resumes/1/compressed.docx", "docx"))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("简历文本提取失败");
+    }
+
+    @Test
+    void extractTextShouldRejectDocxEntryLargerThanUploadLimit() throws IOException {
+        byte[] randomBytes = new byte[8 * 1024 * 1024];
+        new Random(42).nextBytes(randomBytes);
+        String payload = Base64.getEncoder().encodeToString(randomBytes);
+        byte[] docxBytes = buildMinimalDocx("""
+                <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+                <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+                  <w:body><w:p><w:r><w:t>%s</w:t></w:r></w:p></w:body>
+                </w:document>
+                """.formatted(payload));
+        assertThat(payload.length()).isGreaterThan(10 * 1024 * 1024);
+        assertThat(docxBytes.length).isLessThanOrEqualTo(10 * 1024 * 1024);
+        assertThat(docxBytes.length).isGreaterThan(payload.length() / 100);
+        when(fileStorageService.loadAsStream("resumes/1/oversized-entry.docx"))
+                .thenReturn(new ByteArrayInputStream(docxBytes));
+
+        assertThatThrownBy(() -> service.extractText("resumes/1/oversized-entry.docx", "docx"))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("简历文本提取失败");
     }
 
     @Test
@@ -92,21 +178,23 @@ class ResumeTextExtractionServiceImplTest {
                 .thenReturn(new ByteArrayInputStream(docxBytes));
 
         var result = service.extractWithMetadata("resumes/1/interleaved-textbox.docx", "docx");
-        var blocks = service.collectDocxTextBlocks(new XWPFDocument(new ByteArrayInputStream(docxBytes)));
+        try (XWPFDocument document = new XWPFDocument(new ByteArrayInputStream(docxBytes))) {
+            var blocks = service.collectDocxTextBlocks(document);
 
-        assertThat(result.text()).isEqualTo("before\ninside\nafter");
-        assertThat(blocks).extracting("sourceType")
-                .containsExactly("paragraph", "textbox", "paragraph");
-        assertThat(blocks).extracting("text")
-                .containsExactly("before", "inside", "after");
-        assertThat(blocks).extracting("occurrenceId").doesNotHaveDuplicates();
-        assertThat(blocks).extracting("sourceBlockId", String.class)
-                .allSatisfy(sourceBlockId -> assertThat(sourceBlockId).isNotBlank());
-        assertThat(result.sourceBlocks()).isNotEmpty().allSatisfy(block -> {
-            assertThat(block.getId()).isNotBlank();
-            assertThat(block.getSourceOccurrenceIds()).doesNotContain(block.getId());
-            assertThat(block.getSourceBlockIds()).doesNotContain(block.getId());
-        });
+            assertThat(result.text()).isEqualTo("before\ninside\nafter");
+            assertThat(blocks).extracting("sourceType")
+                    .containsExactly("paragraph", "textbox", "paragraph");
+            assertThat(blocks).extracting("text")
+                    .containsExactly("before", "inside", "after");
+            assertThat(blocks).extracting("occurrenceId").doesNotHaveDuplicates();
+            assertThat(blocks).extracting("sourceBlockId", String.class)
+                    .allSatisfy(sourceBlockId -> assertThat(sourceBlockId).isNotBlank());
+            assertThat(result.sourceBlocks()).isNotEmpty().allSatisfy(block -> {
+                assertThat(block.getId()).isNotBlank();
+                assertThat(block.getSourceOccurrenceIds()).doesNotContain(block.getId());
+                assertThat(block.getSourceBlockIds()).doesNotContain(block.getId());
+            });
+        }
     }
 
     @Test
@@ -148,9 +236,9 @@ class ResumeTextExtractionServiceImplTest {
             var blocks = service.collectDocxTextBlocks(document);
 
             assertThat(blocks).extracting("text")
-                    .containsSubsequence("页眉", "正文", "页脚");
+                    .containsExactly("页眉", "正文", "页脚");
             assertThat(blocks).extracting("sourceType")
-                    .containsSubsequence("header", "paragraph", "footer");
+                    .containsExactly("header", "paragraph", "footer");
         }
     }
 
@@ -574,6 +662,44 @@ class ResumeTextExtractionServiceImplTest {
             zipOutputStream.finish();
             return outputStream.toByteArray();
         }
+    }
+
+    private byte[] buildDuplicateEntryDocx() throws IOException {
+        String contentTypes = """
+                <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+                <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+                  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+                  <Default Extension="xml" ContentType="application/xml"/>
+                  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+                </Types>
+                """;
+        String relationships = """
+                <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+                <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+                  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+                </Relationships>
+                """;
+        String document = """
+                <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+                <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+                  <w:body><w:p><w:r><w:t>first</w:t></w:r></w:p></w:body>
+                </w:document>
+                """;
+        try (ByteArrayOutputStream output = new ByteArrayOutputStream();
+                ZipArchiveOutputStream zip = new ZipArchiveOutputStream(output)) {
+            addArchiveEntry(zip, "[Content_Types].xml", contentTypes);
+            addArchiveEntry(zip, "_rels/.rels", relationships);
+            addArchiveEntry(zip, "word/document.xml", document);
+            addArchiveEntry(zip, "word/document.xml", document.replace("first", "second"));
+            zip.finish();
+            return output.toByteArray();
+        }
+    }
+
+    private void addArchiveEntry(ZipArchiveOutputStream zip, String name, String content) throws IOException {
+        zip.putArchiveEntry(new ZipArchiveEntry(name));
+        zip.write(content.getBytes(StandardCharsets.UTF_8));
+        zip.closeArchiveEntry();
     }
 
     private void addZipEntry(ZipOutputStream zipOutputStream, String name, String content) throws IOException {

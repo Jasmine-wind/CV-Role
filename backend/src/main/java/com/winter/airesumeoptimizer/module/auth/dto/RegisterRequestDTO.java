@@ -1,8 +1,10 @@
 package com.winter.airesumeoptimizer.module.auth.dto;
 
+import com.winter.airesumeoptimizer.module.auth.support.AccountIdentifierNormalizer;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import lombok.Getter;
 import lombok.Setter;
@@ -15,11 +17,13 @@ public class RegisterRequestDTO {
     @Schema(description = "用户名", example = "winter")
     @NotBlank(message = "用户名不能为空")
     @Size(min = 3, max = 20, message = "用户名长度必须在3到20个字符之间")
+    @Pattern(regexp = "^(?!\\S+@\\S+$).*$", message = "用户名不能使用邮箱格式")
     private String username;
 
     @Schema(description = "邮箱", example = "winter@example.com")
     @NotBlank(message = "邮箱不能为空")
     @Email(message = "邮箱格式不正确")
+    @Size(max = 100, message = "邮箱长度不能超过100个字符")
     private String email;
 
     @Schema(description = "密码", example = "123456")
@@ -30,4 +34,12 @@ public class RegisterRequestDTO {
     @Schema(description = "昵称", example = "Winter")
     @Size(max = 50, message = "昵称长度不能超过50个字符")
     private String nickname;
+
+    public void setUsername(String username) {
+        this.username = AccountIdentifierNormalizer.normalizeUsername(username);
+    }
+
+    public void setEmail(String email) {
+        this.email = AccountIdentifierNormalizer.normalizeEmail(email);
+    }
 }

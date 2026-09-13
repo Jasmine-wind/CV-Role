@@ -49,6 +49,15 @@ export interface BulletSuggestionRequest {
 
 export type BulletSuggestionState = 'READY' | 'REJECTED'
 
+export type BulletSuggestionReviewCode =
+  | 'NEW_QUANTITATIVE_CLAIM'
+  | 'NEW_TECHNOLOGY'
+  | 'NEW_ENTITY'
+  | 'RESPONSIBILITY_ESCALATION'
+  | 'NEW_ACHIEVEMENT'
+  | 'NEW_SCOPE_OR_TIME'
+  | 'UNDETERMINED'
+
 /**
  * 建议只存在于当前会话：服务端不落库，Apply / Reject / Regenerate 都在前端完成；
  * Apply 只替换对应 Bullet 文本并走既有 Undo / dirty / Auto Save / CAS。
@@ -61,7 +70,7 @@ export interface BulletSuggestionResult {
   originalText: string
   suggestedText: string | null
   reason: string | null
-  reviewCode: string | null
+  reviewCode: BulletSuggestionReviewCode | string | null
   reviewMessage: string | null
   rejectCode: string | null
   rejectMessage: string | null

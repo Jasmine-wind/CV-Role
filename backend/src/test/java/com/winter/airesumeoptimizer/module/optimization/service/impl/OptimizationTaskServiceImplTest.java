@@ -24,6 +24,7 @@ import com.winter.airesumeoptimizer.module.optimization.entity.OptimizationTask;
 import com.winter.airesumeoptimizer.module.optimization.entity.ResumeVersion;
 import com.winter.airesumeoptimizer.module.optimization.mapper.JobTargetMapper;
 import com.winter.airesumeoptimizer.module.optimization.mapper.OptimizationTaskMapper;
+import com.winter.airesumeoptimizer.module.optimization.mapper.OptimizationTaskSummaryRow;
 import com.winter.airesumeoptimizer.module.optimization.mapper.ResumeVersionMapper;
 import com.winter.airesumeoptimizer.module.optimization.service.OptimizationTaskService;
 import com.winter.airesumeoptimizer.module.optimization.vo.OptimizationTaskVO;
@@ -178,16 +179,29 @@ class OptimizationTaskServiceImplTest {
     }
 
     @Test
-    void listRecentReturnsUserOwnedTaskViewsInMapperOrder() {
-        OptimizationTask first = task("SUCCESS");
-        first.setId(51L);
-        first.setUpdatedAt(java.time.LocalDateTime.of(2026, 1, 2, 10, 0));
-        OptimizationTask second = task("RUNNING");
-        second.setId(50L);
-        second.setUpdatedAt(java.time.LocalDateTime.of(2026, 1, 1, 10, 0));
-        when(optimizationTaskMapper.selectList(any())).thenReturn(java.util.List.of(first, second));
-        when(optimizationTaskMapper.selectOne(any())).thenReturn(first, second);
-        when(jobTargetMapper.selectOne(any())).thenReturn(jobTarget());
+    void recentSummarySqlKeepsOwnershipInEveryJoinAndUsesStableOrder() {
+        var method = java.util.Arrays.stream(OptimizationTaskMapper.class.getMethods())
+                .filter(candidate -> candidate.getName().equals("selectRecentSummaries"))
+                .findFirst().orElseThrow();
+        String sql = String.join(" ", method.getAnnotation(org.apache.ibatis.annotations.Select.class).value());
+
+        assertThat(sql).contains(
+                "WHERE task.user_id = #{userId}",
+                "source_version.user_id = task.user_id",
+                "job_target.user_id = task.user_id",
+                "resume.user_id = task.user_id",
+                "ORDER BY task.updated_at DESC, task.id DESC",
+                "LIMIT #{limit}");
+    }
+
+    @Test
+    void listRecentReturnsUserOwnedLightweightViewsInOneQuery() {
+        OptimizationTaskSummaryRow first = recentRow(51L, "SUCCESS", "Java 后端", "主简历",
+                java.time.LocalDateTime.of(2026, 1, 2, 10, 0));
+        OptimizationTaskSummaryRow second = recentRow(50L, "RUNNING", "平台工程师", "主简历",
+                java.time.LocalDateTime.of(2026, 1, 1, 10, 0));
+        when(optimizationTaskMapper.selectRecentSummaries(1L, 5))
+                .thenReturn(java.util.List.of(first, second));
 
         java.util.List<OptimizationTaskVO> result = service.listRecent(1L, 5);
 
@@ -195,17 +209,26 @@ class OptimizationTaskServiceImplTest {
                 .containsExactly(51L, 50L);
         assertThat(result).extracting(OptimizationTaskVO::getStatus)
                 .containsExactly("SUCCESS", "RUNNING");
-        verify(optimizationTaskMapper).selectList(any());
+        assertThat(result).extracting(OptimizationTaskVO::getJobTitle)
+                .containsExactly("Java 后端", "平台工程师");
+        verify(optimizationTaskMapper).selectRecentSummaries(1L, 5);
+        verify(optimizationTaskMapper, never()).selectList(any());
+        verify(optimizationTaskMapper, never()).selectOne(any());
+        verify(resumeVersionMapper, never()).selectOne(any());
+        verify(jobTargetMapper, never()).selectOne(any());
+        verify(resumeMapper, never()).selectOne(any());
     }
 
     @Test
-    void listRecentBoundsRequestedLimitBeforeBuildingQuery() {
-        when(optimizationTaskMapper.selectList(any())).thenReturn(java.util.List.of());
+    void listRecentBoundsRequestedLimitBeforeQuerying() {
+        when(optimizationTaskMapper.selectRecentSummaries(any(), any(Integer.class)))
+                .thenReturn(java.util.List.of());
 
         service.listRecent(1L, 0);
         service.listRecent(1L, 99);
 
-        verify(optimizationTaskMapper, org.mockito.Mockito.times(2)).selectList(any());
+        verify(optimizationTaskMapper).selectRecentSummaries(1L, 1);
+        verify(optimizationTaskMapper).selectRecentSummaries(1L, 20);
     }
 
     @Test
@@ -641,6 +664,23 @@ class OptimizationTaskServiceImplTest {
         assertThatThrownBy(() -> service.getExecutionContext(1L, 50L))
                 .isInstanceOf(BusinessException.class)
                 .hasMessage("优化任务的 BYOK 选择快照损坏");
+    }
+
+    private OptimizationTaskSummaryRow recentRow(
+            long taskId,
+            String status,
+            String jobTitle,
+            String resumeName,
+            java.time.LocalDateTime updatedAt) {
+        OptimizationTaskSummaryRow row = new OptimizationTaskSummaryRow();
+        row.setOptimizationTaskId(taskId);
+        row.setResumeId(10L);
+        row.setStatus(status);
+        row.setJobTitle(jobTitle);
+        row.setResumeName(resumeName);
+        row.setCreatedAt(updatedAt.minusHours(1));
+        row.setUpdatedAt(updatedAt);
+        return row;
     }
 
     private AiSelectionSnapshot byokSelection(Long revision) {

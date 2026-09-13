@@ -1,5 +1,6 @@
 package com.winter.airesumeoptimizer.module.auth.dto;
 
+import com.winter.airesumeoptimizer.module.auth.support.AccountIdentifierNormalizer;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
@@ -20,4 +21,8 @@ public class LoginRequestDTO {
     @NotBlank(message = "密码不能为空")
     @Size(min = 6, max = 100, message = "密码长度必须在6到100个字符之间")
     private String password;
+
+    public void setAccount(String account) {
+        this.account = AccountIdentifierNormalizer.normalizeLoginAccount(account);
+    }
 }

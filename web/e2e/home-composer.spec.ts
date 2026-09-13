@@ -38,11 +38,24 @@ const recentTask = (optimizationTaskId: number, status: string, jobTitle: string
   updatedAt: '2026-01-01T10:00:00Z',
 })
 
+const activeAiSettings = {
+  providerType: 'OPENAI_COMPATIBLE',
+  baseUrl: 'https://api.example.invalid/v1',
+  model: 'e2e-model',
+  config: {},
+  status: 'ACTIVE',
+  configured: true,
+  apiKeyConfigured: true,
+  maskedApiKey: '••••••••',
+  credentialStorageAvailable: true,
+}
+
 async function mockHome(
   page: Page,
   resumes = [readyResume, reviewResume],
   insights: unknown = { cohorts: [] },
   recentTasks: unknown[] = [],
+  aiSettings: unknown = activeAiSettings,
 ) {
   await page.addInitScript(() => {
     window.localStorage.setItem('ai-resume-token', 'home-composer-test-token')
@@ -60,17 +73,7 @@ async function mockHome(
   )
   await page.route('**/api/resumes', (route) => route.fulfill(response(resumes)))
   await page.route('**/api/settings/ai-provider', (route) =>
-    route.fulfill(response({
-      providerType: 'OPENAI_COMPATIBLE',
-      baseUrl: 'https://api.example.invalid/v1',
-      model: 'e2e-model',
-      config: {},
-      status: 'ACTIVE',
-      configured: true,
-      apiKeyConfigured: true,
-      maskedApiKey: '••••••••',
-      credentialStorageAvailable: true,
-    })),
+    route.fulfill(response(aiSettings)),
   )
   await page.route('**/api/job-direction-insights', (route) => route.fulfill(response(insights)))
   await page.route('**/api/optimization-tasks/recent*', (route) =>
@@ -158,6 +161,36 @@ test.describe('Job Target Composer', () => {
     expect(startCount).toBe(1)
   })
 
+  test('clears composer and active recovery state after analysis succeeds', async ({ page }) => {
+    await mockHome(page, [readyResume])
+    await page.route('**/api/job-analyses', (route) => route.fulfill(response({
+      taskId: 321,
+      optimizationTaskId: 654,
+      sourceResumeVersionId: 11,
+      targetResumeVersionId: 12,
+      jobTargetId: 13,
+    })))
+    await page.route('**/api/tasks/321', (route) => route.fulfill(response({
+      taskId: 321,
+      taskType: 'JOB_ANALYSIS',
+      status: 'SUCCESS',
+      progress: 100,
+      message: '分析完成',
+    })))
+    await page.route('**/api/optimization-tasks/654/analysis-result', (route) =>
+      route.fulfill(response(null)),
+    )
+
+    await page.goto('/app')
+    await page.locator('#home-jd').fill('成功后不再恢复的岗位描述')
+    await page.getByTestId('home-start-analysis').click()
+    await expect(page).toHaveURL(/\/job-analysis\/654$/)
+    expect(await page.evaluate(() => ({
+      draft: window.sessionStorage.getItem('cv-role:job-composer-draft'),
+      active: window.sessionStorage.getItem('cv-role:active-job-analysis'),
+    }))).toEqual({ draft: null, active: null })
+  })
+
   test('restores the active task and JD input directly after refresh', async ({ page }) => {
     await mockHome(page, [readyResume])
     await page.addInitScript(() => {
@@ -168,10 +201,12 @@ test.describe('Job Target Composer', () => {
           optimizationTaskId: 456,
           sourceResumeVersionId: 11,
           targetResumeVersionId: 12,
+          userId: 1,
+          schemaVersion: 1,
+          savedAt: new Date().toISOString(),
           jobTargetId: 13,
           resumeId: 1,
           jobDescription: '恢复后的岗位描述',
-          startedAt: '2026-01-01T00:00:00Z',
         }),
       )
     })
@@ -191,6 +226,166 @@ test.describe('Job Target Composer', () => {
     await expect(page.locator('.home-analysis-state')).toContainText('岗位分析正在后台进行')
     await expect(page.locator('#home-jd')).toHaveValue('恢复后的岗位描述')
     await expect(page.locator('#home-jd')).toBeDisabled()
+  })
+
+  test('keeps the user draft and selected resume when visiting AI settings and returning', async ({ page }) => {
+    const secondReadyResume = { ...reviewResume, qualityStatus: 'READY' }
+    await mockHome(
+      page,
+      [readyResume, secondReadyResume],
+      { cohorts: [] },
+      [],
+      {
+        ...activeAiSettings,
+        status: 'DISABLED',
+        configured: false,
+        apiKeyConfigured: false,
+        maskedApiKey: '',
+      },
+    )
+    await page.goto('/app')
+    await page.locator('label.home-resume-option').nth(1).click()
+    await page.locator('#home-jd').fill('需要保留的岗位描述与职责')
+    await page.getByTestId('home-configure-ai').click()
+
+    await expect(page).toHaveURL(/\/settings\/ai-provider\?redirect=/)
+    await page.getByRole('link', { name: '返回开始优化' }).click()
+    await expect(page).toHaveURL(/\/app$/)
+    await expect(page.locator('#home-jd')).toHaveValue('需要保留的岗位描述与职责')
+    await expect(page.getByRole('radio', { name: /resume-product-analytics/ })).toBeChecked()
+
+    const storedDraft = await page.evaluate(() =>
+      JSON.parse(window.sessionStorage.getItem('cv-role:job-composer-draft') ?? 'null'),
+    )
+    expect(storedDraft).toMatchObject({
+      userId: 1,
+      schemaVersion: 1,
+      selectedResumeId: 2,
+      jobDescription: '需要保留的岗位描述与职责',
+    })
+  })
+
+  test('removes a debounced draft synchronously when the JD is cleared', async ({ page }) => {
+    await mockHome(page, [readyResume])
+    await page.goto('/app')
+    await page.locator('#home-jd').fill('准备清空的岗位描述')
+    await expect.poll(() => page.evaluate(() =>
+      window.sessionStorage.getItem('cv-role:job-composer-draft'),
+    )).not.toBeNull()
+
+    await page.getByRole('button', { name: '清空', exact: true }).click()
+    await page.getByRole('dialog').getByRole('button', { name: '清空', exact: true }).click()
+    expect(await page.evaluate(() =>
+      window.sessionStorage.getItem('cv-role:job-composer-draft'),
+    )).toBeNull()
+    await page.waitForTimeout(400)
+    expect(await page.evaluate(() =>
+      window.sessionStorage.getItem('cv-role:job-composer-draft'),
+    )).toBeNull()
+  })
+
+  test('clears user A temporary state on logout and does not restore it for user B', async ({ page }) => {
+    let currentUser = {
+      id: 1,
+      username: 'user-a',
+      email: 'a@example.invalid',
+      nickname: '用户 A',
+      createdAt: '2026-01-01T00:00:00Z',
+    }
+    const userAResume = { ...readyResume, id: 101, displayName: 'A 的简历' }
+    const userBResume = { ...readyResume, id: 202, displayName: 'B 的简历' }
+    await page.addInitScript(() => {
+      window.localStorage.setItem('ai-resume-token', 'user-a-token')
+    })
+    await page.route('**/api/users/me', (route) => route.fulfill(response(currentUser)))
+    await page.route('**/api/resumes', (route) =>
+      route.fulfill(response(currentUser.id === 1 ? [userAResume] : [userBResume])),
+    )
+    await page.route('**/api/settings/ai-provider', (route) =>
+      route.fulfill(response(activeAiSettings)),
+    )
+    await page.route('**/api/job-direction-insights', (route) =>
+      route.fulfill(response({ cohorts: [] })),
+    )
+    await page.route('**/api/optimization-tasks/recent*', (route) => route.fulfill(response([])))
+    await page.route('**/api/auth/login', async (route) => {
+      currentUser = {
+        id: 2,
+        username: 'user-b',
+        email: 'b@example.invalid',
+        nickname: '用户 B',
+        createdAt: '2026-01-02T00:00:00Z',
+      }
+      await route.fulfill(response({
+        userId: 2,
+        username: currentUser.username,
+        email: currentUser.email,
+        nickname: currentUser.nickname,
+        token: 'user-b-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+      }))
+    })
+
+    await page.goto('/app')
+    await page.locator('#home-jd').fill('用户 A 的敏感岗位描述')
+    await expect.poll(() => page.evaluate(() =>
+      window.sessionStorage.getItem('cv-role:job-composer-draft'),
+    )).not.toBeNull()
+    await page.getByRole('button', { name: '账号菜单：用户 A' }).click()
+    await page.getByRole('menuitem', { name: '退出登录' }).click()
+    await expect(page).toHaveURL(/\/login$/)
+    expect(await page.evaluate(() => ({
+      draft: window.sessionStorage.getItem('cv-role:job-composer-draft'),
+      active: window.sessionStorage.getItem('cv-role:active-job-analysis'),
+    }))).toEqual({ draft: null, active: null })
+
+    await page.getByPlaceholder('请输入用户名或邮箱').fill('user-b')
+    await page.getByPlaceholder('请输入密码').fill('safe-password')
+    await page.getByRole('button', { name: '登录', exact: true }).click()
+    await expect(page).toHaveURL(/\/app$/)
+    await expect(page.locator('#home-jd')).toHaveValue('')
+    await expect(page.getByRole('radio', { name: /B 的简历/ })).toBeChecked()
+    await expect(page.getByText('用户 A 的敏感岗位描述')).toHaveCount(0)
+  })
+
+  test('discards the restored JD and draft when the active task is no longer accessible', async ({ page }) => {
+    await mockHome(page, [readyResume])
+    await page.addInitScript(() => {
+      const savedAt = new Date().toISOString()
+      window.sessionStorage.setItem('cv-role:job-composer-draft', JSON.stringify({
+        userId: 1,
+        schemaVersion: 1,
+        savedAt,
+        selectedResumeId: 1,
+        jobDescription: '任务失效后仍可重新提交的 JD',
+      }))
+      window.sessionStorage.setItem('cv-role:active-job-analysis', JSON.stringify({
+        userId: 1,
+        schemaVersion: 1,
+        savedAt,
+        taskId: 999,
+        optimizationTaskId: 456,
+        sourceResumeVersionId: 11,
+        targetResumeVersionId: 12,
+        jobTargetId: 13,
+        resumeId: 1,
+        jobDescription: '任务失效后仍可重新提交的 JD',
+      }))
+    })
+    await page.route('**/api/tasks/999', (route) => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ code: 404, message: '任务不存在', data: null }),
+    }))
+
+    await page.goto('/app')
+    await expect(page.getByText('上次岗位分析已不可用，请重新开始')).toBeVisible()
+    await expect(page.locator('#home-jd')).toHaveValue('')
+    expect(await page.evaluate(() => ({
+      active: window.sessionStorage.getItem('cv-role:active-job-analysis'),
+      draft: window.sessionStorage.getItem('cv-role:job-composer-draft'),
+    }))).toEqual({ active: null, draft: null })
   })
 
   test('shows a useful empty state and keeps the JD field available', async ({ page }) => {

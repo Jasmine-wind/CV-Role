@@ -18,6 +18,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 public class RequestIdFilter extends OncePerRequestFilter {
 
     public static final String REQUEST_ID_HEADER = "X-Request-Id";
+    public static final String REQUEST_ID_ATTRIBUTE = RequestIdFilter.class.getName() + ".requestId";
     public static final String MDC_REQUEST_ID = "requestId";
 
     @Override
@@ -25,7 +26,8 @@ public class RequestIdFilter extends OncePerRequestFilter {
             HttpServletRequest request,
             HttpServletResponse response,
             FilterChain filterChain) throws ServletException, IOException {
-        String requestId = resolveRequestId(request);
+        String requestId = getOrCreateRequestId(request);
+        request.setAttribute(REQUEST_ID_ATTRIBUTE, requestId);
         MDC.put(MDC_REQUEST_ID, requestId);
         response.setHeader(REQUEST_ID_HEADER, requestId);
         try {
@@ -35,11 +37,17 @@ public class RequestIdFilter extends OncePerRequestFilter {
         }
     }
 
-    private String resolveRequestId(HttpServletRequest request) {
-        String requestId = request.getHeader(REQUEST_ID_HEADER);
-        if (StringUtils.hasText(requestId) && requestId.length() <= 100) {
+    public static String getOrCreateRequestId(HttpServletRequest request) {
+        Object existing = request.getAttribute(REQUEST_ID_ATTRIBUTE);
+        if (existing instanceof String requestId && StringUtils.hasText(requestId)) {
             return requestId;
         }
-        return UUID.randomUUID().toString();
+
+        String requestId = request.getHeader(REQUEST_ID_HEADER);
+        if (!StringUtils.hasText(requestId) || requestId.length() > 100) {
+            requestId = UUID.randomUUID().toString();
+        }
+        request.setAttribute(REQUEST_ID_ATTRIBUTE, requestId);
+        return requestId;
     }
 }

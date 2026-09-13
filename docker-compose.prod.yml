@@ -22,13 +22,18 @@ services:
   redis:
     image: redis@sha256:1db42ccef14898aa29bae778452d567534b59c107129cbc1163fb552de184d3c
     restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes", "--requirepass", "$$REDIS_PASSWORD"]
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        : "$${REDIS_PASSWORD:?REDIS_PASSWORD is required}"
+        exec redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD"
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$${REDIS_PASSWORD}\" redis-cli ping"]
+      test: ["CMD-SHELL", "export REDISCLI_AUTH=\"$${REDIS_PASSWORD:?REDIS_PASSWORD is required}\"; redis-cli --no-auth-warning ping | grep -qx PONG"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -39,7 +44,8 @@ services:
         max-file: "5"
 
   minio:
-    image: minio/minio@sha256:3f97c5651cb6662b880c787a232b6b34fec8d8922e08d6617b25d241a21164bb
+    # MinIO RELEASE.2025-04-22T22-12-26Z, pinned to the verified multi-arch manifest.
+    image: quay.io/minio/minio@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e
     restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:
@@ -60,7 +66,8 @@ services:
         max-file: "5"
 
   minio-init:
-    image: minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+    # MinIO Client RELEASE.2025-04-16T18-13-26Z, pinned to the verified multi-arch manifest.
+    image: quay.io/minio/mc@sha256:aead63c77f9db9107f1696fb08ecb0faeda23729cde94b0f663edf4fe09728e3
     restart: "no"
     depends_on:
       minio:
@@ -106,7 +113,8 @@ services:
       APP_REDIS_AI_DISPLAY_MODEL_TTL_SECONDS: ${APP_REDIS_AI_DISPLAY_MODEL_TTL_SECONDS:-86400}
       APP_REDIS_KEY_PREFIX: ${APP_REDIS_KEY_PREFIX:-ai-resume-optimizer}
       APP_CORS_ALLOWED_ORIGIN_PATTERNS: ${APP_CORS_ALLOWED_ORIGIN_PATTERNS:?APP_CORS_ALLOWED_ORIGIN_PATTERNS is required}
-      APP_STORAGE_TYPE: ${APP_STORAGE_TYPE:-minio}
+      # Production storage is intentionally fixed: a developer .env must not silently select local disk.
+      APP_STORAGE_TYPE: minio
       MINIO_ENDPOINT: http://minio:9000
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?MINIO_ACCESS_KEY is required}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?MINIO_SECRET_KEY is required}
@@ -141,7 +149,7 @@ services:
     expose:
       - "8080"
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/v3/api-docs >/dev/null || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/actuator/health/readiness >/dev/null || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 5

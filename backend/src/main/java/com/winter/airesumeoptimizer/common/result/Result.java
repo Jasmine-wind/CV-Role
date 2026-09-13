@@ -18,25 +18,34 @@ public class Result<T> {
     private final String path;
     @Schema(description = "错误发生时间")
     private final LocalDateTime timestamp;
+    @Schema(description = "请求追踪 ID")
+    private final String requestId;
 
-    private Result(Integer code, String message, T data, String path, LocalDateTime timestamp) {
+    private Result(
+            Integer code,
+            String message,
+            T data,
+            String path,
+            LocalDateTime timestamp,
+            String requestId) {
         this.code = code;
         this.message = message;
         this.data = data;
         this.path = path;
         this.timestamp = timestamp;
+        this.requestId = requestId;
     }
 
     public static <T> Result<T> success(T data) {
-        return new Result<>(ResultCode.SUCCESS.getCode(), ResultCode.SUCCESS.getMessage(), data, null, null);
+        return new Result<>(ResultCode.SUCCESS.getCode(), ResultCode.SUCCESS.getMessage(), data, null, null, null);
     }
 
     public static <T> Result<T> success(String message, T data) {
-        return new Result<>(ResultCode.SUCCESS.getCode(), message, data, null, null);
+        return new Result<>(ResultCode.SUCCESS.getCode(), message, data, null, null, null);
     }
 
     public static <T> Result<T> failure(Integer code, String message) {
-        return new Result<>(code, message, null, null, LocalDateTime.now());
+        return new Result<>(code, message, null, null, LocalDateTime.now(), null);
     }
 
     public static <T> Result<T> failure(ResultCode resultCode) {
@@ -44,14 +53,26 @@ public class Result<T> {
     }
 
     public static <T> Result<T> failure(ResultCode resultCode, String message) {
-        return new Result<>(resultCode.getCode(), message, null, null, LocalDateTime.now());
+        return new Result<>(resultCode.getCode(), message, null, null, LocalDateTime.now(), null);
     }
 
     public static <T> Result<T> failure(ResultCode resultCode, String message, String path) {
-        return new Result<>(resultCode.getCode(), message, null, path, LocalDateTime.now());
+        return failure(resultCode.getCode(), message, path, null);
     }
 
     public static <T> Result<T> failure(Integer code, String message, String path) {
-        return new Result<>(code, message, null, path, LocalDateTime.now());
+        return failure(code, message, path, null);
+    }
+
+    public static <T> Result<T> failure(
+            ResultCode resultCode,
+            String message,
+            String path,
+            String requestId) {
+        return failure(resultCode.getCode(), message, path, requestId);
+    }
+
+    public static <T> Result<T> failure(Integer code, String message, String path, String requestId) {
+        return new Result<>(code, message, null, path, LocalDateTime.now(), requestId);
     }
 }

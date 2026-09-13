@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.hasSize;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -277,6 +278,24 @@ class Phase1ApiIntegrationTest {
     }
 
     @Test
+    void registrationShouldRejectEmailShapedUsernameBeforeServiceInvocation() throws Exception {
+        mockMvc.perform(post("/api/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "username": "person@example.com",
+                                  "email": "other@example.com",
+                                  "password": "123456"
+                                }
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(400))
+                .andExpect(jsonPath("$.message").value("用户名不能使用邮箱格式"));
+
+        verify(authService, never()).register(any(RegisterRequestDTO.class));
+    }
+
+    @Test
     void protectedEndpointShouldRejectAnonymousUser() throws Exception {
         mockMvc.perform(get("/api/users/me"))
                 .andExpect(status().isUnauthorized())
@@ -370,20 +389,20 @@ class Phase1ApiIntegrationTest {
 
         mockMvc.perform(get("/api/resumes/100/job-optimization-report")
                         .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
-                .andExpect(status().isOk())
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(400));
 
         mockMvc.perform(get("/api/resumes/0/job-optimization-report")
                         .param("jobDescriptionId", "10")
                         .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
-                .andExpect(status().isOk())
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(400))
                 .andExpect(jsonPath("$.message").value("简历 ID 必须大于 0"));
 
         mockMvc.perform(get("/api/resumes/100/job-optimization-report")
                         .param("jobDescriptionId", "0")
                         .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
-                .andExpect(status().isOk())
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(400))
                 .andExpect(jsonPath("$.message").value("目标岗位 ID 必须大于 0"));
     }
@@ -405,7 +424,7 @@ class Phase1ApiIntegrationTest {
         mockMvc.perform(get("/api/resumes/100/job-optimization-report")
                         .param("jobDescriptionId", "99")
                         .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
-                .andExpect(status().isOk())
+                .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value(404))
                 .andExpect(jsonPath("$.message").value("匹配分析结果不存在，请先生成匹配分析结果"));
     }
@@ -467,7 +486,7 @@ class Phase1ApiIntegrationTest {
                         .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(Map.of("nickname", fiftyCharacters + "x"))))
-                .andExpect(status().isOk())
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(400));
         verify(userService, times(2)).updateCurrentUserProfile(eq(1L), any(UpdateUserProfileRequestDTO.class));
 
@@ -638,7 +657,7 @@ class Phase1ApiIntegrationTest {
                         .content(objectMapper.writeValueAsString(Map.of(
                                 "resumeId", 100,
                                 "jobDescription", " "))))
-                .andExpect(status().isOk())
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(400))
                 .andExpect(jsonPath("$.message").value("目标岗位 JD 不能为空"));
 
@@ -715,7 +734,7 @@ class Phase1ApiIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(Map.of(
                                 "document", Map.of("schemaVersion", "RESUME_DOCUMENT_V1")))))
-                .andExpect(status().isOk())
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(400))
                 .andExpect(jsonPath("$.message").value("缺少内容版本号"));
 
@@ -820,7 +839,7 @@ class Phase1ApiIntegrationTest {
 
         mockMvc.perform(get("/api/resumes/999")
                         .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
-                .andExpect(status().isOk())
+                .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value(404))
                 .andExpect(jsonPath("$.message").value("简历不存在"));
 
@@ -1001,7 +1020,7 @@ class Phase1ApiIntegrationTest {
                         .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(aiJobMatchRequest)))
-                .andExpect(status().isOk())
+                .andExpect(status().isGone())
                 .andExpect(jsonPath("$.code").value(410))
                 .andExpect(jsonPath("$.message").value("旧匹配分析已停用，请从首页发起正式岗位分析"));
 
@@ -1010,7 +1029,7 @@ class Phase1ApiIntegrationTest {
                         .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(aiJobMatchRequest)))
-                .andExpect(status().isOk())
+                .andExpect(status().isGone())
                 .andExpect(jsonPath("$.code").value(410));
 
         aiJobMatchRequest.setJobDescriptionId(10L);
@@ -1018,7 +1037,7 @@ class Phase1ApiIntegrationTest {
                         .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(aiJobMatchRequest)))
-                .andExpect(status().isOk())
+                .andExpect(status().isGone())
                 .andExpect(jsonPath("$.code").value(410));
 
         aiJobMatchRequest.setJobDescriptionId(null);
@@ -1026,7 +1045,7 @@ class Phase1ApiIntegrationTest {
                         .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(aiJobMatchRequest)))
-                .andExpect(status().isOk())
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(400))
                 .andExpect(jsonPath("$.message").value("目标岗位 ID 不能为空"));
 
@@ -1052,7 +1071,7 @@ class Phase1ApiIntegrationTest {
         mockMvc.perform(get("/api/resumes/100/ai-job-matches")
                         .param("jobDescriptionId", "99")
                         .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
-                .andExpect(status().isOk())
+                .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value(404))
                 .andExpect(jsonPath("$.message").value("匹配分析结果不存在"));
 
@@ -1090,7 +1109,7 @@ class Phase1ApiIntegrationTest {
                         .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(suggestionRequest)))
-                .andExpect(status().isOk())
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(400))
                 .andExpect(jsonPath("$.message").value("匹配分析未成功，不能生成岗位优化建议"));
 
@@ -1100,7 +1119,7 @@ class Phase1ApiIntegrationTest {
                         .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(suggestionRequest)))
-                .andExpect(status().isOk())
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(400))
                 .andExpect(jsonPath("$.message").value("目标岗位 ID 不能为空"));
 
@@ -1133,7 +1152,7 @@ class Phase1ApiIntegrationTest {
         mockMvc.perform(get("/api/resumes/100/ai-suggestions")
                         .param("jobDescriptionId", "99")
                         .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
-                .andExpect(status().isOk())
+                .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value(404))
                 .andExpect(jsonPath("$.message").value("AI 优化建议结果不存在"));
 
@@ -1173,7 +1192,7 @@ class Phase1ApiIntegrationTest {
                         .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(rewriteRequest)))
-                .andExpect(status().isOk())
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(400))
                 .andExpect(jsonPath("$.message").value("原文片段不能为空"));
 
@@ -1219,7 +1238,7 @@ class Phase1ApiIntegrationTest {
                         .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(acceptRequest)))
-                .andExpect(status().isOk())
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(400))
                 .andExpect(jsonPath("$.message").value("采纳状态不能为空"));
 
@@ -1228,7 +1247,7 @@ class Phase1ApiIntegrationTest {
                         .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(acceptRequest)))
-                .andExpect(status().isOk())
+                .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value(404))
                 .andExpect(jsonPath("$.message").value("AI 局部改写建议不存在"));
 
@@ -1397,10 +1416,10 @@ class Phase1ApiIntegrationTest {
     }
 
     @Test
-    void openApiDocsShouldBePublicAndDescribeJwtSecurity() throws Exception {
-        mockMvc.perform(get("/v3/api-docs"))
-                .andExpect(status().isOk());
-
+    void openApiDefinitionShouldDescribeJwtSecurity() {
+        // @WebMvcTest restricts the slice to the listed application controllers, so the
+        // springdoc resource itself is intentionally outside this test. Runtime exposure is
+        // covered by deployment smoke checks; this slice verifies the generated API contract.
         assertThat(openAPI.getInfo().getTitle()).isEqualTo("AI Resume Optimizer API");
         assertThat(openAPI.getComponents().getSecuritySchemes())
                 .containsKey(OpenApiConfig.JWT_SECURITY_SCHEME);

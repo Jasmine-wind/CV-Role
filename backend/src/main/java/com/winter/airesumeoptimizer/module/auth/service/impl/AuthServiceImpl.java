@@ -5,6 +5,7 @@ import com.winter.airesumeoptimizer.common.exception.BusinessException;
 import com.winter.airesumeoptimizer.module.auth.dto.LoginRequestDTO;
 import com.winter.airesumeoptimizer.module.auth.dto.RegisterRequestDTO;
 import com.winter.airesumeoptimizer.module.auth.service.AuthService;
+import com.winter.airesumeoptimizer.module.auth.support.AccountIdentifierNormalizer;
 import com.winter.airesumeoptimizer.module.auth.vo.LoginVO;
 import com.winter.airesumeoptimizer.module.user.entity.User;
 import com.winter.airesumeoptimizer.module.user.mapper.UserMapper;
@@ -12,6 +13,7 @@ import com.winter.airesumeoptimizer.security.JwtTokenProvider;
 import java.time.LocalDateTime;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -37,26 +39,37 @@ public class AuthServiceImpl implements AuthService {
     @Override
     @Transactional
     public Long register(RegisterRequestDTO requestDTO) {
-        if (existsByUsername(requestDTO.getUsername())) {
-            throw new BusinessException(400, "用户名已存在");
+        String username = AccountIdentifierNormalizer.normalizeUsername(requestDTO.getUsername());
+        String email = AccountIdentifierNormalizer.normalizeEmail(requestDTO.getEmail());
+        validateRegistrationIdentifiers(username, email);
+
+        if (existsByUsername(username)) {
+            throw new BusinessException(409, "用户名已存在");
         }
-        if (existsByEmail(requestDTO.getEmail())) {
-            throw new BusinessException(400, "邮箱已存在");
+        if (existsByEmail(email)) {
+            throw new BusinessException(409, "邮箱已存在");
         }
 
         LocalDateTime now = LocalDateTime.now();
         User user = new User();
-        user.setUsername(requestDTO.getUsername());
-        user.setEmail(requestDTO.getEmail());
+        user.setUsername(username);
+        user.setEmail(email);
         user.setPasswordHash(passwordEncoder.encode(requestDTO.getPassword()));
         user.setNickname(requestDTO.getNickname());
         user.setCreatedAt(now);
         user.setUpdatedAt(now);
 
-        int rows = userMapper.insert(user);
-        if (rows != 1 || user.getId() == null) {
-            log.warn("User register failed: accountType={}", resolveAccountType(requestDTO.getUsername()));
-            throw new BusinessException(500, "注册失败，请稍后重试");
+        try {
+            int rows = userMapper.insert(user);
+            if (rows != 1 || user.getId() == null) {
+                log.warn("User registration persistence failed");
+                throw new BusinessException(500, "注册失败，请稍后重试");
+            }
+        } catch (DuplicateKeyException exception) {
+            // The pre-checks improve the common response, but only the database can
+            // close the concurrent-registration race. Do not log either identifier.
+            log.warn("User registration rejected by unique account constraint");
+            throw new BusinessException(409, "用户名或邮箱已存在");
         }
         log.info("User registered: userId={}", user.getId());
         return user.getId();
@@ -64,14 +77,14 @@ public class AuthServiceImpl implements AuthService {
 
     @Override
     public LoginVO login(LoginRequestDTO requestDTO) {
-        User user = userMapper.selectOne(new LambdaQueryWrapper<User>()
-                .eq(User::getUsername, requestDTO.getAccount())
-                .or()
-                .eq(User::getEmail, requestDTO.getAccount())
-                .last("LIMIT 1"));
+        String account = AccountIdentifierNormalizer.normalizeLoginAccount(requestDTO.getAccount());
+        boolean emailAccount = AccountIdentifierNormalizer.isEmailLike(account);
+        User user = emailAccount
+                ? userMapper.selectByEmail(account)
+                : userMapper.selectByUsername(account);
 
         if (user == null || !passwordEncoder.matches(requestDTO.getPassword(), user.getPasswordHash())) {
-            log.warn("User login failed: accountType={}", resolveAccountType(requestDTO.getAccount()));
+            log.warn("User login failed: accountType={}", emailAccount ? "email" : "username");
             throw new BusinessException(400, "用户名、邮箱或密码错误");
         }
 
@@ -98,10 +111,18 @@ public class AuthServiceImpl implements AuthService {
                 .eq(User::getEmail, email));
     }
 
-    private String resolveAccountType(String account) {
-        if (account == null) {
-            return "unknown";
+    private void validateRegistrationIdentifiers(String username, String email) {
+        if (username == null || username.isBlank()) {
+            throw new BusinessException(400, "用户名不能为空");
         }
-        return account.contains("@") ? "email" : "username";
+        if (AccountIdentifierNormalizer.isEmailLike(username)) {
+            throw new BusinessException(400, "用户名不能使用邮箱格式");
+        }
+        if (email == null || email.isBlank()) {
+            throw new BusinessException(400, "邮箱不能为空");
+        }
+        if (!AccountIdentifierNormalizer.isEmailLike(email)) {
+            throw new BusinessException(400, "邮箱格式不正确");
+        }
     }
 }

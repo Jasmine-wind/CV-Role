@@ -116,15 +116,23 @@ const router = createRouter({
   ],
 })
 
-router.beforeEach((to) => {
+router.beforeEach(async (to) => {
   const authStore = useAuthStore()
+  const loginRedirect = () => ({
+    name: 'login' as const,
+    query: { redirect: to.fullPath },
+  })
 
-  if (to.meta.requiresAuth && !authStore.isAuthenticated) {
-    return {
-      name: 'login',
-      query: {
-        redirect: to.fullPath,
-      },
+  if (to.meta.requiresAuth && !authStore.isAuthenticated) return loginRedirect()
+
+  // Resolve the user identity before mounting an authenticated page. Composer
+  // recovery must never read tab state while only an unscoped token is known.
+  if (to.meta.requiresAuth && !authStore.currentUser) {
+    try {
+      const user = await authStore.fetchMe()
+      if (!user) return loginRedirect()
+    } catch {
+      return loginRedirect()
     }
   }
 

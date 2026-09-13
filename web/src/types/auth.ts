@@ -4,6 +4,7 @@ export interface ApiResult<T> {
   data: T
   path?: string | null
   timestamp?: string | null
+  requestId?: string | null
 }
 
 export interface LoginRequest {

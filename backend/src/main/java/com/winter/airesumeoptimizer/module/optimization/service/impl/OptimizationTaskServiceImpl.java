@@ -23,6 +23,7 @@ import com.winter.airesumeoptimizer.module.optimization.entity.OptimizationTask;
 import com.winter.airesumeoptimizer.module.optimization.entity.ResumeVersion;
 import com.winter.airesumeoptimizer.module.optimization.mapper.JobTargetMapper;
 import com.winter.airesumeoptimizer.module.optimization.mapper.OptimizationTaskMapper;
+import com.winter.airesumeoptimizer.module.optimization.mapper.OptimizationTaskSummaryRow;
 import com.winter.airesumeoptimizer.module.optimization.mapper.ResumeVersionMapper;
 import com.winter.airesumeoptimizer.module.optimization.service.OptimizationTaskService;
 import com.winter.airesumeoptimizer.module.optimization.vo.OptimizationTaskVO;
@@ -208,13 +209,23 @@ public class OptimizationTaskServiceImpl implements OptimizationTaskService {
 
     @Override
     public java.util.List<OptimizationTaskVO> listRecent(Long userId, int limit) {
+        validateUserId(userId);
         int bounded = Math.max(1, Math.min(limit, 20));
-        return optimizationTaskMapper.selectList(new LambdaQueryWrapper<OptimizationTask>()
-                        .eq(OptimizationTask::getUserId, userId)
-                        .orderByDesc(OptimizationTask::getUpdatedAt)
-                        .orderByDesc(OptimizationTask::getId)
-                        .last("LIMIT " + bounded))
-                .stream().map(task -> get(userId, task.getId())).toList();
+        return optimizationTaskMapper.selectRecentSummaries(userId, bounded).stream()
+                .map(this::toRecentSummaryVO)
+                .toList();
+    }
+
+    private OptimizationTaskVO toRecentSummaryVO(OptimizationTaskSummaryRow row) {
+        return OptimizationTaskVO.builder()
+                .optimizationTaskId(row.getOptimizationTaskId())
+                .resumeId(row.getResumeId())
+                .status(row.getStatus())
+                .jobTitle(row.getJobTitle())
+                .resumeName(row.getResumeName())
+                .createdAt(row.getCreatedAt())
+                .updatedAt(row.getUpdatedAt())
+                .build();
     }
 
     @Override

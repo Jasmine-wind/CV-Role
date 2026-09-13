@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { mount } from '@vue/test-utils'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import BulletSuggestionCard from '@/components/workspace/BulletSuggestionCard.vue'
 
 const ElButton = {
@@ -49,6 +49,7 @@ describe('BulletSuggestionCard', () => {
   })
 
   it('shows a content review advisory while keeping the candidate applyable', async () => {
+    const apply = vi.fn()
     const wrapper = mount(BulletSuggestionCard, {
       props: {
         mode: 'ready',
@@ -57,16 +58,18 @@ describe('BulletSuggestionCard', () => {
         reason: '补充 Kafka 相关技术描述；原文未包含该信息，请确认真实性。',
         reviewCode: 'NEW_TECHNOLOGY',
         reviewMessage: '建议包含原文未写明的信息，请确认这些内容确实属于你的真实经历。',
+        onApply: apply,
       },
       global: { stubs: { ElButton } },
     })
 
-    expect(wrapper.text()).toContain('请确认内容真实')
+    expect(wrapper.text()).toContain('新增技术或能力信息')
+    expect(wrapper.text()).toContain('不代表系统已验证内容真实性')
     expect(wrapper.text()).toContain('负责订单服务开发，并使用 Kafka 处理异步消息')
     expect(wrapper.text()).toContain('差异')
-    expect(wrapper.get('button').text()).toBe('确认并采纳')
+    expect(wrapper.get('button').text()).toBe('采纳此建议')
     await wrapper.get('button').trigger('click')
-    expect(wrapper.emitted('apply')).toHaveLength(1)
+    expect(apply).toHaveBeenCalledOnce()
     expect(wrapper.text()).not.toContain('没有通过事实校验')
   })
 
@@ -103,6 +106,47 @@ describe('BulletSuggestionCard', () => {
     expect(wrapper.text()).toContain('建议版本')
     expect(wrapper.text()).toContain('差异')
     expect(wrapper.find('.diff-added').text()).toContain('并')
-    expect(wrapper.get('button').text()).toBe('采纳')
+    expect(wrapper.get('button').text()).toBe('采纳此建议')
+  })
+
+  it.each([
+    ['NEW_QUANTITATIVE_CLAIM', '新增数字或量化描述'],
+    ['NEW_TECHNOLOGY', '新增技术或能力信息'],
+    ['NEW_ENTITY', '新增实体信息'],
+    ['RESPONSIBILITY_ESCALATION', '职责或参与程度升级'],
+    ['NEW_ACHIEVEMENT', '新增成果或效果描述'],
+    ['NEW_SCOPE_OR_TIME', '新增或改变范围、时间'],
+    ['UNDETERMINED', '变化内容需要核对'],
+  ])('maps %s to a concrete review advisory', (reviewCode, expectedTitle) => {
+    const wrapper = mount(BulletSuggestionCard, {
+      props: {
+        mode: 'ready',
+        originalText: '参与订单服务开发',
+        suggestedText: '主导订单服务开发并提升性能 30%',
+        reason: '调整职责与成果表达。',
+        reviewCode,
+      },
+      global: { stubs: { ElButton } },
+    })
+
+    expect(wrapper.text()).toContain(expectedTitle)
+    expect(wrapper.text()).toContain('系统')
+    expect(wrapper.get('button').text()).toBe('采纳此建议')
+    expect(wrapper.get('button').text()).not.toContain('确认')
+  })
+
+  it('does not invent a reassuring reason when the API reason is missing', () => {
+    const wrapper = mount(BulletSuggestionCard, {
+      props: {
+        mode: 'ready',
+        originalText: '参与订单服务开发',
+        suggestedText: '负责订单服务开发',
+        reason: null,
+      },
+      global: { stubs: { ElButton } },
+    })
+
+    expect(wrapper.text()).toContain('改写原因未提供')
+    expect(wrapper.text()).not.toContain('保留原有事实')
   })
 })

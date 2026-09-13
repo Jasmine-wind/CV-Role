@@ -1,3 +1,18 @@
+management:
+  endpoint:
+    health:
+      group:
+        # PostgreSQL is business truth and MinIO is the production resume/export store.
+        # Redis is intentionally excluded because it contains rebuildable cache only.
+        readiness:
+          include: readinessState,db,minio
+
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false
+
 spring:
   config:
     import:

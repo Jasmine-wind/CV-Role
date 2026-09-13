@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import PageHeader from '@/components/common/PageHeader.vue'
 import ErrorState from '@/components/common/ErrorState.vue'
@@ -17,7 +17,7 @@ import type { OptimizationTask } from '@/types/optimization-task'
 import { getResumeList, requestResumePreparation, uploadResume } from '@/api/resume'
 import { startAsyncTaskPolling } from '@/utils/asyncTaskPolling'
 import type { AsyncTaskPollingController } from '@/utils/asyncTaskPolling'
-import type { ActiveJobAnalysis, JobAnalysisStartResult } from '@/types/job-analysis'
+import type { JobAnalysisStartResult } from '@/types/job-analysis'
 import type { AsyncTaskVO } from '@/types/task'
 import type { ResumeListItem } from '@/types/resume'
 import {
@@ -28,17 +28,23 @@ import {
   pickInitialResumeId,
 } from './homeComposer'
 import { resolveSafeRedirect } from '@/utils/safeRedirect'
+import { useAuthStore } from '@/stores/auth'
+import { getAuthSessionGeneration } from '@/utils/authSessionGeneration'
+import {
+  clearJobComposerDraft,
+  clearStoredActiveJobAnalysis,
+  readActiveJobAnalysis,
+  readJobComposerDraft,
+  saveJobComposerDraft,
+  saveStoredActiveJobAnalysis,
+} from '@/utils/jobComposerPersistence'
 
-const ACTIVE_ANALYSIS_STORAGE_KEY = 'cv-role:active-job-analysis'
 const ANALYSIS_TIMEOUT_MS = 8 * 60 * 1000
-
-type StoredActiveJobAnalysis = ActiveJobAnalysis & {
-  resumeId?: number
-  jobDescription?: string
-}
+const DRAFT_SAVE_DEBOUNCE_MS = 300
 
 const route = useRoute()
 const router = useRouter()
+const authStore = useAuthStore()
 const resumes = ref<ResumeListItem[]>([])
 const selectedResumeId = ref<number | null>(null)
 const jobDescription = ref('')
@@ -64,6 +70,52 @@ const recentTasksLoading = ref(false)
 const deletingTaskId = ref<number | null>(null)
 let analysisPolling: AsyncTaskPollingController | null = null
 const preparationPolling = new Map<number, AsyncTaskPollingController>()
+let ownerUserId: number | null = null
+let ownerGeneration = -1
+let draftSaveTimer: number | null = null
+let persistenceReady = false
+let composerConsumed = false
+
+const isCurrentIdentity = () =>
+  ownerUserId !== null
+  && authStore.currentUser?.id === ownerUserId
+  && getAuthSessionGeneration() === ownerGeneration
+
+const cancelDraftSave = () => {
+  if (draftSaveTimer !== null) {
+    window.clearTimeout(draftSaveTimer)
+    draftSaveTimer = null
+  }
+}
+
+const removeComposerDraft = () => {
+  cancelDraftSave()
+  clearJobComposerDraft()
+}
+
+const persistComposerDraft = () => {
+  cancelDraftSave()
+  if (!persistenceReady || !isCurrentIdentity() || ownerUserId === null) return
+  if (!jobDescription.value.trim()) {
+    clearJobComposerDraft()
+    return
+  }
+  saveJobComposerDraft(
+    ownerUserId,
+    selectedResumeId.value,
+    jobDescription.value,
+  )
+}
+
+const scheduleComposerDraftSave = () => {
+  cancelDraftSave()
+  if (!persistenceReady || !isCurrentIdentity()) return
+  if (!jobDescription.value.trim()) {
+    clearJobComposerDraft()
+    return
+  }
+  draftSaveTimer = window.setTimeout(persistComposerDraft, DRAFT_SAVE_DEBOUNCE_MS)
+}
 
 const selectedResume = computed(
   () => resumes.value.find((item) => item.id === selectedResumeId.value) ?? null,
@@ -164,11 +216,14 @@ const composerActionDetail = computed(() => {
 })
 
 const loadAiConfiguration = async () => {
+  const generation = ownerGeneration
   try {
     const settings = await getAiProviderSettings()
+    if (!isCurrentIdentity() || generation !== ownerGeneration) return
     aiConfigurationState.value = resolveAiProviderConfigurationState(settings)
     aiConfigurationRequired.value = aiConfigurationState.value !== 'ACTIVE'
   } catch {
+    if (!isCurrentIdentity() || generation !== ownerGeneration) return
     // If the capability check is unavailable, let the start endpoint remain authoritative.
     aiConfigurationState.value = null
     aiConfigurationRequired.value = false
@@ -176,19 +231,26 @@ const loadAiConfiguration = async () => {
 }
 
 const loadInsightAvailability = async () => {
+  const generation = ownerGeneration
   try {
-    hasJobDirectionInsight.value = (await getJobDirectionInsights()).cohorts.length > 0
+    const insights = await getJobDirectionInsights()
+    if (!isCurrentIdentity() || generation !== ownerGeneration) return
+    hasJobDirectionInsight.value = insights.cohorts.length > 0
   } catch {
+    if (!isCurrentIdentity() || generation !== ownerGeneration) return
     // Insight is optional long-term value. Its read failure must never block the single-JD start flow.
     hasJobDirectionInsight.value = false
   }
 }
 
 const loadResumes = async (preferredResumeId?: number) => {
+  const generation = ownerGeneration
   loading.value = true
   loadFailed.value = false
   try {
-    resumes.value = await getResumeList()
+    const loadedResumes = await getResumeList()
+    if (!isCurrentIdentity() || generation !== ownerGeneration) return
+    resumes.value = loadedResumes
     if (!resumes.value.length) {
       uploadRowVisible.value = true
     }
@@ -198,10 +260,11 @@ const loadResumes = async (preferredResumeId?: number) => {
       preferredResumeId,
     )
   } catch {
+    if (!isCurrentIdentity() || generation !== ownerGeneration) return
     // 区分真正的加载失败与空数据：失败提供重试，而不是当成没有简历。
     loadFailed.value = true
   } finally {
-    loading.value = false
+    if (isCurrentIdentity() && generation === ownerGeneration) loading.value = false
   }
 }
 
@@ -232,6 +295,7 @@ const clearJobDescription = async () => {
       cancelButtonText: '保留',
     })
     jobDescription.value = ''
+    removeComposerDraft()
   } catch {
     // Cancelling the confirmation is an intentional no-op.
   }
@@ -251,6 +315,9 @@ const clearPreparationState = (resumeId: number) => {
 }
 
 const startPreparationPolling = (resumeId: number, taskId: number) => {
+  if (!isCurrentIdentity()) return
+  const generation = ownerGeneration
+  const stillOwned = () => isCurrentIdentity() && generation === ownerGeneration
   preparationPolling.get(resumeId)?.stop()
   preparationTaskIds.value = { ...preparationTaskIds.value, [resumeId]: taskId }
   preparationMessages.value = { ...preparationMessages.value, [resumeId]: '正在读取简历内容' }
@@ -258,26 +325,31 @@ const startPreparationPolling = (resumeId: number, taskId: number) => {
     taskId,
     timeoutMs: 5 * 60 * 1000,
     onUpdate: (task) => {
+      if (!stillOwned()) return
       preparationMessages.value = {
         ...preparationMessages.value,
         [resumeId]: task.message || '正在准备简历',
       }
     },
     onSuccess: async () => {
+      if (!stillOwned()) return
       clearPreparationState(resumeId)
       await loadResumes(resumeId)
-      ElMessage.success('简历已准备好，可以开始分析')
+      if (stillOwned()) ElMessage.success('简历已准备好，可以开始分析')
     },
     onFailed: async (task) => {
+      if (!stillOwned()) return
       clearPreparationState(resumeId)
       await loadResumes(resumeId)
-      ElMessage.error(task.errorMessage || '未能读取简历，请前往“我的简历”重试')
+      if (stillOwned()) ElMessage.error(task.errorMessage || '未能读取简历，请前往“我的简历”重试')
     },
     onTimeout: () => {
+      if (!stillOwned()) return
       clearPreparationState(resumeId)
       ElMessage.warning('简历仍在后台准备，请稍后再开始分析')
     },
     onError: (error) => {
+      if (!stillOwned()) return
       clearPreparationState(resumeId)
       ElMessage.error(error instanceof Error ? error.message : '获取简历状态失败')
     },
@@ -291,9 +363,11 @@ const handleUpload = async () => {
     return
   }
 
+  const generation = ownerGeneration
   uploading.value = true
   try {
     const uploaded = await uploadResume(selectedFile.value)
+    if (!isCurrentIdentity() || generation !== ownerGeneration) return
     selectedFile.value = null
     if (fileInput.value) {
       fileInput.value.value = ''
@@ -305,38 +379,47 @@ const handleUpload = async () => {
     } else {
       try {
         const task = await requestResumePreparation(uploaded.id)
+        if (!isCurrentIdentity() || generation !== ownerGeneration) return
         startPreparationPolling(uploaded.id, task.taskId)
       } catch {
-        ElMessage.warning('简历已上传；如果暂时无法准备，开始分析时系统会自动重试')
+        if (isCurrentIdentity() && generation === ownerGeneration) {
+          ElMessage.warning('简历已上传；如果暂时无法准备，开始分析时系统会自动重试')
+        }
       }
     }
-    ElMessage.success('简历上传成功')
+    if (isCurrentIdentity() && generation === ownerGeneration) ElMessage.success('简历上传成功')
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '简历上传失败')
+    if (isCurrentIdentity() && generation === ownerGeneration) {
+      ElMessage.error(error instanceof Error ? error.message : '简历上传失败')
+    }
   } finally {
-    uploading.value = false
+    if (isCurrentIdentity() && generation === ownerGeneration) uploading.value = false
   }
 }
 
 const saveActiveAnalysis = (analysis: JobAnalysisStartResult) => {
-  const stored: StoredActiveJobAnalysis = {
-    ...analysis,
-    resumeId: selectedResumeId.value ?? undefined,
-    jobDescription: jobDescription.value.trim(),
-    startedAt: new Date().toISOString(),
-  }
-  window.sessionStorage.setItem(ACTIVE_ANALYSIS_STORAGE_KEY, JSON.stringify(stored))
+  if (!isCurrentIdentity() || ownerUserId === null) return
+  persistComposerDraft()
+  saveStoredActiveJobAnalysis(
+    ownerUserId,
+    analysis,
+    selectedResumeId.value,
+    jobDescription.value.trim(),
+  )
 }
 
 const clearActiveAnalysis = () => {
-  window.sessionStorage.removeItem(ACTIVE_ANALYSIS_STORAGE_KEY)
+  clearStoredActiveJobAnalysis()
   activeAnalysis.value = null
   analysisTask.value = null
 }
 
 const openAnalysisResult = (analysis: JobAnalysisStartResult) => {
+  if (!isCurrentIdentity()) return
+  composerConsumed = true
+  removeComposerDraft()
   clearActiveAnalysis()
-  router.push({
+  void router.push({
     name: 'job-analysis',
     params: {
       optimizationTaskId: String(analysis.optimizationTaskId),
@@ -345,6 +428,8 @@ const openAnalysisResult = (analysis: JobAnalysisStartResult) => {
 }
 
 const startAnalysisPolling = (analysis: JobAnalysisStartResult) => {
+  const generation = ownerGeneration
+  const stillOwned = () => isCurrentIdentity() && generation === ownerGeneration
   analysisPolling?.stop()
   activeAnalysis.value = analysis
   analysisTask.value = null
@@ -355,28 +440,43 @@ const startAnalysisPolling = (analysis: JobAnalysisStartResult) => {
     taskId: analysis.taskId,
     timeoutMs: ANALYSIS_TIMEOUT_MS,
     onUpdate: (task) => {
-      analysisTask.value = task
+      if (stillOwned()) analysisTask.value = task
     },
-    onSuccess: () => openAnalysisResult(analysis),
+    onSuccess: () => {
+      if (stillOwned()) openAnalysisResult(analysis)
+    },
     onFailed: (task) => {
+      if (!stillOwned()) return
       analysisTask.value = task
       analysisTimedOut.value = false
       analysisError.value = task.errorMessage || '岗位分析没有完成。'
     },
     onCancelled: () => {
+      if (!stillOwned()) return
       analysisTimedOut.value = false
       analysisError.value = '岗位分析已取消，可以重新开始。'
     },
     onTimeout: () => {
+      if (!stillOwned()) return
       analysisTimedOut.value = true
       analysisError.value = '岗位分析仍在后台进行，你可以继续等待或稍后回到首页查看。'
     },
     onError: (error) => {
+      if (!stillOwned()) return
       const message = error instanceof Error ? error.message : '获取岗位分析状态失败'
-      if (message.includes('任务不存在') || message.includes('无权限')) {
+      const code = (error as { code?: number }).code
+      if (
+        code === 401
+        || code === 403
+        || code === 404
+        || message.includes('任务不存在')
+        || message.includes('无权限')
+      ) {
         clearActiveAnalysis()
+        removeComposerDraft()
+        jobDescription.value = ''
         analysisError.value = null
-        ElMessage.warning('上次岗位分析已不可用，请重新开始')
+        if (code !== 401) ElMessage.warning('上次岗位分析已不可用，请重新开始')
         return
       }
       analysisTimedOut.value = true
@@ -390,6 +490,7 @@ const handleStartAnalysis = async () => {
     return
   }
 
+  const generation = ownerGeneration
   analysisError.value = null
   analysisTimedOut.value = false
   startingAnalysis.value = true
@@ -398,15 +499,17 @@ const handleStartAnalysis = async () => {
       resumeId: selectedResumeId.value,
       jobDescription: jobDescription.value.trim(),
     })
+    if (!isCurrentIdentity() || generation !== ownerGeneration) return
     saveActiveAnalysis(analysis)
     startAnalysisPolling(analysis)
   } catch (error) {
+    if (!isCurrentIdentity() || generation !== ownerGeneration) return
     const failureCode = (error as { failureCode?: string }).failureCode
     aiConfigurationRequired.value = failureCode === 'AI_CONFIGURATION_REQUIRED'
     if (aiConfigurationRequired.value) aiConfigurationState.value = null
     analysisError.value = error instanceof Error ? error.message : '岗位分析启动失败'
   } finally {
-    startingAnalysis.value = false
+    if (isCurrentIdentity() && generation === ownerGeneration) startingAnalysis.value = false
   }
 }
 
@@ -416,17 +519,21 @@ const retryAnalysis = async () => {
     return
   }
 
+  const generation = ownerGeneration
   startingAnalysis.value = true
   analysisError.value = null
   analysisTimedOut.value = false
   try {
     const retried = await retryJobAnalysis(analysis.optimizationTaskId)
+    if (!isCurrentIdentity() || generation !== ownerGeneration) return
     saveActiveAnalysis(retried)
     startAnalysisPolling(retried)
   } catch (error) {
-    analysisError.value = error instanceof Error ? error.message : '岗位分析重试失败'
+    if (isCurrentIdentity() && generation === ownerGeneration) {
+      analysisError.value = error instanceof Error ? error.message : '岗位分析重试失败'
+    }
   } finally {
-    startingAnalysis.value = false
+    if (isCurrentIdentity() && generation === ownerGeneration) startingAnalysis.value = false
   }
 }
 
@@ -445,43 +552,28 @@ const continueWaiting = () => {
 }
 
 const restoreActiveAnalysis = () => {
-  const raw = window.sessionStorage.getItem(ACTIVE_ANALYSIS_STORAGE_KEY)
-  if (!raw) {
-    return
+  if (ownerUserId === null || !isCurrentIdentity()) return
+  const stored = readActiveJobAnalysis(ownerUserId)
+  if (!stored) return
+  if (stored.resumeId && resumes.value.some((resume) => resume.id === stored.resumeId)) {
+    selectedResumeId.value = stored.resumeId
   }
-  try {
-    const stored = JSON.parse(raw) as StoredActiveJobAnalysis
-    if (
-      stored.taskId &&
-      stored.optimizationTaskId &&
-      stored.sourceResumeVersionId &&
-      stored.targetResumeVersionId &&
-      stored.jobTargetId
-    ) {
-      if (stored.resumeId && resumes.value.some((resume) => resume.id === stored.resumeId)) {
-        selectedResumeId.value = stored.resumeId
-      }
-      if (typeof stored.jobDescription === 'string') {
-        jobDescription.value = stored.jobDescription
-      }
-      startAnalysisPolling(stored)
-      return
-    }
-  } catch {
-    // Invalid local state should not block a new analysis.
-  }
-  window.sessionStorage.removeItem(ACTIVE_ANALYSIS_STORAGE_KEY)
+  jobDescription.value = stored.jobDescription
+  startAnalysisPolling(stored)
 }
 
 const loadRecentTasks = async () => {
+  const generation = ownerGeneration
   recentTasksLoading.value = true
   recentTasksFailed.value = false
   try {
-    recentTasks.value = await getRecentOptimizationTasks()
+    const tasks = await getRecentOptimizationTasks()
+    if (!isCurrentIdentity() || generation !== ownerGeneration) return
+    recentTasks.value = tasks
   } catch {
-    recentTasksFailed.value = true
+    if (isCurrentIdentity() && generation === ownerGeneration) recentTasksFailed.value = true
   } finally {
-    recentTasksLoading.value = false
+    if (isCurrentIdentity() && generation === ownerGeneration) recentTasksLoading.value = false
   }
 }
 const taskStatusLabel = (status: string) =>
@@ -537,28 +629,47 @@ const deleteRecentTask = async (task: OptimizationTask) => {
   }
 }
 
+watch([selectedResumeId, jobDescription], scheduleComposerDraftSave)
+
 onMounted(async () => {
+  const user = authStore.currentUser ?? await authStore.fetchMe().catch(() => null)
+  if (!user) return
+  ownerUserId = user.id
+  ownerGeneration = getAuthSessionGeneration()
+
+  const draft = readJobComposerDraft(user.id)
+  if (draft) {
+    selectedResumeId.value = draft.selectedResumeId
+    jobDescription.value = draft.jobDescription
+  }
+
   await loadResumes(preferredResumeId.value)
+  if (!isCurrentIdentity()) return
+  restoreActiveAnalysis()
+  persistenceReady = true
+
   const pendingResumes = resumes.value.filter(
     (resume) => resume.parseStatus === 'PENDING' || resume.qualityStatus === 'PENDING',
   )
-  await Promise.all(
+  void Promise.all(
     pendingResumes.map(async (resume) => {
       try {
         const task = await requestResumePreparation(resume.id)
-        startPreparationPolling(resume.id, task.taskId)
+        if (isCurrentIdentity()) startPreparationPolling(resume.id, task.taskId)
       } catch {
         // The resume page exposes an explicit retry when the background task cannot be resumed.
       }
     }),
   )
-  restoreActiveAnalysis()
   void loadAiConfiguration()
   void loadInsightAvailability()
   void loadRecentTasks()
 })
 
-onUnmounted(() => {
+onBeforeUnmount(() => {
+  if (!composerConsumed) persistComposerDraft()
+  else cancelDraftSave()
+  persistenceReady = false
   analysisPolling?.stop()
   preparationPolling.forEach((controller) => controller.stop())
   preparationPolling.clear()

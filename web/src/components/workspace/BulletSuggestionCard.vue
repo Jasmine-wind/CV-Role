@@ -29,6 +29,56 @@ const diffSegments = computed(() =>
 
 const isLowValueChange = computed(() => props.rejectCode === 'LOW_VALUE_CHANGE')
 
+const missingReasonText = '改写原因未提供，请根据差异核对内容后再决定是否采纳。'
+const displayedReason = computed(() => props.reason?.trim() || missingReasonText)
+
+const reviewAdvisories: Record<string, { title: string; message: string }> = {
+  NEW_QUANTITATIVE_CLAIM: {
+    title: '新增数字或量化描述',
+    message: '建议包含原文未写明的数值或量化结果，请核对数值是否真实准确。',
+  },
+  NEW_TECHNOLOGY: {
+    title: '新增技术或能力信息',
+    message: '建议包含原文未写明的技术、工具或能力，请按真实经历核对。',
+  },
+  NEW_ENTITY: {
+    title: '新增实体信息',
+    message: '建议包含原文未写明的公司、产品、项目或其他实体，请按真实经历核对。',
+  },
+  RESPONSIBILITY_ESCALATION: {
+    title: '职责或参与程度升级',
+    message: '建议提高了职责或参与程度的表述，请按实际情况核对。',
+  },
+  NEW_ACHIEVEMENT: {
+    title: '新增成果或效果描述',
+    message: '建议包含原文未写明的成果、奖项或效果，请按真实经历核对。',
+  },
+  NEW_SCOPE_OR_TIME: {
+    title: '新增或改变范围、时间',
+    message: '建议加入或改变了范围、时间等信息，请核对是否准确。',
+  },
+  UNDETERMINED: {
+    title: '变化内容需要核对',
+    message: '这次改写变化较大，系统无法自动确认其中的信息，请按真实经历逐项核对。',
+  },
+}
+
+const reviewAdvisory = computed(() => {
+  const reviewCode = props.reviewCode
+  if (!reviewCode) return null
+  const mapped = reviewAdvisories[reviewCode]
+  return mapped
+    ? { ...mapped, message: props.reviewMessage?.trim() || mapped.message }
+    : {
+        title: '变化内容需要核对',
+        message:
+          props.reviewMessage?.trim() ||
+          '建议包含原文未写明或变化较大的信息，请按真实经历核对。',
+      }
+})
+
+const applySuggestion = () => emit('apply')
+
 const submitCustom = () => {
   const instruction = customInstruction.value.trim()
   if (!instruction) return
@@ -46,7 +96,7 @@ const submitCustom = () => {
         type="textarea"
         :autosize="{ minRows: 2, maxRows: 4 }"
         :maxlength="500"
-        placeholder="例如：更突出后端职责。AI 不能新增事实。"
+        placeholder="例如：更突出后端职责。新增信息会提示你核对。"
         aria-label="自定义改写要求"
       />
       <div class="suggestion-actions">
@@ -88,11 +138,12 @@ const submitCustom = () => {
       </div>
       <div class="suggestion-copy-block is-reason">
         <span class="suggestion-label">为什么这样改</span>
-        <p>{{ props.reason || '保留原有事实，只调整表达。' }}</p>
+        <p>{{ displayedReason }}</p>
       </div>
-      <p v-if="props.mode === 'ready' && props.reviewCode" class="suggestion-review-note">
-        <strong>请确认内容真实</strong>
-        {{ props.reviewMessage || '建议中包含原文未写明或变化较大的信息，请确认符合你的真实经历后再采纳。' }}
+      <p v-if="props.mode === 'ready' && reviewAdvisory" class="suggestion-review-note">
+        <strong>{{ reviewAdvisory.title }}</strong>
+        {{ reviewAdvisory.message }}
+        <span>采纳只会将建议写入简历，不代表系统已验证内容真实性。</span>
       </p>
       <p v-if="props.mode === 'stale'" class="suggestion-stale">
         内容或版本已变化，这条建议已失效，不能采纳。可以重新生成或关闭。
@@ -103,9 +154,9 @@ const submitCustom = () => {
           size="small"
           type="primary"
           :disabled="!props.suggestedText"
-          @click="emit('apply')"
+          @click="applySuggestion"
         >
-          {{ props.reviewCode ? '确认并采纳' : '采纳' }}
+          采纳此建议
         </el-button>
         <el-button size="small" @click="emit('regenerate')">重新生成</el-button>
         <el-button size="small" text @click="emit('reject')">{{

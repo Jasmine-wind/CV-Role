@@ -405,6 +405,7 @@ test.describe('Job Analysis fixed evidence workspace', () => {
     await openAnalysis(page)
     await expect(page.locator('.analysis-review-layout')).toBeVisible()
     await page.route('**/api/resumes', (route) => route.fulfill(response([])))
+    await page.route('**/api/settings/ai-provider', (route) => route.fulfill(response({ configured: false })))
     await page.route('**/api/job-direction-insights', (route) => route.fulfill(response({ cohorts: [] })))
     await page.route('**/api/optimization-tasks/recent*', (route) => route.fulfill(response([])))
     await page.goto('/app')

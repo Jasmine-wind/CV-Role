@@ -150,7 +150,7 @@ class Phase9PostgresFlywayIntegrationTest {
 
     @Test
     void freshFlywaySchemaEnforcesOwnershipAndDerivesInsightWithoutPersistedAggregate() {
-        assertThat(flyway.info().current().getVersion().getVersion()).isEqualTo("36");
+        assertThat(flyway.info().current().getVersion().getVersion()).isEqualTo("38");
         assertThat(jdbcTemplate.queryForObject(
                 "SELECT COUNT(*) FROM information_schema.columns WHERE table_name = 'resume_parse_results' AND column_name IN ('parse_generation', 'parse_token')",
                 Integer.class)).isEqualTo(2);
@@ -784,7 +784,7 @@ class Phase9PostgresFlywayIntegrationTest {
                     .load();
             upgraded.migrate();
 
-            assertThat(upgraded.info().current().getVersion().getVersion()).isEqualTo("36");
+            assertThat(upgraded.info().current().getVersion().getVersion()).isEqualTo("38");
             assertThat(jdbcTemplate.queryForObject(
                     "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = ? AND table_name = 'resumes' AND column_name = 'display_name'",
                     Integer.class,
@@ -828,6 +828,92 @@ class Phase9PostgresFlywayIntegrationTest {
                     "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = ? AND table_name = 'resume_parse_results' AND column_name = 'user_id' AND is_nullable = 'NO'",
                     Integer.class,
                     schema)).isEqualTo(1);
+        } finally {
+            jdbcTemplate.execute("DROP SCHEMA IF EXISTS " + schema + " CASCADE");
+        }
+    }
+
+    @Test
+    void userIdentifierMigrationCanonicalizesSafeHistoryAndEnforcesUnambiguousWrites() {
+        String schema = "user_identifier_upgrade_" + Long.toUnsignedString(System.nanoTime(), 36);
+        try {
+            Flyway releasedV36 = Flyway.configure()
+                    .dataSource(dataSource)
+                    .schemas(schema)
+                    .defaultSchema(schema)
+                    .createSchemas(true)
+                    .locations("classpath:db/migration")
+                    .target(MigrationVersion.fromVersion("36"))
+                    .load();
+            releasedV36.migrate();
+            Long userId = jdbcTemplate.queryForObject(
+                    "INSERT INTO " + schema + ".users (username, email, password_hash) VALUES (?, ?, ?) RETURNING id",
+                    Long.class,
+                    "  LegacyUser  ",
+                    "  Legacy.User@Example.COM  ",
+                    "test-password");
+
+            Flyway upgraded = Flyway.configure()
+                    .dataSource(dataSource)
+                    .schemas(schema)
+                    .defaultSchema(schema)
+                    .createSchemas(true)
+                    .locations("classpath:db/migration")
+                    .load();
+            upgraded.migrate();
+
+            assertThat(upgraded.info().current().getVersion().getVersion()).isEqualTo("38");
+            assertThat(jdbcTemplate.queryForMap(
+                    "SELECT username, email FROM " + schema + ".users WHERE id = ?", userId))
+                    .containsEntry("username", "LegacyUser")
+                    .containsEntry("email", "legacy.user@example.com");
+            assertThatThrownBy(() -> jdbcTemplate.update(
+                    "INSERT INTO " + schema + ".users (username, email, password_hash) VALUES (?, ?, ?)",
+                    "other-user", "LEGACY.USER@EXAMPLE.COM", "test-password"))
+                    .isInstanceOf(DataIntegrityViolationException.class);
+            assertThatThrownBy(() -> jdbcTemplate.update(
+                    "INSERT INTO " + schema + ".users (username, email, password_hash) VALUES (?, ?, ?)",
+                    "cross-field@example.com", "different@example.com", "test-password"))
+                    .isInstanceOf(DataIntegrityViolationException.class);
+            assertThatThrownBy(() -> jdbcTemplate.update(
+                    "INSERT INTO " + schema + ".users (username, email, password_hash) VALUES (?, ?, ?)",
+                    " padded-user ", "padded@example.com", "test-password"))
+                    .isInstanceOf(DataIntegrityViolationException.class);
+        } finally {
+            jdbcTemplate.execute("DROP SCHEMA IF EXISTS " + schema + " CASCADE");
+        }
+    }
+
+    @Test
+    void userIdentifierMigrationFailsClosedWhenCanonicalizationWouldMergeAccounts() {
+        String schema = "user_identifier_conflict_" + Long.toUnsignedString(System.nanoTime(), 36);
+        try {
+            Flyway releasedV36 = Flyway.configure()
+                    .dataSource(dataSource)
+                    .schemas(schema)
+                    .defaultSchema(schema)
+                    .createSchemas(true)
+                    .locations("classpath:db/migration")
+                    .target(MigrationVersion.fromVersion("36"))
+                    .load();
+            releasedV36.migrate();
+            jdbcTemplate.update(
+                    "INSERT INTO " + schema + ".users (username, email, password_hash) VALUES (?, ?, ?), (?, ?, ?)",
+                    "legacy-one", "Collision@Example.com", "test-password",
+                    "legacy-two", "collision@example.com", "test-password");
+
+            Flyway upgraded = Flyway.configure()
+                    .dataSource(dataSource)
+                    .schemas(schema)
+                    .defaultSchema(schema)
+                    .createSchemas(true)
+                    .locations("classpath:db/migration")
+                    .load();
+
+            assertThatThrownBy(upgraded::migrate)
+                    .hasStackTraceContaining("email normalization would merge accounts");
+            assertThat(jdbcTemplate.queryForObject(
+                    "SELECT COUNT(*) FROM " + schema + ".users", Long.class)).isEqualTo(2L);
         } finally {
             jdbcTemplate.execute("DROP SCHEMA IF EXISTS " + schema + " CASCADE");
         }

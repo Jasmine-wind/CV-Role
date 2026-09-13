@@ -74,7 +74,8 @@ jobs:
           docker run -d --name phase9-minio \
             -e MINIO_ROOT_USER="$TEST_MINIO_ACCESS_KEY" \
             -e MINIO_ROOT_PASSWORD="$TEST_MINIO_SECRET_KEY" \
-            -p 9000:9000 minio/minio:RELEASE.2025-04-22T22-12-26Z server /data
+            -p 9000:9000 \
+            quay.io/minio/minio@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e server /data
           for attempt in {1..30}; do
             if curl -fsS "$TEST_MINIO_ENDPOINT/minio/health/live" >/dev/null; then exit 0; fi
             sleep 1
@@ -175,6 +176,11 @@ jobs:
             echo 'Production Compose unexpectedly accepted a missing BYOK key ring' >&2
             exit 1
           fi
+          grep -v '^REDIS_PASSWORD=' "$RUNNER_TEMP/cv-role-production.env" > "$RUNNER_TEMP/cv-role-production-missing-redis-password.env"
+          if docker compose -f docker-compose.prod.yml --env-file "$RUNNER_TEMP/cv-role-production-missing-redis-password.env" config >/dev/null 2>&1; then
+            echo 'Production Compose unexpectedly accepted a missing Redis password' >&2
+            exit 1
+          fi
 
       - name: Build production backend image
         run: docker build -f backend/Dockerfile -t cv-role-backend-ci .
@@ -201,7 +207,7 @@ jobs:
 
           OPS_ENV="$RUNNER_TEMP/cv-role-ops-runtime.env"
           COMPOSE=(docker compose -p "$OPS_PROJECT" -f docker-compose.prod.yml --env-file "$OPS_ENV")
-          MC_IMAGE="minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727"
+          MC_IMAGE="quay.io/minio/mc@sha256:aead63c77f9db9107f1696fb08ecb0faeda23729cde94b0f663edf4fe09728e3"
           DB_MARKER="cv-role-runtime-restart-${GITHUB_RUN_ID}"
           OBJECT_MARKER="cv-role-runtime-restart-${GITHUB_RUN_ID}\n"
           OBJECT_FILE="$RUNNER_TEMP/cv-role-runtime-marker.txt"
@@ -211,7 +217,7 @@ jobs:
           POSTGRES_DB=cv_role_ops_ci
           POSTGRES_USER=cv_role_ops_ci
           POSTGRES_PASSWORD=ci-postgres-placeholder
-          REDIS_PASSWORD=ci-redis-placeholder
+          REDIS_PASSWORD='ci Redis \$runtime; password with spaces'
           MINIO_ROOT_USER=cv-role-ci-minio
           MINIO_ROOT_PASSWORD=ci-minio-placeholder
           MINIO_ACCESS_KEY=cv-role-ci-minio
@@ -301,6 +307,22 @@ jobs:
             wait_healthy nginx
           }
 
+          verify_redis_auth() {
+            local response
+            response=$("${COMPOSE[@]}" exec -T redis sh -ec \
+              'export REDISCLI_AUTH="$REDIS_PASSWORD"; redis-cli --no-auth-warning ping')
+            if [[ "$response" != PONG ]]; then
+              echo 'Redis rejected the configured production password' >&2
+              return 1
+            fi
+            if "${COMPOSE[@]}" exec -T -e REDISCLI_AUTH=definitely-wrong-password \
+                redis redis-cli --no-auth-warning ping 2>/dev/null | grep -qx PONG; then
+              echo 'Redis unexpectedly accepted an incorrect password' >&2
+              return 1
+            fi
+            echo 'Redis authentication accepts the configured password and rejects an incorrect password'
+          }
+
           smoke() {
             BASE_URL="http://127.0.0.1:${OPS_HTTP_PORT}" scripts/ops/smoke-check.sh
           }
@@ -332,6 +354,7 @@ jobs:
           echo 'Starting isolated production-shaped Compose project'
           "${COMPOSE[@]}" up -d --build
           wait_core
+          verify_redis_auth
           smoke
 
           "${COMPOSE[@]}" exec -T postgres sh -c \
@@ -353,6 +376,7 @@ jobs:
           echo 'Restarting Redis only'
           "${COMPOSE[@]}" restart redis
           wait_healthy redis
+          verify_redis_auth
           wait_healthy backend
           wait_healthy nginx
           smoke
@@ -448,7 +472,8 @@ jobs:
           docker run -d --name phase9-e2e-minio \
             -e MINIO_ROOT_USER="$MINIO_ACCESS_KEY" \
             -e MINIO_ROOT_PASSWORD="$MINIO_SECRET_KEY" \
-            -p 9000:9000 minio/minio:RELEASE.2025-04-22T22-12-26Z server /data
+            -p 9000:9000 \
+            quay.io/minio/minio@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e server /data
           for attempt in {1..30}; do
             if curl -fsS "$MINIO_ENDPOINT/minio/health/live" >/dev/null; then exit 0; fi
             sleep 1
@@ -465,7 +490,7 @@ jobs:
             echo $! >"$RUNNER_TEMP/phase9-backend.pid"
           )
           for attempt in {1..60}; do
-            if curl -fsS http://127.0.0.1:8080/v3/api-docs >/dev/null; then exit 0; fi
+            if curl -fsS http://127.0.0.1:8080/actuator/health/readiness >/dev/null; then exit 0; fi
             sleep 2
           done
           cat "$RUNNER_TEMP/phase9-backend.log"

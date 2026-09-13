@@ -2,11 +2,14 @@ import axios from 'axios'
 import type { AxiosError, AxiosRequestConfig, AxiosResponse } from 'axios'
 import type { ApiResult } from '@/types/auth'
 import { clearAuthToken, readAuthToken } from '@/utils/auth-token'
+import { advanceAuthSessionGeneration } from '@/utils/authSessionGeneration'
+import { clearJobComposerTemporaryState } from '@/utils/jobComposerPersistence'
 import { aiFailureMessages, presentAiFailure } from '@/utils/aiFailurePresentation'
 
 export interface ApiError extends Error {
   code?: number
   failureCode?: string
+  requestId?: string
 }
 
 interface ApiClient {
@@ -38,6 +41,10 @@ const service = axios.create({
 })
 
 const redirectUnauthorized = () => {
+  // Authentication failure invalidates every in-flight identity-bound callback
+  // before navigation and removes recoverable JD/task state from this browser tab.
+  advanceAuthSessionGeneration()
+  clearJobComposerTemporaryState()
   clearAuthToken()
 
   if (window.location.pathname !== '/login') {
@@ -50,28 +57,63 @@ const redirectUnauthorized = () => {
 const isAiFailureCode = (message: string | undefined): message is keyof typeof aiFailureMessages =>
   Boolean(message && Object.prototype.hasOwnProperty.call(aiFailureMessages, message))
 
-const translateErrorMessage = (message: string | undefined, fallback: string) => {
-  if (!message) return fallback
-  return isAiFailureCode(message) ? presentAiFailure(message, fallback) : message
+const isJsonContentType = (contentType: unknown) => {
+  const normalized = String(contentType ?? '').toLowerCase()
+  return normalized.includes('application/json') || normalized.includes('+json')
+}
+
+const resolveResponseMessage = (
+  status: number | undefined,
+  result: Partial<ApiResult<unknown>> | undefined,
+  fallback: string,
+  isAuthEndpoint = false,
+) => {
+  const code = typeof result?.code === 'number' ? result.code : status
+  if (status === 401 || code === 401) {
+    return '用户名或密码错误，请检查后重试。'
+  }
+  if (isAuthEndpoint && ((status ?? 0) >= 500 || (code ?? 0) >= 500)) {
+    return '服务器暂时无法处理请求，请稍后重试'
+  }
+
+  // AI failure identifiers are a public business contract, including failures mapped to HTTP 502.
+  if (isAiFailureCode(result?.message)) {
+    return presentAiFailure(result.message, fallback)
+  }
+  if ((status ?? 0) >= 500 || (code ?? 0) >= 500) {
+    return '服务器暂时无法处理请求，请稍后重试'
+  }
+  return result?.message || fallback
+}
+
+const createApiError = (
+  status: number | undefined,
+  result: Partial<ApiResult<unknown>> | undefined,
+  fallback: string,
+  headers?: AxiosResponse['headers'],
+  isAuthEndpoint = false,
+) => {
+  const message = resolveResponseMessage(status, result, fallback, isAuthEndpoint)
+  const apiError = new Error(message) as ApiError
+  apiError.code = typeof result?.code === 'number' ? result.code : status
+  if (isAiFailureCode(result?.message)) apiError.failureCode = result.message
+  const headerRequestId = headers?.['x-request-id']
+  const requestId = result?.requestId || (headerRequestId == null ? undefined : String(headerRequestId))
+  if (requestId) apiError.requestId = requestId
+  return apiError
 }
 
 const unwrapResponse = <T>(response: AxiosResponse<ApiResult<T>>) => {
   const result = response.data
 
   if (result.code !== 200) {
-    // 认证失败和服务端故障使用稳定的用户文案，避免把后端内部详情泄露到登录 / 注册表单。
-    const isAuthEndpoint = response.config.url?.includes('/api/auth/') === true
-    const message =
-      isAuthEndpoint && result.code === 401
-        ? '用户名或密码错误，请检查后重试。'
-        : isAuthEndpoint && result.code >= 500
-          ? '服务器暂时无法处理请求，请稍后重试'
-          : translateErrorMessage(result.message, '请求失败')
-    // 附带业务码（如 409 revision 失效），调用方可据此做失效处理而不是只提示。
-    const apiError = new Error(message) as ApiError
-    apiError.code = result.code
-    if (isAiFailureCode(result.message)) apiError.failureCode = result.message
-    throw apiError
+    throw createApiError(
+      response.status,
+      result,
+      '请求失败',
+      response.headers,
+      response.config.url?.includes('/api/auth/') === true,
+    )
   }
 
   return result.data
@@ -92,30 +134,33 @@ service.interceptors.response.use(
   async (error: AxiosError<ApiResult<unknown> | Blob>) => {
     // responseType: blob 也会把非 2xx JSON 错误读成 Blob，先还原再走同一套错误处理。
     if (error.response?.data instanceof Blob) {
-      const contentType = String(error.response.headers['content-type'] ?? '').toLowerCase()
-      if (contentType.includes('application/json')) {
+      const blob = error.response.data
+      if (isJsonContentType(error.response.headers['content-type']) || isJsonContentType(blob.type)) {
         try {
-          error.response.data = JSON.parse(await error.response.data.text()) as ApiResult<unknown>
+          error.response.data = JSON.parse(await blob.text()) as ApiResult<unknown>
         } catch {
           // 无法解析时保留 HTTP 状态和默认错误文案。
         }
       }
     }
     const normalizedError = error as AxiosError<ApiResult<unknown>>
-    const status = error.response?.status
-    const code = normalizedError.response?.data?.code
-    const message = resolveErrorMessage(normalizedError)
+    const status = normalizedError.response?.status
+    const result = normalizedError.response?.data
+    const code = result?.code
 
     if (status === 401 || code === 401) {
       redirectUnauthorized()
     }
 
-    // 附带业务码（如 409 revision 失效），调用方可据此做失效处理而不是只提示。
-    const apiError = new Error(message) as ApiError
-    apiError.code = code ?? status
-    const failureMessage = normalizedError.response?.data?.message
-    if (isAiFailureCode(failureMessage)) apiError.failureCode = failureMessage
-    return Promise.reject(apiError)
+    return Promise.reject(
+      createApiError(
+        status,
+        result,
+        resolveErrorMessage(normalizedError),
+        normalizedError.response?.headers,
+        normalizedError.config?.url?.includes('/api/auth/') === true,
+      ),
+    )
   },
 )
 
@@ -125,12 +170,15 @@ const resolveErrorMessage = (error: AxiosError<ApiResult<unknown>>) => {
   if (status === 401 || code === 401) {
     return '用户名或密码错误，请检查后重试。'
   }
+  const serverMessage = error.response?.data?.message
+  if (isAiFailureCode(serverMessage)) {
+    return presentAiFailure(serverMessage, '请求失败')
+  }
   if ((status !== undefined && status >= 500) || (code !== undefined && code >= 500)) {
     return '服务器暂时无法处理请求，请稍后重试'
   }
-  const serverMessage = error.response?.data?.message
   if (serverMessage) {
-    return translateErrorMessage(serverMessage, '请求失败')
+    return serverMessage
   }
 
   if (error.code === 'ECONNABORTED') {
@@ -170,9 +218,9 @@ export default request
 
 /**
  * 携带 JWT 下载二进制内容（PDF Preview / Export）。
- * 后端业务错误统一为 HTTP 200 + Result JSON（见 GlobalExceptionHandler），
- * 因此成功响应必须按 Content-Type 区分真正的 PDF 与包在 200 里的错误 JSON；
- * 非 2xx 错误由响应拦截器归一化为带业务码的 Error，这里直接透传。
+ * 后端业务错误使用与 Result.code 一致的非 2xx HTTP 状态；同时兼容旧服务可能返回的
+ * HTTP 200 + Result JSON。成功响应必须按 Content-Type 区分真正的 PDF 与错误 JSON；
+ * 非 2xx Blob 错误由响应拦截器还原并归一化。
  */
 export interface DownloadedPdfResponse {
   blob: Blob
@@ -186,7 +234,7 @@ export const downloadPdfResponse = async (
   const response = await service.get<Blob>(url, { responseType: 'blob', timeout: timeoutMs })
 
   const contentType = String(response.headers['content-type'] ?? '').toLowerCase()
-  if (contentType.includes('application/json')) {
+  if (isJsonContentType(contentType) || isJsonContentType(response.data.type)) {
     let parsed: ApiResult<unknown> | null = null
     try {
       parsed = JSON.parse(await response.data.text()) as ApiResult<unknown>
@@ -196,12 +244,12 @@ export const downloadPdfResponse = async (
     if (parsed?.code === 401) {
       redirectUnauthorized()
     }
-    const apiError = new Error(
-      translateErrorMessage(parsed?.message, '下载失败，请稍后重试'),
-    ) as ApiError
-    apiError.code = parsed?.code
-    if (isAiFailureCode(parsed?.message)) apiError.failureCode = parsed.message
-    throw apiError
+    throw createApiError(
+      response.status,
+      parsed ?? undefined,
+      '下载失败，请稍后重试',
+      response.headers,
+    )
   }
   if (!contentType.includes('application/pdf')) {
     throw new Error('下载响应不是有效 PDF')

@@ -19,6 +19,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import org.apache.poi.ooxml.POIXMLDocumentPart;
+import org.apache.poi.openxml4j.util.ZipSecureFile;
 import javax.xml.XMLConstants;
 import javax.xml.parsers.DocumentBuilderFactory;
 import org.apache.pdfbox.Loader;
@@ -65,6 +66,8 @@ public class ResumeTextExtractionServiceImpl implements ResumeTextExtractionServ
             "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
     private static final String MARKUP_COMPATIBILITY_NAMESPACE =
             "http://schemas.openxmlformats.org/markup-compatibility/2006";
+    /** Match the 10 MiB resume upload boundary and prevent moderately compressed DOCX entries from expanding toward POI's 4 GiB default. */
+    private static final long MAX_DOCX_ENTRY_SIZE_BYTES = 10L * 1024 * 1024;
     private final FileStorageService fileStorageService;
     private final ResumePdfTextCandidateSelector pdfCandidateSelector;
     private final ResumeLayoutLiteExtractor layoutLiteExtractor;
@@ -654,6 +657,9 @@ public class ResumeTextExtractionServiceImpl implements ResumeTextExtractionServ
     }
 
     private ResumeTextExtractionResult extractDocxText(InputStream inputStream) throws IOException {
+        // POI exposes this guard process-wide rather than per OPC package. Reassert it at the
+        // extraction boundary so stored DOCX content cannot bypass the upload-size memory budget.
+        ZipSecureFile.setMaxEntrySize(MAX_DOCX_ENTRY_SIZE_BYTES);
         try (XWPFDocument document = new XWPFDocument(inputStream);
                 XWPFWordExtractor extractor = new XWPFWordExtractor(document)) {
             List<ExtractedTextBlock> textBlocks = collectDocxTextBlocks(document);

@@ -27,6 +27,7 @@ export const startAsyncTaskPolling = (options: AsyncTaskPollingOptions): AsyncTa
   let stopped = false
   let timerId: number | null = null
   let lastTask: AsyncTaskVO | null = null
+  let requestController: AbortController | null = null
 
   const clearTimer = () => {
     if (timerId !== null) {
@@ -38,6 +39,8 @@ export const startAsyncTaskPolling = (options: AsyncTaskPollingOptions): AsyncTa
   const stop = () => {
     stopped = true
     clearTimer()
+    requestController?.abort()
+    requestController = null
   }
 
   const scheduleNext = () => {
@@ -57,9 +60,13 @@ export const startAsyncTaskPolling = (options: AsyncTaskPollingOptions): AsyncTa
     }
 
     try {
-      const task = await getTaskStatus(options.taskId)
+      requestController = new AbortController()
+      const task = await getTaskStatus(options.taskId, requestController.signal)
+      requestController = null
+      if (stopped) return
       lastTask = task
       await options.onUpdate?.(task)
+      if (stopped) return
 
       if (task.status === 'SUCCESS') {
         stop()
@@ -81,6 +88,8 @@ export const startAsyncTaskPolling = (options: AsyncTaskPollingOptions): AsyncTa
 
       scheduleNext()
     } catch (error) {
+      requestController = null
+      if (stopped) return
       stop()
       await options.onError?.(error)
     }

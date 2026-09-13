@@ -144,24 +144,62 @@ describe('WorkspaceSuggestions', () => {
       global: { stubs: { ElButton: { template: '<button><slot /></button>' } } },
     })
 
-    expect(wrapper.text()).toContain('请确认内容真实。')
-    const applyButton = wrapper.findAll('button').find((button) => button.text() === '确认并采纳')
+    expect(wrapper.text()).toContain('新增技术或能力信息')
+    expect(wrapper.text()).toContain('不代表系统已验证内容真实性')
+    const applyButton = wrapper.findAll('button').find((button) => button.text() === '采纳此建议')
     expect(applyButton).toBeDefined()
     await applyButton!.trigger('click')
     expect(apply).toHaveBeenCalledOnce()
   })
 
   it('focuses the resume immediately when an evidence row is activated', async () => {
+    const focusContext = vi.fn()
     const wrapper = mount(WorkspaceSuggestions, {
       props: {
         result,
         loading: false,
         error: null,
         selectedRequirementId: 2,
+        onFocusContext: focusContext,
       },
     })
 
     await wrapper.get('.evidence-item').trigger('click')
-    expect(wrapper.emitted('focusContext')).toHaveLength(1)
+    expect(focusContext).toHaveBeenCalledWith(2)
+  })
+
+  it('emits the stable identifier of the exact evidence row that was activated', async () => {
+    const selected = requirement(2, 'REQUIRED', 'PARTIAL_EVIDENCE')
+    selected.evidences = [
+      {
+        requirementEvidenceId: 21,
+        sectionLabel: '工作经历',
+        evidenceText: '第一条重复证据',
+        supportLevel: 'PARTIAL',
+      },
+      {
+        requirementEvidenceId: 22,
+        sectionLabel: '工作经历',
+        evidenceText: '第二条重复证据',
+        supportLevel: 'PARTIAL',
+      },
+    ]
+    const contextualResult: OptimizationAnalysisResult = {
+      ...result,
+      evidenceAnalysis: { ...result.evidenceAnalysis!, requirements: [selected] },
+    }
+    const focusContext = vi.fn()
+    const wrapper = mount(WorkspaceSuggestions, {
+      props: {
+        result: contextualResult,
+        loading: false,
+        error: null,
+        selectedRequirementId: 2,
+        onFocusContext: focusContext,
+      },
+    })
+
+    await wrapper.findAll('.evidence-item')[1]!.trigger('click')
+    expect(focusContext).toHaveBeenCalledWith(22)
   })
 })

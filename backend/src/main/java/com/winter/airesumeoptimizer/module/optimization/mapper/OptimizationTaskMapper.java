@@ -6,9 +6,40 @@ import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
+import java.util.List;
 
 @Mapper
 public interface OptimizationTaskMapper extends BaseMapper<OptimizationTask> {
+
+    /**
+     * Fetches exactly the fields rendered by the Home recent-task list in one owned join.
+     * Every relationship is joined with user_id so malformed cross-tenant rows fail closed.
+     */
+    @Select("""
+            SELECT task.id AS optimization_task_id,
+                   source_version.resume_id AS resume_id,
+                   task.status AS status,
+                   job_target.title AS job_title,
+                   COALESCE(NULLIF(BTRIM(resume.display_name), ''), resume.original_filename) AS resume_name,
+                   task.created_at AS created_at,
+                   task.updated_at AS updated_at
+            FROM optimization_tasks task
+            JOIN resume_versions source_version
+              ON source_version.id = task.source_resume_version_id
+             AND source_version.user_id = task.user_id
+            JOIN job_targets job_target
+              ON job_target.id = task.job_target_id
+             AND job_target.user_id = task.user_id
+            JOIN resumes resume
+              ON resume.id = source_version.resume_id
+             AND resume.user_id = task.user_id
+            WHERE task.user_id = #{userId}
+            ORDER BY task.updated_at DESC, task.id DESC
+            LIMIT #{limit}
+            """)
+    List<OptimizationTaskSummaryRow> selectRecentSummaries(
+            @Param("userId") Long userId,
+            @Param("limit") int limit);
 
     /**
      * Serializes export-artifact insertion with parent task deletion. The lock is acquired in
