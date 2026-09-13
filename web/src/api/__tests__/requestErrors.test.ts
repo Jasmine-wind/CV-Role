@@ -2,8 +2,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { AxiosError, AxiosHeaders } from 'axios'
 import type { AxiosResponse, InternalAxiosRequestConfig } from 'axios'
 
-const { adapter, clearAuthToken, clearJobComposerTemporaryState, advanceAuthSessionGeneration } = vi.hoisted(() => ({
+const {
+  adapter,
+  authTokenState,
+  readAuthToken,
+  clearAuthToken,
+  clearJobComposerTemporaryState,
+  advanceAuthSessionGeneration,
+} = vi.hoisted(() => ({
   adapter: vi.fn(),
+  authTokenState: { value: '' },
+  readAuthToken: vi.fn(),
   clearAuthToken: vi.fn(),
   clearJobComposerTemporaryState: vi.fn(),
   advanceAuthSessionGeneration: vi.fn(),
@@ -20,7 +29,7 @@ vi.mock('axios', async (importOriginal) => {
     },
   }
 })
-vi.mock('@/utils/auth-token', () => ({ readAuthToken: () => null, clearAuthToken }))
+vi.mock('@/utils/auth-token', () => ({ readAuthToken, clearAuthToken }))
 vi.mock('@/utils/jobComposerPersistence', () => ({ clearJobComposerTemporaryState }))
 vi.mock('@/utils/authSessionGeneration', () => ({ advanceAuthSessionGeneration }))
 
@@ -60,7 +69,13 @@ function respond(data: unknown, status = 200, blob = false) {
 
 beforeEach(() => {
   adapter.mockReset()
+  authTokenState.value = 'existing-token'
+  readAuthToken.mockReset()
+  readAuthToken.mockImplementation(() => authTokenState.value)
   clearAuthToken.mockReset()
+  clearAuthToken.mockImplementation(() => {
+    authTokenState.value = ''
+  })
   clearJobComposerTemporaryState.mockReset()
   advanceAuthSessionGeneration.mockReset()
   vi.stubGlobal('window', { location: { pathname: '/workspace', search: '?id=1', href: '' } })
@@ -109,7 +124,7 @@ describe.each(['wrapped', 'http', 'blob', 'http-blob'] as const)('%s AI errors',
 })
 
 describe('existing request error behavior', () => {
-  it.each([false, true])('preserves HTTP auth handling (blob=%s)', async (blob) => {
+  it.each([false, true])('expires the current session for a protected HTTP 401 (blob=%s)', async (blob) => {
     respond({ code: 401, message: 'INVALID_CREDENTIAL' }, 401, blob)
     await expect(
       blob ? downloadBlob('/api/preview') : request.get('/api/test'),
@@ -120,7 +135,85 @@ describe('existing request error behavior', () => {
     expect(advanceAuthSessionGeneration).toHaveBeenCalledOnce()
     expect(clearJobComposerTemporaryState).toHaveBeenCalledOnce()
     expect(clearAuthToken).toHaveBeenCalledOnce()
+    expect(authTokenState.value).toBe('')
     expect(window.location.href).toBe('/login?redirect=%2Fworkspace%3Fid%3D1')
+  })
+
+  it('leaves a real HTTP login credential failure to the login flow', async () => {
+    respond({ code: 401, message: 'INVALID_CREDENTIAL' }, 401)
+
+    await expect(request.post('/api/auth/login', {
+      account: 'candidate',
+      password: 'wrong-password',
+    })).rejects.toMatchObject({
+      message: '用户名或密码错误，请检查后重试。',
+      code: 401,
+    })
+
+    expect(advanceAuthSessionGeneration).not.toHaveBeenCalled()
+    expect(clearJobComposerTemporaryState).not.toHaveBeenCalled()
+    expect(clearAuthToken).not.toHaveBeenCalled()
+    expect(window.location.href).toBe('')
+  })
+
+  it('invalidates one session only once when protected requests fail concurrently', async () => {
+    let releaseResponses!: () => void
+    const responsesReleased = new Promise<void>((resolve) => {
+      releaseResponses = resolve
+    })
+
+    adapter.mockImplementation(async (config: InternalAxiosRequestConfig) => {
+      await responsesReleased
+      const response: AxiosResponse = {
+        data: { code: 401, message: 'UNAUTHORIZED' },
+        status: 401,
+        statusText: '401',
+        headers: new AxiosHeaders({ 'content-type': 'application/json' }),
+        config,
+      }
+      throw new AxiosError('HTTP failure', undefined, config, undefined, response)
+    })
+
+    const requests = [request.get('/api/resumes'), request.get('/api/tasks/recent')]
+    await vi.waitFor(() => expect(adapter).toHaveBeenCalledTimes(2))
+    releaseResponses()
+
+    const results = await Promise.allSettled(requests)
+    expect(results.every((result) => result.status === 'rejected')).toBe(true)
+    expect(advanceAuthSessionGeneration).toHaveBeenCalledOnce()
+    expect(clearJobComposerTemporaryState).toHaveBeenCalledOnce()
+    expect(clearAuthToken).toHaveBeenCalledOnce()
+    expect(window.location.href).toBe('/login?redirect=%2Fworkspace%3Fid%3D1')
+  })
+
+  it('does not let a stale session 401 clear a newer login', async () => {
+    let releaseResponse!: () => void
+    const responseReleased = new Promise<void>((resolve) => {
+      releaseResponse = resolve
+    })
+
+    adapter.mockImplementationOnce(async (config: InternalAxiosRequestConfig) => {
+      await responseReleased
+      const response: AxiosResponse = {
+        data: { code: 401, message: 'UNAUTHORIZED' },
+        status: 401,
+        statusText: '401',
+        headers: new AxiosHeaders({ 'content-type': 'application/json' }),
+        config,
+      }
+      throw new AxiosError('HTTP failure', undefined, config, undefined, response)
+    })
+
+    const staleRequest = request.get('/api/resumes')
+    await vi.waitFor(() => expect(adapter).toHaveBeenCalledOnce())
+    authTokenState.value = 'new-session-token'
+    releaseResponse()
+
+    await expect(staleRequest).rejects.toMatchObject({ code: 401 })
+    expect(advanceAuthSessionGeneration).not.toHaveBeenCalled()
+    expect(clearJobComposerTemporaryState).not.toHaveBeenCalled()
+    expect(clearAuthToken).not.toHaveBeenCalled()
+    expect(window.location.href).toBe('')
   })
 
   it.each([

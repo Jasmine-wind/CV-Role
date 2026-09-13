@@ -72,18 +72,48 @@ test.describe('auth pages', () => {
     await expect(page).toHaveURL(/\/job-direction-insights$/)
   })
 
-  test('keeps login failure readable without exposing backend authentication details', async ({ page }) => {
-    await page.route('**/api/auth/login', (route) => route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ code: 401, message: 'internal auth detail', data: null }),
-    }))
+  test('allows an immediate retry after a real HTTP credential failure', async ({ page }) => {
+    let requestCount = 0
+    await page.route('**/api/auth/login', async (route) => {
+      requestCount += 1
+      if (requestCount === 1) {
+        await route.fulfill({
+          status: 401,
+          contentType: 'application/json',
+          body: JSON.stringify({ code: 401, message: 'internal auth detail', data: null }),
+        })
+        return
+      }
+
+      await route.fulfill(result({
+        userId: user.id,
+        username: user.username,
+        email: user.email,
+        nickname: user.nickname,
+        token: 'auth-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+      }))
+    })
+
     await page.goto('/login')
     await page.getByPlaceholder('请输入用户名或邮箱').fill('polish-user')
-    await page.getByPlaceholder('请输入密码').fill('wrong-password')
-    await page.getByPlaceholder('请输入密码').press('Enter')
+    const password = page.getByPlaceholder('请输入密码')
+    const loginButton = page.getByRole('button', { name: '登录', exact: true })
+    await password.fill('wrong-password')
+    await password.press('Enter')
+
     await expect(page.locator('.auth-form-error')).toHaveText('用户名或密码错误，请检查后重试。')
     await expect(page.getByText('internal auth detail')).toHaveCount(0)
+    await expect(loginButton).toBeEnabled()
+    await expect(loginButton).not.toHaveClass(/is-loading/)
+    await expect(page).toHaveURL(/\/login$/)
+
+    await password.fill('safe-password')
+    await password.press('Enter')
+
+    await expect(page).toHaveURL(/\/app$/)
+    expect(requestCount).toBe(2)
   })
 
   test('classifies login network and server failures separately', async ({ page }) => {

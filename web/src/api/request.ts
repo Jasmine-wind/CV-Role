@@ -40,9 +40,32 @@ const service = axios.create({
   timeout: 10000,
 })
 
-const redirectUnauthorized = () => {
-  // Authentication failure invalidates every in-flight identity-bound callback
-  // before navigation and removes recoverable JD/task state from this browser tab.
+const isLoginCredentialRequest = (config: AxiosRequestConfig | undefined) => {
+  if (config?.method?.toLowerCase() !== 'post' || !config.url) return false
+
+  try {
+    const pathname = new URL(config.url, 'http://request.local').pathname.replace(/\/+$/, '')
+    return pathname === '/api/auth/login'
+  } catch {
+    return false
+  }
+}
+
+const requestBearerToken = (config: AxiosRequestConfig | undefined) => {
+  const headers = config?.headers as Record<string, unknown> | undefined
+  const authorization = headers?.Authorization ?? headers?.authorization
+  if (typeof authorization !== 'string' || !authorization.startsWith('Bearer ')) return ''
+  return authorization.slice('Bearer '.length)
+}
+
+const redirectUnauthorized = (config: AxiosRequestConfig | undefined) => {
+  const failedToken = requestBearerToken(config)
+
+  // A late 401 from an older identity must not clear a newer login. Requiring the
+  // failed request's Bearer token to still be current also makes concurrent 401s
+  // idempotent after the first response clears browser authentication.
+  if (!failedToken || failedToken !== readAuthToken()) return
+
   advanceAuthSessionGeneration()
   clearJobComposerTemporaryState()
   clearAuthToken()
@@ -148,8 +171,11 @@ service.interceptors.response.use(
     const result = normalizedError.response?.data
     const code = result?.code
 
-    if (status === 401 || code === 401) {
-      redirectUnauthorized()
+    if (
+      (status === 401 || code === 401)
+      && !isLoginCredentialRequest(normalizedError.config)
+    ) {
+      redirectUnauthorized(normalizedError.config)
     }
 
     return Promise.reject(
@@ -242,7 +268,7 @@ export const downloadPdfResponse = async (
       // 声明为 JSON 却无法解析：fail closed，绝不把坏字节交给预览或下载。
     }
     if (parsed?.code === 401) {
-      redirectUnauthorized()
+      redirectUnauthorized(response.config)
     }
     throw createApiError(
       response.status,
