@@ -27,7 +27,7 @@ Slice B（已完成，Final Gate PASS）：前端已完成行动优先 Analysis�
 
 Slice C（已完成，Final Gate PASS）：保持 `RESUME_DOCUMENT_V1` 与显式 section list order；默认 canonical 投影改为 Summary → Experience → Projects → Education → Skills → Other，用户显式编辑后的 section 顺序不由模板静默重排。Typst current templates 升为 v3：Summary / Education / Certificate / Other 使用无 marker 的文本层级，Experience / Project 保留真实 Bullet；长 title/date 使用 gutter 与安全换行，Section heading 与首条内容通过 Typst non-breakable block 关联，长条目与长通用章节内容均可自然续页。A4 页面统一排版节奏，正文目标 10pt、metadata/contact ≥9pt，中英正文左对齐。生产镜像复制 Noto CJK Regular/Bold 静态字体并通过 `APP_RENDER_FONT_PATH` + `--ignore-system-fonts` 固定字体环境；Renderer 为 PDF 写入稳定 title/metadata。PDF inspector 新增末页 glyph 垂直占用比例，低于 20% 与既有末页行数规则共同标记 `ORPHAN_FINAL_PAGE`，正式 Export 继续经原有 PDF Quality Gate 阻断。Preview 继续使用浏览器原生 PDF iframe，依赖 PDF metadata title 消除 blob UUID，未引入 PDF.js。独立 Gate 已完成真实三模板 PDF、通用章节长内容、固定字体、Preview / Export、Desktop / Narrow 浏览器、Fresh PostgreSQL/Flyway、Docker/Compose 与完整回归验证，**Final Gate PASS**。
 
-当前事实（resume extraction hardening）：DOCX main body 现在按 `getBodyElements()` 的 paragraph/table 原始出现顺序提取，table cell 内按 body element 递归处理 paragraph 与 nested table；header、footer 与 textbox 提取及 textbox duplicate suppression 保持原有边界。可选择文本 PDF 在同一个 `PDDocument` 内生成 legacy 与 position-sorted 两个候选，经 deterministic、保守的健康评分选择，selector 不调用 AI，评分只判断 extraction health，不根据简历章节业务顺序评分，且只记录候选类型、分数、行数和长度等安全聚合指标。长 block 不再硬截断 500 字符，而是在安全标点、空格或必要的 hard boundary 处无损拆成不超过 500 字符的连续 fragments；扫描 PDF 仍不 OCR，复杂多栏 / absolute-position PDF 仍可能进入 Resume Review，未引入新的 parser service。
+当前事实（resume extraction hardening）：DOCX main body 现在按 `getBodyElements()` 的 paragraph/table 原始出现顺序提取，table cell 内按 body element 递归处理 paragraph 与 nested table；header、footer 与 textbox 提取及 textbox duplicate suppression 保持原有边界。可选择文本 PDF 在同一个 `PDDocument` 内生成 legacy、position-sorted 与保守的 PDFBox `LAYOUT_LITE` 候选；布局候选只在确定性健康评分超过既有候选至少 8 分时采用，否则保留既有行为。布局块保留 stable source block ID、页码、坐标、字体、粗体、缩进、项目符号和合并行的 source IDs；扫描 PDF 仍不 OCR，复杂多栏 / absolute-position PDF 仍可能进入 Resume Review。PDF 的真实物理页数已传播到 `ResumeParseMeta.pageCount`；DOC/DOCX 无可靠分页时为 `0` 且 source block 不伪造 page。有效但无可提取 glyph 的 PDF 归类为 `EMPTY_PDF`，检测到图像内容且无文本的 PDF 归类为 `SCANNED_PDF`；旧的无 metadata 调用保留保守扫描分类。结构恢复健康模块以 20 个 PII-free synthetic case 作为 CI gate，检查 source coverage、未决内容、重复 ownership 和 entry boundary，并生成不含原文的聚合 effect report。可选 AI repair 最多在一次 parse 中调用一次，且仅返回低置信度、source-backed、reference-only 候选；不自动写入 canonical 或用户事实，失败时规则结果保持不变。长 block 不再硬截断 500 字符，而是在安全标点、空格或必要的 hard boundary 处无损拆成不超过 500 字符的连续 fragments。历史结构化 JSON 先经过 raw-tree 严格形状校验，再对 generic `heading` / `meta` 做 section-compatible projection；source-free 兼容投影永不制造 provenance，source-backed generic education 行必须由当前 SourceContext 重新证明，无法证明的内容只进入 review sidecar。`sourceOccurrenceIds` 是唯一 occurrence 身份，block ID 不会直接升级为 occurrence。
 
 当前事实（manual acceptance corrective）：账户区域已提供 Settings shell 与 `/settings/profile`、`/settings/ai-provider` 两个入口；账号菜单顺序为账户设置、AI 设置、退出登录。个人资料只允许通过 `PATCH /api/users/me` 更新 nickname，空值回退 username，username / email 只读并立即同步 auth store。AI settings GET 返回不敏感的 `credentialStorageAvailable` 与用户 Credential 状态；存储未启用时仍可 Test 但 Save disabled。AI Settings 对外为 `UNCONFIGURED`、`SAVED_DISABLED`、`ACTIVE` 三态，不暴露系统 Provider capability。Classic 当前模板由 v4 升为 v5，新增 `typst/classic/v5/main.typ`；v4 及更早版本保留供历史导出物解释，Modern / Minimal 继续使用 v3。Classic v5 只调整章节 / entry / bullet vertical rhythm 与稳定 Regular / Bold 字体环境，不改变 `RESUME_DOCUMENT_V1`、渲染器版本 `typst-resume-renderer/3`、Preview receipt 或 Export Gate。
 
@@ -61,14 +61,15 @@ Preview 与 Export 是同步渲染：只读取服务端已保存的 TARGET `stru
 
 ## 3. 当前领域与数据事实
 
-- `ResumeVersion`：解析质量通过后，canonical 文档唯一物化为当前无岗位的 SOURCE；每次新分析引用该 SOURCE 并派生独立 `TARGETED` 岗位版本。Workspace 只写 TARGET，不修改上传简历、解析结果、SOURCE 或任务冻结快照。
+- `ResumeVersion`：规则解析会把可证明的 canonical 文档物化为当前无岗位的 SOURCE；`READY` SOURCE 可交付，`NEEDS_REVIEW` SOURCE 以 `PENDING` 保存为用户确认草稿，不能进入任务 / 导出。每次新分析引用已确认 SOURCE 并派生独立 `TARGETED` 岗位版本；审查修改不覆盖已引用 SOURCE，而是在同一事务中发布新的 SOURCE 并 CAS 移动当前指针，保留旧快照。Workspace 只写 TARGET，不修改上传简历、解析结果、SOURCE 或任务冻结快照。Parse generation/token claim 由独立 `REQUIRES_NEW` 协调事务在 CPU、文件和 Provider 工作前提交；SOURCE `insertIfCurrentParseClaim` 与解析结果 `updateIfCurrent` 仍在同一 service-level 事务内原子提交，旧 worker 只能 CAS 失败并回滚其 SOURCE。
+- 可选 Resume AI repair 由 `resume_ai_repair_attempts` 做 durable single-flight：reservation 在 Provider dispatch 前通过 `REQUIRES_NEW` 独立提交，成功 reference projection 可复用；CLAIMED 与 dispatch 后失败不 reclaim，只有明确为零 dispatch 的失败可再次 claim，跨节点无法确认的状态 fail closed。它不是 canonical 或用户事实 Source of Truth。
 - `JobTarget`：保存用户归属、原始 JD、标题和来源；当前仍通过兼容引用复用 `job_descriptions` 的解析能力。
-- `OptimizationTask`：正式业务身份和前端路由身份，保存版本关系、输入快照及 Prompt / Rules / Provider / Model / Template 配置快照；`async_tasks` 只承担执行状态和轮询。
+- `OptimizationTask`：正式业务身份和前端路由身份，保存版本关系、输入快照及 Prompt / Rules / Provider / Model / Template 配置快照；`async_tasks` 只承担执行状态和轮询。ResumeVersion ownership、Task SOURCE / TARGET / JobTarget 输入及 EvidenceAnalysis / EvidenceRequirement 父关系在插入后不可重挂，避免直接 SQL 或并发 write skew 改写已发布图；内容、状态、revision 与 async/result attachment 仍可沿各自 CAS 更新。Resume、OptimizationTask 与 JobDescription 删除时按 user + business identity 将 PENDING / RUNNING task 置为 `CANCELLED`，取消与父级删除在同一事务中提交或回滚，删除失败不会永久停掉仍保留的任务。Resume / OptimizationTask 提交路径按固定 Resume → OptimizationTask 行锁顺序，把 async row 插入和关联放进同一事务，删除与提交共享该生命周期边界；基于既有 JD 新建任务按 Resume → JobDescription 锁定，JD 删除先持有同一 JD 行锁再发现派生任务，不能漏掉并发提交；Resume / JD 父删除发现多个正式任务后统一按 task ID 升序锁定，避免交叉删除形成反序死锁。worker 只在 committed completion 后进入线程池，事务回滚不 dispatch，executor rejection 通过新事务记录。正式 worker 的 RUNNING / SUCCESS / FAILED 回调必须以精确 `asyncTaskId` 和 `MATCH_ANALYSIS / OPTIMIZATION_TASK / bizId` 绑定通过数据库 CAS，晚到旧执行不写正式任务或 Evidence。
 - 正式证据分析：每个任务最多一条 `evidence_analyses`，子表为 `evidence_requirements` 和 `requirement_evidences`；正式主链路不再向 `ai_job_match_results` 写新结果。
 - Workspace 文档：`RESUME_DOCUMENT_V1` 是唯一规范编辑结构（Slice A），持久化在 `resume_versions.structured_content`，不存在第二套 Workspace 内容字段；历史 generic V1 内容只读升级。
-- 解析交付质量（Slice A）：`resume_parse_results` 新增 `quality_status`（PENDING / READY / NEEDS_REVIEW / FAILED，SoT）、`quality_issues`、`unresolved_items`（未决候选，审查态数据，不是简历内容）与 `canonical_source_version_id`（仅指向当前 SOURCE）。canonical JSON 只存在于 `resume_versions.structured_content`；`structured_json` 仍是候选解析产物，不能进入新任务快照。解析成功不等于可安全投递；非 `READY` 或没有 canonical SOURCE 的简历禁止创建新分析任务，历史任务不受影响。
+- 解析交付质量（Slice A）：`resume_parse_results` 新增 `quality_status`（PENDING / READY / NEEDS_REVIEW / FAILED，SoT）、`quality_issues`、`unresolved_items`（未决候选，审查态数据，不是简历内容）与 `canonical_source_version_id`（仅指向当前 SOURCE）。canonical JSON 只存在于 `resume_versions.structured_content`；`structured_json` 仍是候选解析产物，不能进入新任务快照。`NEEDS_REVIEW` 也返回规则生成的 source-backed canonical 草稿供审查，但其 SOURCE 为 `PENDING`；解析成功不等于可安全投递，非 `READY` 或没有 canonical SOURCE 的简历禁止创建新分析任务，历史任务不受影响。
 - 内容并发：`resume_versions.content_revision` 是服务端乐观并发版本；保存和恢复都必须携带 `expectedRevision` 并通过单条条件更新递增。冲突保留本地草稿，不允许无条件覆盖。
-- 导出物：`export_artifacts` 记录成功生成的 PDF 派生文件及实际 preflight（用户 / 任务 / TARGET / revision / 模板与渲染器版本 / storage metadata / 页数 / 联系方式 / 页数告警 / 越界 / 孤立末页 / 可读性告警）。READY 可下载；DELETE_PENDING 不可下载但保留重试依据。任务与 TARGET 的关系由复合外键直接约束。
+- 导出物：`export_artifacts` 记录成功生成的 PDF 派生文件及实际 preflight（用户 / 任务 / TARGET / revision / 模板与渲染器版本 / storage metadata / 页数 / 联系方式 / 页数告警 / 越界 / 孤立末页 / 可读性告警）。READY 可下载；DELETE_PENDING 不可下载但保留重试依据。任务与 TARGET 的关系由复合外键直接约束。单个导出物删除完成 DELETE_PENDING → 对象删除 → 元数据删除；父级删除的 async task `CANCELLED` fence 随父事务提交或回滚；DELETE_PENDING 独立提交后再删除对象，保留元数据到数据库父事务成功级联，回滚时仍可重试。
 - Multi-JD Insight：没有表、cache 或 Capability Source of Truth；只读聚合当前用户近 180 天的 `SUCCESS` Task、冻结输入、SOURCE Version 与正式 Evidence。cohort 必须同时匹配 `resumeId + SHA-256(resume_input_snapshot)`；相同规范化冻结 JD 只取最新成功 Task，最多 20 个、至少 8 个才显示。
 - Insight Requirement：仅对单一、字面技术锚点做小型固定注册表分组（否则精确规范化文本）；每个 JD 取最保守三态，结果保留 Task / Requirement / Evidence 追溯，绝不推断用户现实能力或重算 TARGET 编辑。
 - Observability：`ProductObservabilityService` 只查询已提交且仍保留的业务表；没有 `product_events`、用户指标页或长期识别性聚合。不可由现有事实可靠得出的 Workspace entry、Preview success、Suggestion apply 指标继续不记录。
@@ -83,6 +84,13 @@ Preview 与 Export 是同步渲染：只读取服务端已保存的 TARGET `stru
 - V22：加法式建立 `export_artifacts`，补充 task ownership 与 task→TARGET 复合唯一索引，持久化 preflight 和 READY / DELETE_PENDING 生命周期；不修改 V1 数据。
 - V23：加法式建立 `ai_provider_credentials`、OptimizationTask AI Selection Snapshot 与 `ai_usage_records`；Credential / Task / Usage 使用复合用户归属外键，旧 Task 回填为 SYSTEM_DEFAULT，部署 Secret 不迁入数据库。
 - V24（Slice A）：加法式为 `resume_parse_results` 增加质量状态、当前 canonical SOURCE 指针和审查 sidecar（存量行默认 `READY`，但无 canonical SOURCE 的新任务必须重新解析），为 `export_artifacts` 增加导出时刻的文档质量门、孤立末页和可读性标记（历史行为可空）；不改写历史内容。
+- V29（Product Polish）：为可选 reference-only Resume repair 增加 durable reservation/result 表；CLAIMED 在 Provider dispatch 前提交，进程中断和 dispatch 后失败不 reclaim，明确零 dispatch 的失败可安全重试。
+- V30（Product Polish hardening）：以加法式函数/触发器更新强化已被 task、子版本、canonical pointer 或正式 Evidence 引用的 SOURCE 形状不可变；V27/V29 保持已发布 checksum。
+- V32（Product Polish hardening）：引用中的 SOURCE 删除改为 fail closed，SOURCE→TARGET 外键补强同一用户/同一简历约束，正式 task 的 source/target 也必须属于同一简历；整份 Resume 删除由服务先清理正式 Evidence/Task 后再走父级级联。
+- V33：迁移前校验历史正式 task 的 source/target 同简历关系；发现既有越权边时 fail closed，不静默放行。
+- V34：迁移前校验正式 Evidence 必须回溯到其分析任务的同一 SOURCE；数据库拒绝跨 Resume / 跨任务 Evidence，并拒绝已有正式 Evidence 的 task/source 关系被重挂。
+- V35：为解析结果补齐并强制保存 Resume owner，使用 `(user_id, resume_id)` 复合外键约束 canonical SOURCE 指针，阻止跨租户/跨简历的直接 SQL 重挂。
+- V36：加法式冻结 ResumeVersion / OptimizationTask / Evidence 父链的 ownership identity edges，阻止 task 创建后重挂 TARGET，以及 Evidence 插入与父级重挂并发互相不可见造成的 write skew；迁移前再次校验既有正式 task 图，异常历史数据 fail closed。
 
 ## 4. 必须保持的设计约束
 
@@ -120,8 +128,8 @@ Preview 与 Export 是同步渲染：只读取服务端已保存的 TARGET `stru
 - Structured Resume JSON（TARGET `structured_content`）是唯一简历业务 Source of Truth；Preview / Export 只能经 `optimizationTaskId` 读取服务端已保存 revision，禁止 HTML 内容源、第二套简历数据、PDF 反解析、模板存业务数据与前端指定可渲染版本。
 - 渲染是独立 seam：确定性映射 → 版本化内置模板 → Typst 同步编译 → PDF；用户内容全部转义为 Typst 字符串字面量，渲染进程通过 `--root` 限制文件读取，内置模板不引用外部包且包目录隔离；用户内容经转义无法触发导入。当前没有 OS 级进程网络沙箱，不得把空包目录表述为网络隔离；模板只负责展示，不承担业务判断。
 - Preview 与 Export 共享同一 Renderer、模板版本、编译器与字体环境。服务端签名 receipt 绑定 user / task / TARGET / revision / template+version / renderer / PDF checksum；无 Preview、过期 receipt、revision / 模板 / 任务 / 用户变化或重编译 checksum 不同均拒绝 Export。
-- 导出检查分两层（Slice A/Slice C）。Document Quality Gate：内容质量状态非 `READY`、存在系统兜底章节、重复章节或缺少可用电话 / 邮箱时阻断正式导出（预览仍可用作审查）。PDF Quality Gate：编译 / PDF parse 失败、文字越界、不可读字号、孤立末页（页数 ≥2 且末页非空行 <3），或末页 glyph 垂直占用比例低于 20% 时阻断；页数超过两页建议仍只告警。两页简历合法，孤立/稀疏第二页不合法。删除采用持久化 DELETE_PENDING → 对象删除 → 元数据删除，失败可重试；Resume / JobDescription 父删除先完成该流程再级联。
-- 模板升级新增版本而不原位修改：Slice A 的 v2 与更早 v1 保留供历史导出物解释；当前 renderer 消费 V1 语义模型并按章节类型分支（Classic v4、Modern / Minimal v3，Classic v3 及更早版本保留），渲染器版本为 `typst-resume-renderer/3`。
+- 导出检查分两层（Slice A/Slice C）。Document Quality Gate：内容质量状态非 `READY`、存在系统兜底章节、重复章节或缺少可用电话 / 邮箱时阻断正式导出（预览仍可用作审查）。PDF Quality Gate：编译 / PDF parse 失败、文字越界、不可读字号、孤立末页（页数 ≥2 且末页非空行 <3），或末页 glyph 垂直占用比例低于 20% 时阻断；页数超过两页建议仍只告警。两页简历合法，孤立/稀疏第二页不合法。单个导出物删除采用持久化 DELETE_PENDING → 对象删除 → 元数据删除；Resume / OptimizationTask / JobDescription 父删除先独立提交 DELETE_PENDING 并删除对象，元数据留到数据库级联成功，失败回滚仍可重试。
+- 模板升级新增版本而不原位修改：Slice A 的 v2 与更早 v1 保留供历史导出物解释；当前 renderer 消费 V1 语义模型并按章节类型分支（Classic v5、Modern / Minimal v3，Classic v4 及更早版本保留），渲染器版本为 `typst-resume-renderer/3`。
 - 未 Apply 的 AI Suggest 仅存在于前端会话，不进入 Preview / PDF / ExportArtifact；Phase 6 不新增 Suggestion History、Change Event 或 AI 持久化链路。
 
 ## 5. 尚未实现
@@ -135,9 +143,12 @@ Phase 1–9 已正式完成；后续能力仍须依 `PLAN.md` 和新的产品决
 
 ## 6. 当前技术债与遗留风险
 
-- `requirement_evidences.source_resume_version_id` 的数据库外键只直接约束同用户，没有直接约束为所属任务的 SOURCE；正式服务当前固定写入并校验任务 SOURCE，后续如补强数据库约束必须使用新迁移。
+- `requirement_evidences.source_resume_version_id` 的数据库外键仍只直接约束同用户，没有直接约束为所属任务的 SOURCE；正式服务当前固定写入并校验任务 SOURCE，后续如补强该关系必须继续使用新迁移。V32 已阻止直接删除被 Evidence 引用的 SOURCE，并保留整份 Resume 的服务级清理路径。
 - V19 / V20 的新增表尚未经过生产规模数据验证；V20.1 会原位改变正式枚举和列语义，旧 Phase 3 应用不能运行在迁移后 Schema 上，部署必须同步升级应用与 Flyway 并遵循备份流程。
 - Workspace 已有真实 PostgreSQL + Playwright 双页面 CAS conflict / 本地草稿恢复覆盖；更大规模多线程争用与数据库故障注入仍未做压力验证。
+- Resume worker 的 active 检查是协作式取消，不中断已开始的解析 / Provider / Embedding；成功删除后的迟到写入由 parse CAS 与父级外键阻断，不保证立即停止计算或外部调用。
+- 异步 dispatch 仍是单进程内存机制；事务提交后到线程池接收前的进程崩溃可能留下 `PENDING` 任务，当前没有 durable outbox / scheduler 或跨进程 `Future` cancellation seam。修复该残余窗口需要新的架构决策，不能在 Phase 9 合约内自行引入 MQ。
+- `Resume.storageType` 正确记录写入后端，但读取 / 删除使用当前配置的单一 `FileStorageService`，并未按历史行路由不同后端，`export_artifacts` 也没有独立后端列；切换 `APP_STORAGE_TYPE` 必须按 `OPERATIONS.md` §9.1 停写、迁移并逐 key 验证既有对象，不能只改配置。多后端路由需另行批准，不在本 Phase 隐式引入。
 - Workspace 转换器对未知 / 错误类型、超限内容和无法完整转换的旧快照会整体 fail closed；少量旧数据可能需要重新解析，不能用不完整投影覆盖 TARGET。
 - 初始 Workspace 元素 ID 按位置派生，只对同一冻结快照的重复转换稳定，并非语义或内容寻址 ID；Restore 会恢复基线位置 ID。Workspace 的当前 Evidence 导航 anchor 只在建立时使用 section label / evidence quote 定位，后续只按 sectionId / bulletId 验证存活，不随 TARGET 文本或 autosave 重新匹配。当前 Phase 5 还绑定 revision、草稿序号和原文哈希，未来功能不得只凭元素 ID 判断候选仍有效。
 - 正式 Evidence 目前只保存 SOURCE 版本、section label 和逐字 quote，没有 Workspace 元素 ID 或字符范围。当前单 Bullet 手动选择绕开了该缺口，但可靠的“查看原文”、从建议跳转到编辑位置和更细来源追踪仍缺正式锚点模型。

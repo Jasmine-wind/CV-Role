@@ -261,8 +261,9 @@ class ResumeStructureParseServiceImplTest {
 
         var projects = ProjectSourceTextExtractor.extractFromLines(lines, "section-projects");
 
-        assertThat(projects).hasSize(1);
-        assertThat(projects.get(0).getName()).isEqualTo("比丘商城后台管理系统");
+        assertThat(projects).hasSize(2);
+        assertThat(projects).extracting("name")
+                .containsExactly("比丘商城后台管理系统", "火萤商城");
         assertThat(projects).extracting("name")
                 .doesNotContain("做系统缓存", "是一个提供在线学习的平台", "对系统的简单的代码进行封装", "项目经历 5", "项目经历 9");
     }
@@ -553,6 +554,20 @@ class ResumeStructureParseServiceImplTest {
                 .containsEntry("workYears", "2年");
         assertThat(result.getBasicInfo().get("workYears")).isNotEqualTo("17年");
         assertThat(result.getBasicInfo()).doesNotContainEntry("age", "1");
+    }
+
+    @Test
+    void parseShouldNotTreatDateLikeTextAsWorkYears() {
+        ResumeStructuredContentDTO result = service.parse("""
+                Synthetic Candidate
+                教育经历
+                2024年工作经历
+                2024年经验
+                项目经历
+                2024-2025 项目交付
+                """);
+
+        assertThat(result.getBasicInfo()).doesNotContainKey("workYears");
     }
 
     @Test

@@ -1,6 +1,7 @@
 package com.winter.airesumeoptimizer.module.resume.dto;
 
 import io.swagger.v3.oas.annotations.media.Schema;
+import java.util.List;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;
@@ -32,4 +33,33 @@ public class ResumeIndexedLineDTO {
     private Double sectionConfidence;
 
     private Boolean isNoise;
+
+    private String sourceBlockId;
+
+    private List<String> sourceBlockIds;
+
+    /** Stable occurrence IDs for field-level provenance and duplicate source rows. */
+    private List<String> sourceOccurrenceIds;
+
+    private Integer originalIndex;
+
+    private Double x;
+
+    private Double y;
+
+    private Double width;
+
+    private Double height;
+
+    private Double fontSize;
+
+    private String fontName;
+
+    private Boolean boldHint;
+
+    private Integer indent;
+
+    private Boolean bulletHint;
+
+    private ResumeSourceBlockRole role;
 }

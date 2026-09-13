@@ -1,0 +1,11 @@
+Synthetic Candidate H
+项目经历
+项目一：
+项目名称：Signal Archive
+项目描述：用于记录服务变更的内部工具
+主要职责：统一审计流程与查询入口
+技术栈：Java、Redis
+项目二：
+项目名称：Trace Window
+项目描述：用于观察批处理窗口的内部工具
+技术选型：Python、PostgreSQL

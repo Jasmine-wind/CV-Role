@@ -118,6 +118,39 @@ class EvidenceMatchServiceImplTest {
     }
 
     @Test
+    void fencedAnalyzeUsesExactAsyncExecutionWhenCompletingFormalTask() {
+        OptimizationTask task = task();
+        task.setAsyncTaskId(100L);
+        when(optimizationTaskMapper.selectOne(any())).thenReturn(task);
+        when(evidenceMatchingStrategy.match(any(), any(), any(), any(), any(), any())).thenReturn(outcome());
+
+        service.analyze(1L, 50L, 100L, parsedJob(), null);
+
+        verify(optimizationTaskService).markSuccess(
+                org.mockito.ArgumentMatchers.eq(1L),
+                org.mockito.ArgumentMatchers.eq(50L),
+                org.mockito.ArgumentMatchers.eq(100L),
+                any(JobDescriptionVO.class),
+                org.mockito.ArgumentMatchers.any(EvidenceAnalysis.class));
+        verify(optimizationTaskService, never()).markSuccess(
+                any(), any(), any(), any());
+    }
+
+    @Test
+    void fencedAnalyzeRejectsAReplacedAsyncExecutionBeforeWritingEvidence() {
+        OptimizationTask task = task();
+        task.setAsyncTaskId(101L);
+        when(optimizationTaskMapper.selectOne(any())).thenReturn(task);
+
+        assertThatThrownBy(() -> service.analyze(1L, 50L, 100L, parsedJob(), null))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("优化任务执行已失效");
+
+        verify(evidenceMatchingStrategy, never()).match(any(), any(), any(), any(), any(), any());
+        verify(evidenceAnalysisMapper, never()).insert(any(EvidenceAnalysis.class));
+    }
+
+    @Test
     void analyzeShouldReplaceExistingAnalysisOnRetry() {
         EvidenceAnalysis existing = new EvidenceAnalysis();
         existing.setId(77L);

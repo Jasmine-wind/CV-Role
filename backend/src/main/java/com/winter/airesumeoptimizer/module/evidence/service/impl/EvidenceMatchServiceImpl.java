@@ -72,7 +72,7 @@ public class EvidenceMatchServiceImpl implements EvidenceMatchService {
     @Override
     @Transactional
     public EvidenceAnalysis analyze(Long userId, Long optimizationTaskId, JobDescriptionVO parsedJob) {
-        return analyze(userId, optimizationTaskId, parsedJob, null);
+        return analyzeInternal(userId, optimizationTaskId, null, parsedJob, null);
     }
 
     @Override
@@ -80,6 +80,36 @@ public class EvidenceMatchServiceImpl implements EvidenceMatchService {
     public EvidenceAnalysis analyze(
             Long userId,
             Long optimizationTaskId,
+            JobDescriptionVO parsedJob,
+            AiSelectionSnapshot selection) {
+        return analyzeInternal(userId, optimizationTaskId, null, parsedJob, selection);
+    }
+
+    @Override
+    @Transactional
+    public EvidenceAnalysis analyze(
+            Long userId,
+            Long optimizationTaskId,
+            Long asyncTaskId,
+            JobDescriptionVO parsedJob) {
+        return analyzeInternal(userId, optimizationTaskId, asyncTaskId, parsedJob, null);
+    }
+
+    @Override
+    @Transactional
+    public EvidenceAnalysis analyze(
+            Long userId,
+            Long optimizationTaskId,
+            Long asyncTaskId,
+            JobDescriptionVO parsedJob,
+            AiSelectionSnapshot selection) {
+        return analyzeInternal(userId, optimizationTaskId, asyncTaskId, parsedJob, selection);
+    }
+
+    private EvidenceAnalysis analyzeInternal(
+            Long userId,
+            Long optimizationTaskId,
+            Long asyncTaskId,
             JobDescriptionVO parsedJob,
             AiSelectionSnapshot selection) {
         OptimizationTask task = getOwnedTask(userId, optimizationTaskId);
@@ -92,6 +122,9 @@ public class EvidenceMatchServiceImpl implements EvidenceMatchService {
             throw new BusinessException(400, "目标岗位结构化解析结果为空");
         }
         validateTaskInputs(userId, task, parsedJob);
+        if (asyncTaskId != null && !asyncTaskId.equals(task.getAsyncTaskId())) {
+            throw new BusinessException(409, "优化任务执行已失效");
+        }
 
         log.info("Evidence match started: userId={}, optimizationTaskId={}",
                 userId,
@@ -107,7 +140,12 @@ public class EvidenceMatchServiceImpl implements EvidenceMatchService {
         deleteExistingAnalysis(userId, optimizationTaskId);
         EvidenceAnalysis analysis = saveAnalysis(userId, task, outcome);
         // 与正式结果落库共享当前事务；完成状态更新失败时，旧结果删除和新结果写入一并回滚。
-        optimizationTaskService.markSuccess(userId, optimizationTaskId, parsedJob, analysis);
+        if (asyncTaskId == null) {
+            optimizationTaskService.markSuccess(userId, optimizationTaskId, parsedJob, analysis);
+        } else {
+            optimizationTaskService.markSuccess(
+                    userId, optimizationTaskId, asyncTaskId, parsedJob, analysis);
+        }
 
         log.info("Evidence match succeeded: userId={}, optimizationTaskId={}, matched={}, partialEvidence={}, noEvidence={}",
                 userId,

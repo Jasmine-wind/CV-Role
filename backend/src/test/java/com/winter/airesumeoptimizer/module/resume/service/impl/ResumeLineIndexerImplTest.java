@@ -59,6 +59,82 @@ class ResumeLineIndexerImplTest {
     }
 
     @Test
+    void indexShouldNamespaceDuplicateAndPlaceholderOccurrenceIds() {
+        ResumeRawSectionDTO section = ResumeRawSectionDTO.builder()
+                .displayOrder(1)
+                .blocks(List.of(
+                        ResumeRawSectionBlockDTO.builder()
+                                .displayOrder(1)
+                                .text("Java")
+                                .sourceOccurrenceIds(List.of("same", "same", "null", "undefined"))
+                                .build(),
+                        ResumeRawSectionBlockDTO.builder()
+                                .displayOrder(2)
+                                .text("Java")
+                                .sourceOccurrenceIds(List.of("same"))
+                                .build()))
+                .build();
+
+        assertThat(indexer.index(List.of(section)))
+                .extracting(ResumeIndexedLineDTO::getSourceOccurrenceIds)
+                .containsExactly(List.of("same", "same~2"), List.of("same~3"));
+    }
+
+    @Test
+    void indexShouldKeepOneOccurrenceAcrossLongTextFragments() {
+        ResumeRawSectionDTO section = ResumeRawSectionDTO.builder()
+                .displayOrder(1)
+                .blocks(List.of(
+                        ResumeRawSectionBlockDTO.builder()
+                                .id("source-row#fragment-0")
+                                .sourceBlockIds(List.of("source-row#fragment-0"))
+                                .sourceOccurrenceIds(List.of("row-occurrence"))
+                                .text("负责订单")
+                                .build(),
+                        ResumeRawSectionBlockDTO.builder()
+                                .id("source-row#fragment-1")
+                                .sourceBlockIds(List.of("source-row#fragment-1"))
+                                .sourceOccurrenceIds(List.of("row-occurrence"))
+                                .text("服务开发")
+                                .build()))
+                .build();
+
+        assertThat(indexer.index(List.of(section)))
+                .extracting(ResumeIndexedLineDTO::getSourceOccurrenceIds)
+                .containsExactly(List.of("row-occurrence"), List.of("row-occurrence"));
+    }
+
+    @Test
+    void indexShouldReuseTheNamespacedOccurrenceForAFragmentAfterAnotherDuplicateRow() {
+        ResumeRawSectionDTO section = ResumeRawSectionDTO.builder()
+                .displayOrder(1)
+                .blocks(List.of(
+                        ResumeRawSectionBlockDTO.builder()
+                                .id("row-a")
+                                .sourceBlockIds(List.of("row-a"))
+                                .sourceOccurrenceIds(List.of("same"))
+                                .text("第一行")
+                                .build(),
+                        ResumeRawSectionBlockDTO.builder()
+                                .id("row-b")
+                                .sourceBlockIds(List.of("row-b"))
+                                .sourceOccurrenceIds(List.of("same"))
+                                .text("第二行")
+                                .build(),
+                        ResumeRawSectionBlockDTO.builder()
+                                .id("row-b#fragment-1")
+                                .sourceBlockIds(List.of("row-b#fragment-1"))
+                                .sourceOccurrenceIds(List.of("same"))
+                                .text("第二行续")
+                                .build()))
+                .build();
+
+        assertThat(indexer.index(List.of(section)))
+                .extracting(ResumeIndexedLineDTO::getSourceOccurrenceIds)
+                .containsExactly(List.of("same"), List.of("same~2"), List.of("same~2"));
+    }
+
+    @Test
     void indexShouldKeepNoiseLinesButMarkThem() {
         ResumeRawSectionDTO section = ResumeRawSectionDTO.builder()
                 .id("section-1")

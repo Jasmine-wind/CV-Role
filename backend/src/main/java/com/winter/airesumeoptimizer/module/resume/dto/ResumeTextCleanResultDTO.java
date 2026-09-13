@@ -18,6 +18,11 @@ public class ResumeTextCleanResultDTO {
 
     private List<ResumeTextSectionDTO> sections;
 
+    /** Logical source blocks retained during layout-aware parsing. */
+    private List<ResumeBlockDTO> sourceBlocks;
+
+    private String extractionCandidateType;
+
     private Integer duplicateLineCount;
 
     private Integer invalidLineCount;

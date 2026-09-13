@@ -2,6 +2,8 @@ package com.winter.airesumeoptimizer.module.resume.service.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.winter.airesumeoptimizer.module.resume.dto.ResumeBlockDTO;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 
 class ResumeTextCleanServiceImplTest {
@@ -29,7 +31,7 @@ class ResumeTextCleanServiceImplTest {
     }
 
     @Test
-    void cleanAndSplitSectionsShouldDeduplicateNormalizedLines() {
+    void cleanAndSplitSectionsShouldCountButPreserveNormalizedDuplicateLines() {
         String text = """
                 专业技能
                 Java Spring Boot Redis
@@ -39,7 +41,8 @@ class ResumeTextCleanServiceImplTest {
         var result = service.cleanAndSplitSections(text);
 
         assertThat(result.getDuplicateLineCount()).isEqualTo(1);
-        assertThat(result.getSections().get(0).getLines()).containsExactly("Java Spring Boot Redis");
+        assertThat(result.getSections().get(0).getLines())
+                .containsExactly("Java Spring Boot Redis", "Java Spring Boot Redis");
     }
 
     @Test
@@ -342,6 +345,125 @@ class ResumeTextCleanServiceImplTest {
                 .singleElement()
                 .satisfies(section -> assertThat(section.getLines())
                         .contains("项目一：", "开发环境：tomcat7、Maven、JDK1.8", "蓝天健康中心管理系统"));
+    }
+
+    @Test
+    void cleanAndSplitSectionsShouldPreserveMixedHeaderPrefixContactsAndTrailingContent() {
+        var result = service.cleanAndSplitSections("张三 13800000000 Java");
+
+        assertThat(result.getSections()).singleElement()
+                .satisfies(section -> assertThat(section.getLines())
+                        .containsExactly("张三", "13800000000", "Java"));
+        assertThat(result.getCleanedText()).isEqualTo("张三\n13800000000\nJava");
+    }
+
+    @Test
+    void mixedHeaderGithubProjectionShouldReuseTheContactSourceOccurrence() {
+        ResumeBlockDTO source = ResumeBlockDTO.builder()
+                .id("pdf-contact")
+                .index(0)
+                .originalIndex(0)
+                .displayOrder(0)
+                .text("张三 · 13800000000 · zhang@example.com · github.com/zhang-san")
+                .sourceBlockIds(List.of("pdf-contact"))
+                .sourceOccurrenceIds(List.of("pdf-contact-occurrence"))
+                .sourceType("pdf-legacy")
+                .build();
+
+        var result = service.cleanAndSplitSections(
+                "张三 · 13800000000 · zhang@example.com · github.com/zhang-san",
+                List.of(source));
+
+        assertThat(result.getSections()).singleElement()
+                .satisfies(section -> assertThat(section.getLines())
+                        .containsExactly("张三", "13800000000", "zhang@example.com", "GitHub: github.com/zhang-san"));
+        assertThat(result.getSections().get(0).getBlocks()).allSatisfy(block -> {
+            assertThat(block.getSourceBlockIds()).containsExactly("pdf-contact");
+            assertThat(block.getSourceOccurrenceIds()).containsExactly("pdf-contact-occurrence");
+        });
+    }
+
+    @Test
+    void layoutAwareWrappedLinesShouldInsertOnlyARealWordBoundarySpace() {
+        var result = service.cleanAndSplitSections("ignored", List.of(
+                layoutBlock(0, "This service implemen"),
+                layoutBlock(1, "tation remains stable")));
+
+        assertThat(result.getCleanedText()).contains("This service implementation remains stable");
+        assertThat(result.getCleanedText()).doesNotContain("implemen tation");
+    }
+
+    @Test
+    void layoutAwareWrappedCjkLinesShouldNotInsertAsciiSpace() {
+        var result = service.cleanAndSplitSections("ignored", List.of(
+                layoutBlock(0, "这是一个用于验证中文换行拼接行为的长句示例"),
+                layoutBlock(1, "不会被错误插入英文空格")));
+
+        assertThat(result.getCleanedText())
+                .contains("这是一个用于验证中文换行拼接行为的长句示例不会被错误插入英文空格")
+                .doesNotContain("示例 不会");
+    }
+
+    @Test
+    void layoutAwareWrappedEnglishLinesShouldKeepOneWordBoundarySpace() {
+        var result = service.cleanAndSplitSections("ignored", List.of(
+                layoutBlock(0, "This long source sentence"),
+                layoutBlock(1, "continues with details")));
+
+        assertThat(result.getCleanedText()).contains("This long source sentence continues with details");
+    }
+
+    private ResumeBlockDTO layoutBlock(int index, String text) {
+        return ResumeBlockDTO.builder()
+                .id("layout-" + index)
+                .index(index)
+                .originalIndex(index)
+                .displayOrder(index)
+                .text(text)
+                .page(1)
+                .x(72d)
+                .y(100d + index * 12d)
+                .width(240d)
+                .height(10d)
+                .fontSize(10d)
+                .sourceBlockIds(List.of("layout-" + index))
+                .sourceOccurrenceIds(List.of("layout-occurrence-" + index))
+                .sourceType("pdf-layout-lite")
+                .build();
+    }
+
+    @Test
+    void layoutAwareMixedHeaderProjectionShouldRetainSourceProvenance() {
+        ResumeBlockDTO source = ResumeBlockDTO.builder()
+                .id("layout-header")
+                .index(0)
+                .originalIndex(0)
+                .displayOrder(0)
+                .text("张三 13800000000 Java")
+                .sourceBlockIds(List.of("layout-header"))
+                .sourceOccurrenceIds(List.of("header-occurrence"))
+                .sourceType("pdf-layout-lite")
+                .build();
+
+        var result = service.cleanAndSplitSections("ignored", List.of(source));
+        var section = result.getSections().get(0);
+
+        assertThat(section.getLines()).containsExactly("张三", "13800000000", "Java");
+        assertThat(section.getBlocks()).extracting(ResumeBlockDTO::getText)
+                .containsExactly("张三", "13800000000", "Java");
+        assertThat(section.getBlocks()).allSatisfy(block -> {
+            assertThat(block.getSourceBlockIds()).containsExactly("layout-header");
+            assertThat(block.getSourceOccurrenceIds()).containsExactly("header-occurrence");
+        });
+    }
+
+    @Test
+    void cleanAndSplitSectionsShouldNotDropDuplicateMixedHeaderOccurrences() {
+        var result = service.cleanAndSplitSections("张三 13800000000 Java\n张三 13800000000 Java");
+
+        assertThat(result.getSections()).singleElement()
+                .satisfies(section -> assertThat(section.getLines())
+                        .containsExactly("张三", "13800000000", "Java", "张三", "13800000000", "Java"));
     }
 
     @Test

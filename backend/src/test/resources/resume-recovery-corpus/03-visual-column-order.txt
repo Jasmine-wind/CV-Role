@@ -1,0 +1,11 @@
+Synthetic Candidate C
+Education
+Harbor University Computer Engineering BEng
+Experience
+Harbor Systems 2021.06 - 2024.02 Platform Engineer
+Built a shared service registry for two internal teams.
+Skills
+Languages: Kotlin, Java
+Projects
+Atlas Console 2023.04 - 2023.11
+Created an operator console for release tracking.

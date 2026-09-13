@@ -84,29 +84,55 @@ public class JobDescriptionServiceImpl implements JobDescriptionService {
 
     @Override
     @Transactional
+    public void lockForOptimizationTaskCreation(Long userId, Long jobDescriptionId) {
+        getOwnedJobDescriptionForUpdate(userId, jobDescriptionId);
+    }
+
+    @Override
+    @Transactional
     public void delete(Long userId, Long jobDescriptionId) {
-        JobDescription jobDescription = getOwnedJobDescription(userId, jobDescriptionId);
-        // 必须先完成对象存储 + ExportArtifact 清理，随后才允许数据库父级联。
+        // OptimizationTask creation acquires Resume then this JD lock. Deletion owns the JD
+        // lifecycle lock before taking any task locks, so its cleanup snapshot cannot miss a
+        // task that commits concurrently against this parent.
+        JobDescription jobDescription = getOwnedJobDescriptionForUpdate(userId, jobDescriptionId);
+        // 先清理对象并持久化 DELETE_PENDING；ExportArtifact 元数据留给本事务成功时的
+        // 父级联删除，若后续失败则保留记录供重试。
         exportArtifactCleanupService.deleteArtifactsForJobDescription(userId, jobDescription.getId());
         jobDescriptionEmbeddingMapper.deleteByJobDescriptionId(jobDescription.getId());
         aiJobMatchResultMapper.delete(new LambdaQueryWrapper<AiJobMatchResult>()
                 .eq(AiJobMatchResult::getJobDescriptionId, jobDescription.getId()));
-        jobDescriptionMapper.deleteById(jobDescription.getId());
+        if (jobDescriptionMapper.delete(new LambdaQueryWrapper<JobDescription>()
+                .eq(JobDescription::getId, jobDescription.getId())
+                .eq(JobDescription::getUserId, userId)) != 1) {
+            throw new BusinessException(404, "目标岗位不存在");
+        }
     }
 
     private JobDescription getOwnedJobDescription(Long userId, Long jobDescriptionId) {
+        validateJobDescriptionIdentity(userId, jobDescriptionId);
+        JobDescription jobDescription = jobDescriptionMapper.selectOne(new LambdaQueryWrapper<JobDescription>()
+                .eq(JobDescription::getId, jobDescriptionId)
+                .eq(JobDescription::getUserId, userId));
+        return requireOwnedJobDescription(jobDescription);
+    }
+
+    private JobDescription getOwnedJobDescriptionForUpdate(Long userId, Long jobDescriptionId) {
+        validateJobDescriptionIdentity(userId, jobDescriptionId);
+        return requireOwnedJobDescription(
+                jobDescriptionMapper.selectOwnedForUpdate(userId, jobDescriptionId));
+    }
+
+    private void validateJobDescriptionIdentity(Long userId, Long jobDescriptionId) {
         validateUserId(userId);
         if (jobDescriptionId == null) {
             throw new BusinessException(400, "目标岗位 ID 不能为空");
         }
+    }
 
-        JobDescription jobDescription = jobDescriptionMapper.selectOne(new LambdaQueryWrapper<JobDescription>()
-                .eq(JobDescription::getId, jobDescriptionId)
-                .eq(JobDescription::getUserId, userId));
+    private JobDescription requireOwnedJobDescription(JobDescription jobDescription) {
         if (jobDescription == null) {
             throw new BusinessException(404, "目标岗位不存在");
         }
-
         return jobDescription;
     }
 

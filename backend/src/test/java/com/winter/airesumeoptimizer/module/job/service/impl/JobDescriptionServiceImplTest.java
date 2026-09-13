@@ -92,6 +92,18 @@ class JobDescriptionServiceImplTest {
     }
 
     @Test
+    void optimizationTaskCreationLockShouldUseOwnedRowLock() {
+        JobDescription jobDescription = new JobDescription();
+        jobDescription.setId(10L);
+        jobDescription.setUserId(1L);
+        when(jobDescriptionMapper.selectOwnedForUpdate(1L, 10L)).thenReturn(jobDescription);
+
+        service.lockForOptimizationTaskCreation(1L, 10L);
+
+        verify(jobDescriptionMapper).selectOwnedForUpdate(1L, 10L);
+    }
+
+    @Test
     void getDetailShouldRejectOtherUsersJobDescription() {
         when(jobDescriptionMapper.selectOne(any(Wrapper.class))).thenReturn(null);
 
@@ -119,7 +131,7 @@ class JobDescriptionServiceImplTest {
         jobDescription.setTitle("Java 后端开发工程师");
         jobDescription.setRawText("负责 Java 后端开发");
         jobDescription.setParseStatus("SUCCESS");
-        when(jobDescriptionMapper.selectOne(any(Wrapper.class))).thenReturn(jobDescription);
+        when(jobDescriptionMapper.selectOwnedForUpdate(1L, 10L)).thenReturn(jobDescription);
         doThrow(new BusinessException(500, "导出文件删除失败，已保留记录，请重试"))
                 .when(exportArtifactCleanupService).deleteArtifactsForJobDescription(1L, 10L);
 
@@ -127,7 +139,7 @@ class JobDescriptionServiceImplTest {
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("导出文件删除失败");
 
-        verify(jobDescriptionMapper, never()).deleteById(10L);
+        verify(jobDescriptionMapper, never()).delete(any(Wrapper.class));
         verify(jobDescriptionEmbeddingMapper, never()).deleteByJobDescriptionId(any());
     }
 
@@ -140,13 +152,14 @@ class JobDescriptionServiceImplTest {
         jobDescription.setRawText("负责 Java 后端开发");
         jobDescription.setParseStatus("SUCCESS");
 
-        when(jobDescriptionMapper.selectOne(any(Wrapper.class))).thenReturn(jobDescription);
+        when(jobDescriptionMapper.selectOwnedForUpdate(1L, 10L)).thenReturn(jobDescription);
+        when(jobDescriptionMapper.delete(any(Wrapper.class))).thenReturn(1);
 
         service.delete(1L, 10L);
 
         verify(exportArtifactCleanupService).deleteArtifactsForJobDescription(1L, 10L);
         verify(jobDescriptionEmbeddingMapper).deleteByJobDescriptionId(10L);
         verify(aiJobMatchResultMapper).delete(any(Wrapper.class));
-        verify(jobDescriptionMapper).deleteById(10L);
+        verify(jobDescriptionMapper).delete(any(Wrapper.class));
     }
 }

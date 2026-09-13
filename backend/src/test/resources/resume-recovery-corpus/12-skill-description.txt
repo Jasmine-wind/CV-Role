@@ -1,0 +1,5 @@
+Synthetic Candidate L
+Skills
+工具：Git、Docker
+构建可重复发布流程，保留工具使用原文
+数据库：PostgreSQL

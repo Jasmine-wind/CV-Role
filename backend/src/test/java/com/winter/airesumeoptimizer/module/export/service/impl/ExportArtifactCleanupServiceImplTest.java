@@ -3,6 +3,7 @@ package com.winter.airesumeoptimizer.module.export.service.impl;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doThrow;
@@ -24,11 +25,13 @@ import com.winter.airesumeoptimizer.module.optimization.entity.ResumeVersion;
 import com.winter.airesumeoptimizer.module.optimization.mapper.JobTargetMapper;
 import com.winter.airesumeoptimizer.module.optimization.mapper.OptimizationTaskMapper;
 import com.winter.airesumeoptimizer.module.optimization.mapper.ResumeVersionMapper;
+import com.winter.airesumeoptimizer.module.task.service.AsyncTaskService;
 import java.util.List;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.transaction.TransactionDefinition;
@@ -52,6 +55,7 @@ class ExportArtifactCleanupServiceImplTest {
     @Mock private OptimizationTaskMapper optimizationTaskMapper;
     @Mock private ExportArtifactMapper exportArtifactMapper;
     @Mock private FileStorageService fileStorageService;
+    @Mock private AsyncTaskService asyncTaskService;
 
     private ExportArtifactCleanupServiceImpl service;
 
@@ -67,20 +71,70 @@ class ExportArtifactCleanupServiceImplTest {
                 exportArtifactMapper,
                 fileStorageService,
                 new NoOpTransactionManager());
+        service.setAsyncTaskService(asyncTaskService);
     }
 
     @Test
-    void deleteArtifactsForResumeMarksPendingDeletesStorageThenRecord() {
+    void deleteArtifactsForResumeMarksPendingAndDeletesStorageButKeepsRecordForParentCascade() {
         givenResumeArtifacts();
         when(exportArtifactMapper.update(isNull(), any())).thenReturn(1);
-        when(exportArtifactMapper.delete(any())).thenReturn(1);
-
         service.deleteArtifactsForResume(USER_ID, RESUME_ID);
 
         verify(exportArtifactMapper, times(2)).update(isNull(), any());
         verify(fileStorageService).delete("exports/1/a.pdf");
         verify(fileStorageService).delete("exports/1/b.pdf");
-        verify(exportArtifactMapper, times(2)).delete(any());
+        verify(asyncTaskService).cancelActiveTasks(USER_ID, "RESUME", RESUME_ID);
+        verify(asyncTaskService).cancelActiveTasks(USER_ID, "OPTIMIZATION_TASK", 20L);
+        verify(exportArtifactMapper, never()).delete(any());
+    }
+
+    @Test
+    void deletePendingFailureDoesNotDeleteTheExternalObject() {
+        ExportArtifact artifact = artifact(34L, 20L, "exports/1/pending-failure.pdf");
+        when(exportArtifactMapper.selectOne(any())).thenReturn(artifact);
+        when(exportArtifactMapper.update(isNull(), any()))
+                .thenThrow(new IllegalStateException("database unavailable"));
+
+        assertThatThrownBy(() -> service.deleteArtifact(USER_ID, 34L))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        exception -> assertThat(exception.getCode()).isEqualTo(500));
+        verify(fileStorageService, never()).delete(any());
+        verify(exportArtifactMapper, never()).delete(any());
+        assertThat(artifact.getStatus()).isEqualTo("READY");
+    }
+
+    @Test
+    void zeroRowDeletePendingUpdateDoesNotDeleteTheExternalObject() {
+        ExportArtifact artifact = artifact(35L, 20L, "exports/1/pending-zero.pdf");
+        when(exportArtifactMapper.selectOne(any())).thenReturn(artifact);
+        when(exportArtifactMapper.update(isNull(), any())).thenReturn(0);
+
+        assertThatThrownBy(() -> service.deleteArtifact(USER_ID, 35L))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        exception -> assertThat(exception.getCode()).isEqualTo(500));
+        verify(fileStorageService, never()).delete(any());
+        verify(exportArtifactMapper, never()).delete(any());
+        assertThat(artifact.getStatus()).isEqualTo("READY");
+    }
+
+    @Test
+    void partialParentCleanupLeavesEveryArtifactRetryableAfterAStorageFailure() {
+        givenResumeArtifacts();
+        when(exportArtifactMapper.update(isNull(), any())).thenReturn(1);
+        doNothing().doThrow(new IllegalStateException("storage unavailable")).doNothing()
+                .when(fileStorageService).delete(any());
+
+        assertThatThrownBy(() -> service.deleteArtifactsForResume(USER_ID, RESUME_ID))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        exception -> assertThat(exception.getCode()).isEqualTo(500));
+        verify(fileStorageService).delete("exports/1/a.pdf");
+        verify(fileStorageService).delete("exports/1/b.pdf");
+
+        service.deleteArtifactsForResume(USER_ID, RESUME_ID);
+
+        verify(fileStorageService, times(2)).delete("exports/1/a.pdf");
+        verify(fileStorageService, times(2)).delete("exports/1/b.pdf");
+        verify(exportArtifactMapper, never()).delete(any());
     }
 
     @Test
@@ -106,6 +160,46 @@ class ExportArtifactCleanupServiceImplTest {
     }
 
     @Test
+    void genericStorageFailureKeepsDeletePendingMetadataAndCanBeRetried() {
+        ExportArtifact artifact = artifact(32L, 20L, "exports/1/generic.pdf");
+        when(exportArtifactMapper.selectOne(any())).thenReturn(artifact);
+        when(exportArtifactMapper.update(isNull(), any())).thenReturn(1);
+        when(exportArtifactMapper.delete(any())).thenReturn(1);
+        doThrow(new IllegalStateException("adapter unavailable"))
+                .doNothing()
+                .when(fileStorageService).delete("exports/1/generic.pdf");
+
+        assertThatThrownBy(() -> service.deleteArtifact(USER_ID, 32L))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        exception -> assertThat(exception.getCode()).isEqualTo(500));
+        assertThat(artifact.getStatus()).isEqualTo("DELETE_PENDING");
+
+        service.deleteArtifact(USER_ID, 32L);
+
+        verify(fileStorageService, times(2)).delete("exports/1/generic.pdf");
+        verify(exportArtifactMapper).delete(any());
+    }
+
+    @Test
+    void metadataDeleteFailureLeavesDeletePendingMetadataForRetry() {
+        ExportArtifact artifact = artifact(33L, 20L, "exports/1/metadata.pdf");
+        when(exportArtifactMapper.selectOne(any())).thenReturn(artifact);
+        when(exportArtifactMapper.update(isNull(), any())).thenReturn(1);
+        when(exportArtifactMapper.delete(any())).thenReturn(0).thenReturn(1);
+        doNothing().when(fileStorageService).delete("exports/1/metadata.pdf");
+
+        assertThatThrownBy(() -> service.deleteArtifact(USER_ID, 33L))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        exception -> assertThat(exception.getCode()).isEqualTo(500));
+        assertThat(artifact.getStatus()).isEqualTo("DELETE_PENDING");
+
+        service.deleteArtifact(USER_ID, 33L);
+
+        verify(fileStorageService, times(2)).delete("exports/1/metadata.pdf");
+        verify(exportArtifactMapper, times(2)).delete(any());
+    }
+
+    @Test
     void jobDescriptionCleanupTraversesJobTargetAndTaskBeforeParentCascade() {
         JobTarget target = new JobTarget();
         target.setId(11L);
@@ -115,12 +209,30 @@ class ExportArtifactCleanupServiceImplTest {
         when(exportArtifactMapper.selectList(any())).thenReturn(List.of(
                 artifact(30L, 20L, "exports/1/a.pdf")));
         when(exportArtifactMapper.update(isNull(), any())).thenReturn(1);
-        when(exportArtifactMapper.delete(any())).thenReturn(1);
 
         service.deleteArtifactsForJobDescription(USER_ID, 200L);
 
         verify(fileStorageService).delete("exports/1/a.pdf");
-        verify(exportArtifactMapper).delete(any());
+        verify(asyncTaskService).cancelActiveTasks(USER_ID, "OPTIMIZATION_TASK", 20L);
+        verify(exportArtifactMapper, never()).delete(any());
+    }
+
+    @Test
+    void parentCleanupLocksDistinctTaskIdsInGlobalAscendingOrder() {
+        JobTarget target = new JobTarget();
+        target.setId(11L);
+        when(jobTargetMapper.selectList(any())).thenReturn(List.of(target));
+        when(optimizationTaskMapper.selectList(any())).thenReturn(List.of(
+                task(30L, 10L), task(20L, 11L), task(30L, 12L)));
+        when(exportArtifactMapper.selectList(any())).thenReturn(List.of());
+
+        service.deleteArtifactsForJobDescription(USER_ID, 200L);
+
+        ArgumentCaptor<Long> taskId = ArgumentCaptor.forClass(Long.class);
+        verify(optimizationTaskMapper, times(2)).selectOwnedForUpdate(eq(USER_ID), taskId.capture());
+        assertThat(taskId.getAllValues()).containsExactly(20L, 30L);
+        verify(asyncTaskService).cancelActiveTasks(USER_ID, "OPTIMIZATION_TASK", 20L);
+        verify(asyncTaskService).cancelActiveTasks(USER_ID, "OPTIMIZATION_TASK", 30L);
     }
 
     @Test

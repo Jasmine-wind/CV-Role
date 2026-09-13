@@ -22,6 +22,28 @@ public interface EvidenceMatchService {
     }
 
     /**
+     * Execution-fenced overload used by the asynchronous analysis worker. Implementations must
+     * reject stale execution IDs before committing a replacement evidence analysis.
+     */
+    default EvidenceAnalysis analyze(
+            Long userId,
+            Long optimizationTaskId,
+            Long asyncTaskId,
+            JobDescriptionVO parsedJob) {
+        return analyze(userId, optimizationTaskId, parsedJob);
+    }
+
+    /** Execution-fenced overload retaining the immutable AI selection snapshot. */
+    default EvidenceAnalysis analyze(
+            Long userId,
+            Long optimizationTaskId,
+            Long asyncTaskId,
+            JobDescriptionVO parsedJob,
+            AiSelectionSnapshot selection) {
+        return analyze(userId, optimizationTaskId, parsedJob, selection);
+    }
+
+    /**
      * 按当前用户读取正式分析结果；任务尚未生成正式分析时返回 null。
      */
     EvidenceAnalysisResultVO getResult(Long userId, Long optimizationTaskId);

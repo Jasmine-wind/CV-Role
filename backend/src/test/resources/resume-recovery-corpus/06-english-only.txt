@@ -1,0 +1,11 @@
+Synthetic Candidate F
+Education
+Meadow University | Information Systems | 2019.09 - 2023.06
+Experience
+Meadow Works 2023.07 - Present Backend Engineer
+Designed a small service boundary and a deterministic test harness.
+Projects
+Release Notes 2024.01 - 2024.02
+Built an internal release notes workflow.
+Skills
+Frameworks: Java, Spring Boot

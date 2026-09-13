@@ -21,5 +21,8 @@ public class ResumeSkillSetDTO {
 
     private Map<String, List<String>> groups;
 
+    /** All source-backed skill-section descriptions, including lines without a recognized tag. */
+    private List<String> descriptions;
+
     private List<ResumeSkillEvidenceDTO> evidence;
 }

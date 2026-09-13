@@ -33,6 +33,23 @@ class ResumeBlockReorderServiceImplTest {
         assertThat(result.get(0).getFinalSectionSource()).isEqualTo("RULE_SOURCE_SECTION");
     }
 
+    @Test
+    void reorderShouldPreserveOccurrenceProvenance() {
+        ResumeBlockDTO source = ResumeBlockDTO.builder()
+                .index(3)
+                .originalIndex(3)
+                .text("Java")
+                .sourceSection("SKILLS")
+                .sourceBlockIds(List.of("block-3"))
+                .sourceOccurrenceIds(List.of("occurrence-3"))
+                .build();
+
+        ResumeBlockDTO reordered = service.reorder(List.of(source)).getFirst();
+
+        assertThat(reordered.getSourceBlockIds()).containsExactly("block-3");
+        assertThat(reordered.getSourceOccurrenceIds()).containsExactly("occurrence-3");
+    }
+
     private ResumeBlockDTO block(int index, String text, String section) {
         return ResumeBlockDTO.builder()
                 .index(index)

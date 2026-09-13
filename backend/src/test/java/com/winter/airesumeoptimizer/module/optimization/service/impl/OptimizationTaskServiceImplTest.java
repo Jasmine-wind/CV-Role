@@ -64,6 +64,11 @@ class OptimizationTaskServiceImplTest {
 
     @BeforeEach
     void setUp() {
+        for (Class<?> entity : java.util.List.of(Resume.class, OptimizationTask.class)) {
+            com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(
+                    new org.apache.ibatis.builder.MapperBuilderAssistant(
+                            new com.baomidou.mybatisplus.core.MybatisConfiguration(), ""), entity);
+        }
         resume = new Resume();
         resume.setId(10L);
         resume.setUserId(1L);
@@ -118,6 +123,58 @@ class OptimizationTaskServiceImplTest {
         verify(optimizationTaskMapper).delete(any());
         verify(resumeVersionMapper).delete(any());
         verify(resumeMapper, never()).delete(any());
+    }
+
+    @Test
+    void deleteLocksOwnedResumeBeforeLockingTaskAndCleaningArtifacts() {
+        when(optimizationTaskMapper.selectOne(any())).thenReturn(task("SUCCESS"));
+        when(optimizationTaskMapper.delete(any())).thenReturn(1);
+
+        service.delete(1L, 50L);
+
+        var order = org.mockito.Mockito.inOrder(optimizationTaskMapper, resumeVersionMapper,
+                resumeMapper, exportArtifactCleanupService);
+        order.verify(optimizationTaskMapper).selectOne(any());
+        order.verify(resumeVersionMapper).selectOne(any());
+        order.verify(resumeMapper).selectOne(org.mockito.ArgumentMatchers.argThat(query ->
+                query.getSqlSegment().contains("FOR UPDATE")
+                        && query.getSqlSegment().contains("user_id")));
+        order.verify(optimizationTaskMapper).selectOne(org.mockito.ArgumentMatchers.argThat(query ->
+                query.getSqlSegment().contains("FOR UPDATE")
+                        && query.getSqlSegment().contains("user_id")));
+        order.verify(exportArtifactCleanupService).deleteArtifactsForOptimizationTask(1L, 50L);
+    }
+
+    @Test
+    void deleteRejectsMissingOrUnownedResumeBeforeTaskLockOrCleanup() {
+        when(optimizationTaskMapper.selectOne(any())).thenReturn(task("SUCCESS"));
+        when(resumeMapper.selectOne(any())).thenReturn(null);
+
+        assertThatThrownBy(() -> service.delete(1L, 50L))
+                .isInstanceOf(BusinessException.class).hasMessage("简历不存在");
+
+        verify(optimizationTaskMapper).selectOne(any());
+        verify(exportArtifactCleanupService, never()).deleteArtifactsForOptimizationTask(any(), any());
+        verify(optimizationTaskMapper, never()).delete(any());
+    }
+
+    @Test
+    void asyncBindingSqlRequiresExactBusinessIdentityEvenForSameUser() {
+        for (String methodName : java.util.List.of("attachAsyncTaskIfActive", "markRunningIfCurrent",
+                "markSuccessIfCurrent", "markFailedIfCurrent")) {
+            var method = java.util.Arrays.stream(OptimizationTaskMapper.class.getMethods())
+                    .filter(candidate -> candidate.getName().equals(methodName)).findFirst();
+            assertThat(method).as(methodName).isPresent();
+            String sql = String.join(" ", method.orElseThrow()
+                    .getAnnotation(org.apache.ibatis.annotations.Update.class).value());
+            assertThat(sql).as(methodName).contains(
+                    "async_tasks.id = #{asyncTaskId}",
+                    "async_tasks.user_id = #{userId}",
+                    "async_tasks.task_type = 'MATCH_ANALYSIS'",
+                    "async_tasks.biz_type = 'OPTIMIZATION_TASK'",
+                    "async_tasks.biz_id = #{optimizationTaskId}",
+                    "async_tasks.status IN ('PENDING', 'RUNNING')");
+        }
     }
 
     @Test
@@ -180,6 +237,7 @@ class OptimizationTaskServiceImplTest {
         ArgumentCaptor<OptimizationTask> taskCaptor = ArgumentCaptor.forClass(OptimizationTask.class);
         verify(optimizationTaskMapper).insert(taskCaptor.capture());
         assertThat(taskCaptor.getValue().getResumeInputSnapshot()).isEqualTo(sourceVersion().getStructuredContent());
+        verify(jobDescriptionService).lockForOptimizationTaskCreation(1L, 20L);
         verify(resumeVersionMapper, never()).update(any(), any());
         verify(resumeMapper, never()).updateById(any(Resume.class));
     }
@@ -195,6 +253,7 @@ class OptimizationTaskServiceImplTest {
 
         assertThat(result.getOptimizationTaskId()).isEqualTo(50L);
         assertThat(result.getJobTargetId()).isEqualTo(30L);
+        verify(jobDescriptionService).lockForOptimizationTaskCreation(1L, 20L);
         verify(jobDescriptionService, never()).submit(any(), any());
     }
 
@@ -312,13 +371,108 @@ class OptimizationTaskServiceImplTest {
         OptimizationTask failed = task("FAILED");
         failed.setAsyncTaskId(90L);
         when(optimizationTaskMapper.selectOne(any())).thenReturn(failed);
-        when(optimizationTaskMapper.update(any(), any())).thenReturn(0);
+        when(optimizationTaskMapper.attachAsyncTaskIfActive(any(), any(), any(), any())).thenReturn(0);
 
         assertThatThrownBy(() -> service.attachAsyncTask(1L, 50L, 100L))
                 .isInstanceOf(BusinessException.class)
                 .hasMessage("岗位分析正在进行中或已完成");
 
-        verify(optimizationTaskMapper).update(any(), any());
+        verify(optimizationTaskMapper).attachAsyncTaskIfActive(
+                org.mockito.ArgumentMatchers.eq(1L), org.mockito.ArgumentMatchers.eq(50L),
+                org.mockito.ArgumentMatchers.eq(100L), any());
+        verify(optimizationTaskMapper, never()).update(any(), any());
+    }
+
+    @Test
+    void attachAsyncTaskAcceptsOnlySuccessfulBindingCas() {
+        when(optimizationTaskMapper.selectOne(any())).thenReturn(task("PENDING"));
+        when(optimizationTaskMapper.attachAsyncTaskIfActive(any(), any(), any(), any())).thenReturn(1);
+
+        service.attachAsyncTask(1L, 50L, 100L);
+
+        verify(optimizationTaskMapper).attachAsyncTaskIfActive(
+                org.mockito.ArgumentMatchers.eq(1L), org.mockito.ArgumentMatchers.eq(50L),
+                org.mockito.ArgumentMatchers.eq(100L), any());
+        verify(optimizationTaskMapper, never()).update(any(), any());
+    }
+
+    @Test
+    void attachAsyncTaskRejectsUnrelatedOrInactiveExecutionWhenBindingCasRejectsIt() {
+        when(optimizationTaskMapper.selectOne(any())).thenReturn(task("PENDING"));
+        when(optimizationTaskMapper.attachAsyncTaskIfActive(any(), any(), any(), any())).thenReturn(0);
+
+        assertThatThrownBy(() -> service.attachAsyncTask(1L, 50L, 100L))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        exception -> assertThat(exception.getCode()).isEqualTo(409));
+        verify(optimizationTaskMapper, never()).update(any(), any());
+    }
+
+    @Test
+    void fencedCallbacksFailClosedWhenAttachedIdHasInvalidBusinessBinding() {
+        OptimizationTask stored = task("RUNNING");
+        stored.setAsyncTaskId(100L);
+        stored.setResumeInputSnapshot(canonicalSnapshot());
+        when(optimizationTaskMapper.selectOne(any())).thenReturn(stored);
+        // SQL rejects a same-user async row for another task/type, or a terminal execution.
+        when(optimizationTaskMapper.markRunningIfCurrent(any(), any(), any(), any())).thenReturn(0);
+        when(optimizationTaskMapper.markSuccessIfCurrent(any(), any(), any(), any(), any())).thenReturn(0);
+        when(optimizationTaskMapper.markFailedIfCurrent(any(), any(), any(), any(), any(), any())).thenReturn(0);
+
+        assertThatThrownBy(() -> service.markRunning(1L, 50L, 100L))
+                .isInstanceOf(BusinessException.class).hasMessage("优化任务执行已失效");
+        assertThatThrownBy(() -> service.markSuccess(1L, 50L, 100L,
+                JobDescriptionVO.builder().title("must not update").build(), evidenceAnalysis(50L, 1L)))
+                .isInstanceOf(BusinessException.class).hasMessage("优化任务执行已失效");
+        service.markFailed(1L, 50L, 100L, "OLD_WORKER", "ignored");
+
+        verify(optimizationTaskMapper).markFailedIfCurrent(any(), any(), any(), any(), any(), any());
+        verify(optimizationTaskMapper, never()).update(any(), any());
+        verify(jobTargetMapper, never()).update(any(), any());
+    }
+
+    @Test
+    void fencedMarkRunningUsesMapperCasForTheAttachedExecution() {
+        OptimizationTask task = task("PENDING");
+        task.setAsyncTaskId(100L);
+        when(optimizationTaskMapper.selectOne(any())).thenReturn(task);
+        when(optimizationTaskMapper.markRunningIfCurrent(any(), any(), any(), any())).thenReturn(1);
+
+        service.markRunning(1L, 50L, 100L);
+
+        verify(optimizationTaskMapper).markRunningIfCurrent(
+                org.mockito.ArgumentMatchers.eq(1L),
+                org.mockito.ArgumentMatchers.eq(50L),
+                org.mockito.ArgumentMatchers.eq(100L),
+                any());
+        verify(optimizationTaskMapper, never()).update(any(), any());
+    }
+
+    @Test
+    void fencedMarkSuccessRejectsAWorkerFromAnOlderRetry() {
+        OptimizationTask task = task("RUNNING");
+        task.setAsyncTaskId(101L);
+        task.setResumeInputSnapshot("{\"skills\":[\"Java\"]}");
+        when(optimizationTaskMapper.selectOne(any())).thenReturn(task);
+
+        assertThatThrownBy(() -> service.markSuccess(
+                1L, 50L, 100L, null, evidenceAnalysis(50L, 1L)))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("优化任务执行已失效");
+
+        verify(optimizationTaskMapper, never()).markSuccessIfCurrent(any(), any(), any(), any(), any());
+        verify(optimizationTaskMapper, never()).update(any(), any());
+    }
+
+    @Test
+    void fencedMarkFailedIgnoresAWorkerAfterTheTaskWasReplaced() {
+        OptimizationTask task = task("RUNNING");
+        task.setAsyncTaskId(101L);
+        when(optimizationTaskMapper.selectOne(any())).thenReturn(task);
+
+        service.markFailed(1L, 50L, 100L, "OLD_WORKER", "旧 worker");
+
+        verify(optimizationTaskMapper, never()).markFailedIfCurrent(any(), any(), any(), any(), any(), any());
+        verify(optimizationTaskMapper, never()).update(any(), any());
     }
 
     @Test

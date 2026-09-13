@@ -36,11 +36,20 @@ public class ResumeAiStructuredParseResultDTO {
 
     private ResumeStructuredContentDTO structuredContent;
 
+    /** Candidate returned only as an unconfirmed reference; never a write/apply result. */
+    private ResumeStructuredContentDTO referenceContent;
+
+    private Boolean referenceOnly;
+
+    private Double referenceConfidence;
+
     private List<String> qualityWarnings;
 
+    /**
+     * Automatic AI-to-canonical application is intentionally unavailable. AI output is either a
+     * rule result or an explicitly requested, reference-only advisory candidate.
+     */
     public boolean shouldApply() {
-        return Boolean.TRUE.equals(aiEnabled)
-                && Boolean.TRUE.equals(applied)
-                && structuredContent != null;
+        return false;
     }
 }

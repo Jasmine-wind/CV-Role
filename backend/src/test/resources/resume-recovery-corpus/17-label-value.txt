@@ -1,0 +1,6 @@
+Synthetic Candidate Q
+个人信息
+所在地：North Harbor
+目标岗位：Platform Engineer
+技能
+框架：Spring Boot、Java

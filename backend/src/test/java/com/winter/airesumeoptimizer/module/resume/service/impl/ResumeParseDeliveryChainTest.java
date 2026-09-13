@@ -16,11 +16,13 @@ import com.winter.airesumeoptimizer.infra.render.TypstRenderProperties;
 import com.winter.airesumeoptimizer.infra.render.TypstResumeRenderer;
 import com.winter.airesumeoptimizer.infra.render.TypstResumeSourceMapper;
 import com.winter.airesumeoptimizer.infra.storage.FileStorageService;
+import com.winter.airesumeoptimizer.module.resume.dto.ResumeIndexedLineDTO;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeStructuredContentDTO;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeTextCleanResultDTO;
 import com.winter.airesumeoptimizer.module.resume.fixture.ResumeFixtures;
 import com.winter.airesumeoptimizer.module.resume.service.ResumeDocumentQualityValidator;
 import com.winter.airesumeoptimizer.module.resume.service.ResumeCanonicalDocumentService;
+import com.winter.airesumeoptimizer.module.resume.service.ResumeTextExtractionResult;
 import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentBulletDTO;
 import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentContactDTO;
 import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentDTO;
@@ -30,7 +32,9 @@ import com.winter.airesumeoptimizer.module.resume.enums.ResumeQualityStatus;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.BeforeAll;
@@ -54,6 +58,13 @@ class ResumeParseDeliveryChainTest {
     private static final ResumeCanonicalDocumentServiceImpl canonicalService =
             new ResumeCanonicalDocumentServiceImpl(new ObjectMapper());
     private static final ResumeDocumentQualityValidatorImpl validator = new ResumeDocumentQualityValidatorImpl();
+
+    private record Delivery(
+            ResumeStructuredContentDTO structured,
+            ResumeCanonicalDocumentService.BuildResult canonical,
+            ResumeTextExtractionResult extraction) {}
+
+    private record RealFile(String resourcePath, String fileType) {}
 
     private static boolean typstAvailable;
 
@@ -80,21 +91,74 @@ class ResumeParseDeliveryChainTest {
         when(fileStorageService.loadAsStream(objectKey)).thenReturn(new ByteArrayInputStream(bytes));
     }
 
-    private static ResumeCanonicalDocumentService.BuildResult runChain(String objectKey, String resourcePath, String fileType)
+    private static Delivery runChain(String objectKey, String resourcePath, String fileType)
             throws IOException {
         givenFile(objectKey, resourcePath);
-        String extracted = extraction.extractText(objectKey, fileType);
-        ResumeTextCleanResultDTO cleanResult = cleaner.cleanAndSplitSections(extracted);
+        ResumeTextExtractionResult extractionResult = extraction.extractWithMetadata(objectKey, fileType);
+        ResumeTextCleanResultDTO cleanResult = cleaner.cleanAndSplitSections(
+                extractionResult.text(), extractionResult.sourceBlocks());
         ResumeStructuredContentDTO structured =
                 structureParse.parse(cleanResult.getCleanedText(), cleanResult.getSections());
         structured.setRawText(cleanResult.getCleanedText());
-        return canonicalService.build(structured);
+        ResumeStructuredResultAssembler.enrich(structured);
+        structured.setIndexedLines(new ResumeLineIndexerImpl().index(structured.getRawSections()));
+        new ResumePointerPostProcessorImpl(new ResumePointerValidatorImpl())
+                .attachSourceRefs(structured, structured.getIndexedLines());
+        return new Delivery(structured, canonicalService.build(structured), extractionResult);
+    }
+
+    @Test
+    void realPdfAndDocxProductionOrderShouldBeDeterministicAndUseOnlyExtractedProvenance() throws IOException {
+        for (RealFile file : List.of(
+                new RealFile(ResumeFixtures.STANDARD_PDF, "pdf"),
+                new RealFile(ResumeFixtures.STANDARD_DOCX, "docx"))) {
+            Delivery first = runChain("determinism-first." + file.fileType(), file.resourcePath(), file.fileType());
+            Delivery repeat = runChain("determinism-repeat." + file.fileType(), file.resourcePath(), file.fileType());
+
+            assertThat(repeat.extraction()).usingRecursiveComparison().isEqualTo(first.extraction());
+            assertThat(repeat.structured()).usingRecursiveComparison().isEqualTo(first.structured());
+            assertThat(repeat.canonical()).usingRecursiveComparison().isEqualTo(first.canonical());
+            assertThat(validator.validate(first.canonical().document(), first.canonical().unresolvedItems()))
+                    .usingRecursiveComparison()
+                    .isEqualTo(validator.validate(repeat.canonical().document(), repeat.canonical().unresolvedItems()));
+            assertThat(validator.validate(first.canonical().document(), first.canonical().unresolvedItems())
+                    .qualityStatus()).isEqualTo(ResumeQualityStatus.QUALITY_READY);
+            assertCanonicalProvenanceComesFromExtraction(first);
+        }
+    }
+
+    @Test
+    void realPdfAndDocxCanonicalDocumentsShouldRenderDeterministically() throws IOException {
+        assumeTrue(typstAvailable, "本机未安装 typst，跳过真实渲染验证");
+
+        for (RealFile file : List.of(
+                new RealFile(ResumeFixtures.STANDARD_PDF, "pdf"),
+                new RealFile(ResumeFixtures.STANDARD_DOCX, "docx"))) {
+            Delivery delivery = runChain("render." + file.fileType(), file.resourcePath(), file.fileType());
+            assertThat(validator.validate(delivery.canonical().document(), delivery.canonical().unresolvedItems())
+                    .qualityStatus()).isEqualTo(ResumeQualityStatus.QUALITY_READY);
+
+            for (ResumeTemplateId template : ResumeTemplateId.values()) {
+                ResumePdfRenderResult first = render(delivery.canonical().document(), template);
+                ResumePdfRenderResult repeat = render(delivery.canonical().document(), template);
+                assertThat(repeat.pdf()).as("fileType=%s template=%s", file.fileType(), template)
+                        .isEqualTo(first.pdf());
+                assertThat(first.pdf()).hasSizeGreaterThan(2_000);
+                assertThat(new String(first.pdf(), 0, 5)).isEqualTo("%PDF-");
+                assertThat(repeat.layout()).usingRecursiveComparison().isEqualTo(first.layout());
+                assertThat(first.layout().overflowDetected()).isFalse();
+                assertThat(first.layout().minimumFontSizeInPt()).isGreaterThanOrEqualTo(9.0f);
+            }
+        }
     }
 
     @Test
     void standardPdfShouldDeliverContactsBoundariesAndReadyStatus() throws IOException {
-        ResumeCanonicalDocumentService.BuildResult result =
-                runChain("standard.pdf", ResumeFixtures.STANDARD_PDF, "pdf");
+        Delivery delivery = runChain("standard.pdf", ResumeFixtures.STANDARD_PDF, "pdf");
+        ResumeCanonicalDocumentService.BuildResult result = delivery.canonical();
+        ResumeStructuredContentDTO structured = delivery.structured();
+        assertThat(delivery.extraction().pageCountKnown()).isTrue();
+        assertThat(delivery.extraction().pageCount()).isEqualTo(1);
         ResumeDocumentDTO document = result.document();
         String documentText = documentText(document);
 
@@ -157,12 +221,14 @@ class ResumeParseDeliveryChainTest {
                 validator.validate(document, result.unresolvedItems());
         assertThat(validation.qualityStatus()).isEqualTo(ResumeQualityStatus.QUALITY_READY);
         assertThat(result.unresolvedItems()).isEmpty();
+        assertSourceAwareDelivery(structured, "上海云启科技有限公司", "订单中台重构");
     }
 
     @Test
     void standardDocxShouldDeliverTheSameFacts() throws IOException {
-        ResumeCanonicalDocumentService.BuildResult result =
-                runChain("standard.docx", ResumeFixtures.STANDARD_DOCX, "docx");
+        Delivery delivery = runChain("standard.docx", ResumeFixtures.STANDARD_DOCX, "docx");
+        ResumeCanonicalDocumentService.BuildResult result = delivery.canonical();
+        ResumeStructuredContentDTO structured = delivery.structured();
         ResumeDocumentDTO document = result.document();
 
         assertThat(document.getBasics().getName()).isEqualTo("李明");
@@ -175,12 +241,16 @@ class ResumeParseDeliveryChainTest {
         assertThat(sectionOf(document, "EXPERIENCE").getEntries()).hasSize(2);
         assertThat(sectionOf(document, "PROJECT").getEntries()).hasSize(2);
         assertThat(documentText(document)).contains("华东理工大学");
+        assertSourceAwareDelivery(structured, "上海云启科技有限公司", "订单中台重构");
     }
 
     @Test
     void mixedLanguagePdfShouldDeliverEnglishFactsAndStayReady() throws IOException {
-        ResumeCanonicalDocumentService.BuildResult result =
-                runChain("mixed.pdf", ResumeFixtures.MIXED_PDF, "pdf");
+        Delivery delivery = runChain("mixed.pdf", ResumeFixtures.MIXED_PDF, "pdf");
+        ResumeCanonicalDocumentService.BuildResult result = delivery.canonical();
+        ResumeStructuredContentDTO structured = delivery.structured();
+        assertThat(delivery.extraction().pageCountKnown()).isTrue();
+        assertThat(delivery.extraction().pageCount()).isEqualTo(1);
         ResumeDocumentDTO document = result.document();
 
         assertThat(document.getBasics().getName()).isEqualTo("李明");
@@ -206,12 +276,13 @@ class ResumeParseDeliveryChainTest {
         assertThat(validator.validate(document, result.unresolvedItems()).qualityStatus())
                 .isEqualTo(ResumeQualityStatus.QUALITY_READY);
         assertThat(result.unresolvedItems()).isEmpty();
+        assertSourceAwareDelivery(structured, "上海云启科技有限公司", "订单结算平台");
     }
 
     @Test
     void ambiguousPdfShouldFailClosedIntoNeedsReviewWithoutInventedFacts() throws IOException {
-        ResumeCanonicalDocumentService.BuildResult result =
-                runChain("ambiguous.pdf", ResumeFixtures.AMBIGUOUS_PDF, "pdf");
+        Delivery delivery = runChain("ambiguous.pdf", ResumeFixtures.AMBIGUOUS_PDF, "pdf");
+        ResumeCanonicalDocumentService.BuildResult result = delivery.canonical();
         ResumeDocumentDTO document = result.document();
 
         ResumeDocumentQualityValidator.ValidationResult validation =
@@ -242,21 +313,76 @@ class ResumeParseDeliveryChainTest {
     }
 
     @Test
+    void twoPageInternshipShouldRetainHeaderAndBothPhysicalPages() throws IOException {
+        givenFile("two-page-pointer.pdf", ResumeFixtures.TWO_PAGE_PDF);
+        var extractionResult = extraction.extractWithMetadata("two-page-pointer.pdf", "pdf");
+        assertThat(extractionResult.pageCount()).isEqualTo(2);
+        assertThat(extractionResult.pageCountKnown()).isTrue();
+        ResumeTextCleanResultDTO cleanResult = cleaner.cleanAndSplitSections(
+                extractionResult.text(), extractionResult.sourceBlocks());
+        ResumeStructuredContentDTO structured =
+                structureParse.parse(cleanResult.getCleanedText(), cleanResult.getSections());
+        structured.setRawText(cleanResult.getCleanedText());
+        ResumeStructuredResultAssembler.enrich(structured);
+        List<ResumeIndexedLineDTO> indexedLines = new ResumeLineIndexerImpl().index(structured.getRawSections());
+        structured.setIndexedLines(indexedLines);
+        new ResumePointerPostProcessorImpl(new ResumePointerValidatorImpl())
+                .attachSourceRefs(structured, indexedLines);
+        ResumeCanonicalDocumentService.BuildResult canonical = canonicalService.build(structured);
+        var validation = validator.validate(canonical.document(), canonical.unresolvedItems());
+        assertThat(validation.qualityStatus())
+                .isEqualTo(ResumeQualityStatus.QUALITY_READY);
+        assertThat(canonical.unresolvedItems()).isEmpty();
+
+        var internship = structured.getStructuredData().getExperiences().stream()
+                .filter(experience -> "INTERNSHIP".equals(experience.getType()))
+                .findFirst()
+                .orElseThrow();
+        assertThat(internship.getSourceRef()).isNotNull();
+        assertThat(internship.getSourceRef().getText())
+                .contains("上海某金融科技公司", "第 1 项", "第 26 项");
+        assertThat(internship.getSourceRef().getPage()).isNull();
+        assertThat(internship.getSourceRef().getSourceOccurrenceIds())
+                .contains("pdf-legacy-p001-l0030-occurrence", "pdf-legacy-p002-l0000-occurrence",
+                        "pdf-legacy-p002-l0021-occurrence");
+        assertThat(internship.getBullets()).hasSize(26);
+
+        ResumeDocumentEntryDTO canonicalInternship = canonical.document().getSections().stream()
+                .flatMap(section -> section.getEntries().stream())
+                .filter(entry -> "上海某金融科技公司".equals(entry.getOrganization()))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("canonical 文档缺少实习经历"));
+        assertThat(canonicalInternship.getSourceRef()).isNotNull();
+        assertThat(canonicalInternship.getSourceOccurrenceIds())
+                .contains("pdf-legacy-p001-l0030-occurrence", "pdf-legacy-p002-l0000-occurrence",
+                        "pdf-legacy-p002-l0021-occurrence");
+        assertThat(canonicalInternship.getSourceRef().getSourceOccurrenceIds())
+                .contains("pdf-legacy-p001-l0030-occurrence", "pdf-legacy-p002-l0000-occurrence",
+                        "pdf-legacy-p002-l0021-occurrence");
+        assertThat(canonicalInternship.getBullets()).hasSize(26);
+        assertThat(canonicalInternship.getBullets().getFirst().getSourceOccurrenceIds())
+                .contains("pdf-legacy-p001-l0031-occurrence");
+        assertThat(canonicalInternship.getBullets().getLast().getSourceOccurrenceIds())
+                .contains("pdf-legacy-p002-l0021-occurrence");
+
+    }
+
+    @Test
     void onePageAndTwoPageResumesShouldBothRenderWithoutOrphanFinalPage() throws IOException {
         assumeTrue(typstAvailable, "本机未安装 typst，跳过真实渲染验证");
 
-        ResumeCanonicalDocumentService.BuildResult onePage =
-                runChain("standard.pdf", ResumeFixtures.STANDARD_PDF, "pdf");
-        ResumePdfRenderResult standardRendered = render(onePage.document());
+        Delivery onePage = runChain("standard.pdf", ResumeFixtures.STANDARD_PDF, "pdf");
+        ResumePdfRenderResult standardRendered = render(onePage.canonical().document());
         assertThat(standardRendered.layout().overflowDetected()).isFalse();
         assertThat(standardRendered.layout().pageCount()).isEqualTo(1);
         assertThat(standardRendered.layout().minimumFontSizeInPt()).isGreaterThanOrEqualTo(9.0f);
 
-        ResumeCanonicalDocumentService.BuildResult twoPage =
-                runChain("two-page.pdf", ResumeFixtures.TWO_PAGE_PDF, "pdf");
-        ResumePdfRenderResult twoPageRendered = render(twoPage.document());
+        Delivery twoPage = runChain("two-page.pdf", ResumeFixtures.TWO_PAGE_PDF, "pdf");
+        ResumePdfRenderResult twoPageRendered = render(twoPage.canonical().document());
         PdfLayoutInspection layout = twoPageRendered.layout();
         assertThat(layout.pageCount()).isEqualTo(2);
+        assertThat(layout.overflowDetected()).isFalse();
+        assertThat(layout.minimumFontSizeInPt()).isGreaterThanOrEqualTo(9.0f);
         // Gate 3：两页可接受；末页既不能只剩一两行，也不能形成稀疏尾页。
         assertThat(layout.finalPageLineCount()).isGreaterThanOrEqualTo(3);
         assertThat(layout.finalPageContentRatio())
@@ -265,6 +391,10 @@ class ResumeParseDeliveryChainTest {
     }
 
     private ResumePdfRenderResult render(ResumeDocumentDTO document) {
+        return render(document, ResumeTemplateId.CLASSIC);
+    }
+
+    private ResumePdfRenderResult render(ResumeDocumentDTO document, ResumeTemplateId template) {
         TypstRenderProperties properties = new TypstRenderProperties();
         String configuredFontPath = System.getenv("APP_RENDER_FONT_PATH");
         if (configuredFontPath != null && !configuredFontPath.isBlank()) {
@@ -272,7 +402,7 @@ class ResumeParseDeliveryChainTest {
         }
         ResumePdfRenderer renderer = new TypstResumeRenderer(
                 properties, new TypstResumeSourceMapper(), new PdfLayoutInspector());
-        return renderer.render(document, ResumeTemplateId.CLASSIC);
+        return renderer.render(document, template);
     }
 
     @Test
@@ -330,6 +460,56 @@ class ResumeParseDeliveryChainTest {
                                         .bullets(List.of()).build()))
                                 .build()))
                 .build();
+    }
+
+    private static void assertCanonicalProvenanceComesFromExtraction(Delivery delivery) {
+        Set<String> extractedOccurrenceIds = new HashSet<>();
+        Set<String> extractedBlockIds = new HashSet<>();
+        delivery.extraction().sourceBlocks().forEach(block -> {
+            if (block.getSourceOccurrenceIds() != null) {
+                extractedOccurrenceIds.addAll(block.getSourceOccurrenceIds());
+            }
+            if (block.getSourceBlockIds() != null) {
+                extractedBlockIds.addAll(block.getSourceBlockIds());
+            }
+        });
+
+        ResumeDocumentDTO document = delivery.canonical().document();
+        assertThat(extractedOccurrenceIds).isNotEmpty();
+        assertThat(extractedOccurrenceIds).doesNotContainAnyElementsOf(extractedBlockIds);
+        assertThat(document.getSourceOccurrenceIds())
+                .isNotEmpty()
+                .allMatch(extractedOccurrenceIds::contains)
+                .doesNotContainAnyElementsOf(extractedBlockIds);
+        assertThat(document.getSourceOccurrenceTexts()).hasSameSizeAs(document.getSourceOccurrenceIds());
+        assertThat(document.getSourceOccurrenceTexts().keySet())
+                .containsExactlyInAnyOrderElementsOf(document.getSourceOccurrenceIds());
+        assertThat(document.getSourceOccurrencePrimaryIds().keySet())
+                .containsExactlyInAnyOrderElementsOf(document.getSourceOccurrenceIds());
+        assertThat(document.getSourceOccurrencePrimaryIds().values())
+                .allMatch(extractedOccurrenceIds::contains);
+    }
+
+    private static void assertSourceAwareDelivery(
+            ResumeStructuredContentDTO structured, String organization, String projectName) {
+        assertThat(structured.getIndexedLines()).isNotEmpty();
+        assertThat(structured.getStructuredData()).isNotNull();
+
+        var experience = structured.getStructuredData().getExperiences().stream()
+                .filter(item -> organization.equals(item.getOrganization()))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("缺少经历：" + organization));
+        assertThat(experience.getSourceRef()).isNotNull();
+        assertThat(experience.getSourceRef().getText()).contains(organization);
+        assertThat(experience.getSourceRef().getSourceOccurrenceIds()).isNotEmpty();
+
+        var project = structured.getStructuredData().getProjects().stream()
+                .filter(item -> projectName.equals(item.getName()))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("缺少项目：" + projectName));
+        assertThat(project.getSourceRef()).isNotNull();
+        assertThat(project.getSourceRef().getText()).contains(projectName);
+        assertThat(project.getSourceRef().getSourceOccurrenceIds()).isNotEmpty();
     }
 
     private static ResumeDocumentSectionDTO sectionOf(ResumeDocumentDTO document, String kind) {

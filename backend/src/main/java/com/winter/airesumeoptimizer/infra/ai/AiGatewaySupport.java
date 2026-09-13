@@ -65,6 +65,14 @@ public final class AiGatewaySupport {
         if (selection != null) {
             return selection;
         }
+        // A real context-aware gateway must never synthesize a server/default selection for a
+        // new task. Keep the fallback only for pre-context legacy unit doubles, whose historical
+        // seam has no credential-selection contract.
+        if (gateway instanceof ContextAwareAiGateway) {
+            throw new AiGatewayException(
+                    AiFailureCode.AI_CONFIGURATION_REQUIRED,
+                    "请先配置并启用自己的 AI");
+        }
         String model;
         try {
             model = modelName(gateway, new AiInvocationContext(userId, null, operation, null));

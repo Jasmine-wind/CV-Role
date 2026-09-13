@@ -165,11 +165,14 @@ public class OptimizationTaskServiceImpl implements OptimizationTaskService {
     @Override
     @Transactional
     public void delete(Long userId, Long optimizationTaskId) {
+        // Share submission's Resume -> OptimizationTask lock order before lifecycle cleanup.
+        lockForAsyncSubmission(userId, optimizationTaskId);
         OptimizationTask task = getOwnedTask(userId, optimizationTaskId);
         Long targetVersionId = task.getTargetResumeVersionId();
         Long jobTargetId = task.getJobTargetId();
 
-        // ExportArtifact 的数据库级联不会删除对象存储文件，必须先走正式清理 seam。
+        // ExportArtifact 的数据库级联不会删除对象存储文件；先将对象清理完成并保留
+        // DELETE_PENDING 元数据到本事务成功级联，失败回滚时仍可重试。
         exportArtifactCleanupService.deleteArtifactsForOptimizationTask(userId, task.getId());
 
         int taskRows = optimizationTaskMapper.delete(new LambdaQueryWrapper<OptimizationTask>()
@@ -281,6 +284,16 @@ public class OptimizationTaskServiceImpl implements OptimizationTaskService {
 
     @Override
     @Transactional
+    public void lockForAsyncSubmission(Long userId, Long optimizationTaskId) {
+        OptimizationTask task = getOwnedTask(userId, optimizationTaskId);
+        ResumeVersion sourceVersion = getOwnedVersion(userId, task.getSourceResumeVersionId());
+        // Lock order is Resume -> OptimizationTask, matching Resume deletion's lifecycle path.
+        lockOwnedResumeForUpdate(userId, sourceVersion.getResumeId());
+        getOwnedTaskForUpdate(userId, optimizationTaskId);
+    }
+
+    @Override
+    @Transactional
     public void attachAsyncTask(Long userId, Long optimizationTaskId, Long asyncTaskId) {
         OptimizationTask task = getOwnedTask(userId, optimizationTaskId);
         if (STATUS_SUCCESS.equals(task.getStatus())) {
@@ -294,19 +307,9 @@ public class OptimizationTaskServiceImpl implements OptimizationTaskService {
             throw new BusinessException(400, "后台任务 ID 不能为空");
         }
         LocalDateTime now = LocalDateTime.now();
-        int rows = optimizationTaskMapper.update(null, new UpdateWrapper<OptimizationTask>()
-                .eq("id", optimizationTaskId)
-                .eq("user_id", userId)
-                .ne("status", STATUS_SUCCESS)
-                .and(wrapper -> wrapper.isNull("async_task_id")
-                        .or()
-                        .in("status", STATUS_FAILED, "CANCELLED"))
-                .set("async_task_id", asyncTaskId)
-                .set("status", STATUS_PENDING)
-                .set("error_code", null)
-                .set("error_message", null)
-                .set("finished_at", null)
-                .set("updated_at", now));
+        // Validate the full async business binding atomically with attachment, not just owner/ID.
+        int rows = optimizationTaskMapper.attachAsyncTaskIfActive(
+                userId, optimizationTaskId, asyncTaskId, now);
         if (rows != 1) {
             OptimizationTask current = getOwnedTask(userId, optimizationTaskId);
             if (STATUS_SUCCESS.equals(current.getStatus())) {
@@ -361,18 +364,36 @@ public class OptimizationTaskServiceImpl implements OptimizationTaskService {
     @Override
     @Transactional
     public void markRunning(Long userId, Long optimizationTaskId) {
-        getOwnedTask(userId, optimizationTaskId);
+        markRunningInternal(userId, optimizationTaskId, null, false);
+    }
+
+    @Override
+    @Transactional
+    public void markRunning(Long userId, Long optimizationTaskId, Long asyncTaskId) {
+        markRunningInternal(userId, optimizationTaskId, asyncTaskId, true);
+    }
+
+    private void markRunningInternal(
+            Long userId, Long optimizationTaskId, Long asyncTaskId, boolean fenced) {
+        OptimizationTask task = getOwnedTask(userId, optimizationTaskId);
+        if (fenced && !isCurrentExecution(task, asyncTaskId)) {
+            throw staleExecution();
+        }
         LocalDateTime now = LocalDateTime.now();
-        int rows = optimizationTaskMapper.update(null, new UpdateWrapper<OptimizationTask>()
-                .eq("id", optimizationTaskId)
-                .eq("user_id", userId)
-                .eq("status", STATUS_PENDING)
-                .isNotNull("async_task_id")
-                .set("status", STATUS_RUNNING)
-                .set("started_at", now)
-                .set("updated_at", now));
+        int rows = fenced
+                ? optimizationTaskMapper.markRunningIfCurrent(
+                        userId, optimizationTaskId, asyncTaskId, now)
+                : optimizationTaskMapper.update(null, new UpdateWrapper<OptimizationTask>()
+                        .eq("id", optimizationTaskId)
+                        .eq("user_id", userId)
+                        .eq("status", STATUS_PENDING)
+                        .isNotNull("async_task_id")
+                        .set("status", STATUS_RUNNING)
+                        .set("started_at", now)
+                        .set("updated_at", now));
         if (rows != 1) {
-            throw new BusinessException(409, "优化任务当前状态不允许开始分析");
+            throw fenced ? staleExecution()
+                    : new BusinessException(409, "优化任务当前状态不允许开始分析");
         }
     }
 
@@ -383,7 +404,31 @@ public class OptimizationTaskServiceImpl implements OptimizationTaskService {
             Long optimizationTaskId,
             JobDescriptionVO parsedJob,
             EvidenceAnalysis evidenceAnalysis) {
+        markSuccessInternal(userId, optimizationTaskId, null, parsedJob, evidenceAnalysis, false);
+    }
+
+    @Override
+    @Transactional
+    public void markSuccess(
+            Long userId,
+            Long optimizationTaskId,
+            Long asyncTaskId,
+            JobDescriptionVO parsedJob,
+            EvidenceAnalysis evidenceAnalysis) {
+        markSuccessInternal(userId, optimizationTaskId, asyncTaskId, parsedJob, evidenceAnalysis, true);
+    }
+
+    private void markSuccessInternal(
+            Long userId,
+            Long optimizationTaskId,
+            Long asyncTaskId,
+            JobDescriptionVO parsedJob,
+            EvidenceAnalysis evidenceAnalysis,
+            boolean fenced) {
         OptimizationTask task = getOwnedTask(userId, optimizationTaskId);
+        if (fenced && !isCurrentExecution(task, asyncTaskId)) {
+            throw staleExecution();
+        }
         if (evidenceAnalysis == null || evidenceAnalysis.getId() == null) {
             throw new BusinessException(400, "岗位证据分析未成功，不能完成优化任务");
         }
@@ -397,18 +442,22 @@ public class OptimizationTaskServiceImpl implements OptimizationTaskService {
 
         LocalDateTime now = LocalDateTime.now();
         String promptSnapshot = serializePromptSnapshot(parsedJob, evidenceAnalysis);
-        int rows = optimizationTaskMapper.update(null, new UpdateWrapper<OptimizationTask>()
-                .eq("id", optimizationTaskId)
-                .eq("user_id", userId)
-                .eq("status", STATUS_RUNNING)
-                .set("status", STATUS_SUCCESS)
-                .set("prompt_snapshot", promptSnapshot)
-                .set("error_code", null)
-                .set("error_message", null)
-                .set("finished_at", now)
-                .set("updated_at", now));
+        int rows = fenced
+                ? optimizationTaskMapper.markSuccessIfCurrent(
+                        userId, optimizationTaskId, asyncTaskId, promptSnapshot, now)
+                : optimizationTaskMapper.update(null, new UpdateWrapper<OptimizationTask>()
+                        .eq("id", optimizationTaskId)
+                        .eq("user_id", userId)
+                        .eq("status", STATUS_RUNNING)
+                        .set("status", STATUS_SUCCESS)
+                        .set("prompt_snapshot", promptSnapshot)
+                        .set("error_code", null)
+                        .set("error_message", null)
+                        .set("finished_at", now)
+                        .set("updated_at", now));
         if (rows != 1) {
-            throw new BusinessException(409, "优化任务当前状态不允许完成分析");
+            throw fenced ? staleExecution()
+                    : new BusinessException(409, "优化任务当前状态不允许完成分析");
         }
 
         if (parsedJob != null && parsedJob.getTitle() != null && !parsedJob.getTitle().isBlank()) {
@@ -419,18 +468,52 @@ public class OptimizationTaskServiceImpl implements OptimizationTaskService {
     @Override
     @Transactional
     public void markFailed(Long userId, Long optimizationTaskId, String errorCode, String errorMessage) {
-        getOwnedTask(userId, optimizationTaskId);
+        markFailedInternal(userId, optimizationTaskId, null, errorCode, errorMessage, false);
+    }
+
+    @Override
+    @Transactional
+    public void markFailed(
+            Long userId,
+            Long optimizationTaskId,
+            Long asyncTaskId,
+            String errorCode,
+            String errorMessage) {
+        markFailedInternal(userId, optimizationTaskId, asyncTaskId, errorCode, errorMessage, true);
+    }
+
+    private void markFailedInternal(
+            Long userId,
+            Long optimizationTaskId,
+            Long asyncTaskId,
+            String errorCode,
+            String errorMessage,
+            boolean fenced) {
+        OptimizationTask task = getOwnedTask(userId, optimizationTaskId);
+        if (fenced && !isCurrentExecution(task, asyncTaskId)) {
+            // A retry may already have attached a new execution, or deletion may have canceled
+            // this one. Either way, an old worker must not replace the current task state.
+            return;
+        }
         LocalDateTime now = LocalDateTime.now();
-        int rows = optimizationTaskMapper.update(null, new UpdateWrapper<OptimizationTask>()
-                .eq("id", optimizationTaskId)
-                .eq("user_id", userId)
-                .ne("status", STATUS_SUCCESS)
-                .set("status", STATUS_FAILED)
-                .set("error_code", truncate(errorCode, 100))
-                .set("error_message", truncate(LogSanitizer.sanitize(errorMessage), ERROR_MESSAGE_MAX_LENGTH))
-                .set("finished_at", now)
-                .set("updated_at", now));
-        if (rows == 0) {
+        int rows = fenced
+                ? optimizationTaskMapper.markFailedIfCurrent(
+                        userId,
+                        optimizationTaskId,
+                        asyncTaskId,
+                        truncate(errorCode, 100),
+                        truncate(LogSanitizer.sanitize(errorMessage), ERROR_MESSAGE_MAX_LENGTH),
+                        now)
+                : optimizationTaskMapper.update(null, new UpdateWrapper<OptimizationTask>()
+                        .eq("id", optimizationTaskId)
+                        .eq("user_id", userId)
+                        .ne("status", STATUS_SUCCESS)
+                        .set("status", STATUS_FAILED)
+                        .set("error_code", truncate(errorCode, 100))
+                        .set("error_message", truncate(LogSanitizer.sanitize(errorMessage), ERROR_MESSAGE_MAX_LENGTH))
+                        .set("finished_at", now)
+                        .set("updated_at", now));
+        if (!fenced && rows == 0) {
             OptimizationTask current = getOwnedTask(userId, optimizationTaskId);
             if (!STATUS_SUCCESS.equals(current.getStatus())) {
                 throw new BusinessException(409, "优化任务当前状态不允许标记失败");
@@ -461,7 +544,10 @@ public class OptimizationTaskServiceImpl implements OptimizationTaskService {
             Long resumeId,
             JobDescription legacyJob,
             AiSelectionSnapshot selection) {
-        Resume resume = getOwnedResume(userId, resumeId);
+        Resume resume = lockOwnedResumeForUpdate(userId, resumeId);
+        // Fixed creation order: Resume -> JobDescription. JD deletion takes the same JD row
+        // before discovering/locking tasks, so it cannot miss a task created from a stale JD.
+        jobDescriptionService.lockForOptimizationTaskCreation(userId, legacyJob.getId());
         ResumeVersion sourceVersion = requireConfirmedParseResult(userId, resume.getId());
         if (legacyJob.getRawText() == null || legacyJob.getRawText().isBlank()) {
             throw new BusinessException(400, "目标岗位 JD 原文不能为空");
@@ -622,17 +708,44 @@ public class OptimizationTaskServiceImpl implements OptimizationTaskService {
     }
 
     private Resume getOwnedResume(Long userId, Long resumeId) {
+        return findOwnedResume(userId, resumeId, false);
+    }
+
+    private Resume lockOwnedResumeForUpdate(Long userId, Long resumeId) {
+        return findOwnedResume(userId, resumeId, true);
+    }
+
+    private Resume findOwnedResume(Long userId, Long resumeId, boolean forUpdate) {
         validateUserId(userId);
         if (resumeId == null || resumeId <= 0) {
             throw new BusinessException(400, "简历 ID 必须大于 0");
         }
-        Resume resume = resumeMapper.selectOne(new LambdaQueryWrapper<Resume>()
+        LambdaQueryWrapper<Resume> query = new LambdaQueryWrapper<Resume>()
                 .eq(Resume::getId, resumeId)
-                .eq(Resume::getUserId, userId));
+                .eq(Resume::getUserId, userId);
+        if (forUpdate) {
+            query.last("FOR UPDATE");
+        }
+        Resume resume = resumeMapper.selectOne(query);
         if (resume == null) {
             throw new BusinessException(404, "简历不存在");
         }
         return resume;
+    }
+
+    private OptimizationTask getOwnedTaskForUpdate(Long userId, Long optimizationTaskId) {
+        validateUserId(userId);
+        if (optimizationTaskId == null || optimizationTaskId <= 0) {
+            throw new BusinessException(400, "优化任务 ID 必须大于 0");
+        }
+        OptimizationTask task = optimizationTaskMapper.selectOne(new LambdaQueryWrapper<OptimizationTask>()
+                .eq(OptimizationTask::getId, optimizationTaskId)
+                .eq(OptimizationTask::getUserId, userId)
+                .last("FOR UPDATE"));
+        if (task == null) {
+            throw new BusinessException(404, "优化任务不存在");
+        }
+        return task;
     }
 
     private JobDescription getOwnedJobDescription(Long userId, Long jobDescriptionId) {
@@ -819,6 +932,14 @@ public class OptimizationTaskServiceImpl implements OptimizationTaskService {
                 task.getModelSnapshot(),
                 task.getAiConfigSnapshot(),
                 null);
+    }
+
+    private boolean isCurrentExecution(OptimizationTask task, Long asyncTaskId) {
+        return task != null && asyncTaskId != null && asyncTaskId.equals(task.getAsyncTaskId());
+    }
+
+    private BusinessException staleExecution() {
+        return new BusinessException(409, "优化任务执行已失效");
     }
 
     private boolean isBlank(String value) {

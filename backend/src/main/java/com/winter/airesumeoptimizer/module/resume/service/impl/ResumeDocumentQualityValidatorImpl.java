@@ -1,6 +1,7 @@
 package com.winter.airesumeoptimizer.module.resume.service.impl;
 
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeQualityIssueDTO;
+import com.winter.airesumeoptimizer.module.resume.dto.ResumeSourceRefDTO;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeUnresolvedItemDTO;
 import com.winter.airesumeoptimizer.module.resume.enums.ResumeQualityStatus;
 import com.winter.airesumeoptimizer.module.resume.service.ResumeDocumentQualityValidator;
@@ -14,6 +15,7 @@ import com.winter.airesumeoptimizer.module.workspace.enums.ResumeDocumentSection
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -49,6 +51,8 @@ public class ResumeDocumentQualityValidatorImpl implements ResumeDocumentQuality
     static final String CODE_EMPTY_BULLET = "EMPTY_BULLET";
     static final String CODE_EMPTY_SKILL_ITEM = "EMPTY_SKILL_ITEM";
     static final String CODE_ENTRY_FIELD_MISMATCH = "ENTRY_FIELD_MISMATCH";
+    static final String CODE_INVALID_SOURCE_REFERENCE = "INVALID_SOURCE_REFERENCE";
+    static final String CODE_NO_MAIN_DUPLICATION = "NO_MAIN_DUPLICATION";
 
     private static final Pattern DATE_LIKE = Pattern.compile("^\\s*(?:19|20)\\d{2}\\s*[年.\\-/]");
     private static final Pattern SENTENCE_ENDING = Pattern.compile("[。！？!?；;，,、]");
@@ -82,6 +86,7 @@ public class ResumeDocumentQualityValidatorImpl implements ResumeDocumentQuality
 
         checkBasics(document, issues);
         checkSections(sections, issues);
+        checkProvenance(document, issues);
 
         boolean hasBlocker = issues.stream()
                 .anyMatch(issue -> ResumeQualityIssueDTO.SEVERITY_BLOCKER.equals(issue.getSeverity()));
@@ -89,6 +94,357 @@ public class ResumeDocumentQualityValidatorImpl implements ResumeDocumentQuality
                 ? ResumeQualityStatus.QUALITY_NEEDS_REVIEW
                 : ResumeQualityStatus.QUALITY_READY;
         return new ValidationResult(status, List.copyOf(issues));
+    }
+
+    /**
+     * Validate the provenance shape carried by a canonical document. The validator does not have
+     * the original block table, so the document-level source manifest is the trust boundary:
+     * every child reference must point into that manifest and retain a non-empty text payload.
+     * A source-free historical/editor document remains valid because it has no provenance to
+     * authenticate.
+     */
+    private void checkProvenance(ResumeDocumentDTO document, List<ResumeQualityIssueDTO> issues) {
+        Set<String> sourceIds = new HashSet<>();
+        addSourceIds(sourceIds, document.getSourceOccurrenceIds());
+        addSourceIds(sourceIds, document.getSourceRef());
+        Map<String, String> occurrenceTexts = document.getSourceOccurrenceTexts();
+        Map<String, String> occurrencePrimaryIds = document.getSourceOccurrencePrimaryIds();
+        boolean provenancePresent = document.getSourceRef() != null
+                || !sourceIds.isEmpty()
+                || occurrenceTexts != null && !occurrenceTexts.isEmpty()
+                || occurrencePrimaryIds != null && !occurrencePrimaryIds.isEmpty();
+        boolean invalid = false;
+        // The root source reference plus its per-occurrence text map is the authenticated
+        // manifest. A child-only ID list, or an ID map that is not exactly the root set, cannot
+        // prove which physical occurrence supplied a child fact.
+        invalid |= provenancePresent && document.getSourceRef() == null;
+        invalid |= provenancePresent && !validOccurrenceManifest(
+                document, occurrenceTexts, occurrencePrimaryIds);
+        invalid |= invalidReference(document.getSourceRef(), sourceIds, null, true,
+                occurrenceTexts, occurrencePrimaryIds);
+        invalid |= invalidOccurrenceIds(document.getSourceOccurrenceIds(), sourceIds);
+        invalid |= inconsistentOccurrenceIds(document.getSourceRef(), document.getSourceOccurrenceIds());
+        if (document.getBasics() != null) {
+            invalid |= invalidReference(document.getBasics().getSourceRef(), sourceIds,
+                    document.getSourceRef(), false, occurrenceTexts, occurrencePrimaryIds);
+            invalid |= invalidOccurrenceIds(document.getBasics().getSourceOccurrenceIds(), sourceIds);
+            invalid |= inconsistentOccurrenceIds(document.getBasics().getSourceRef(),
+                    document.getBasics().getSourceOccurrenceIds());
+            if (document.getBasics().getFieldSourceRefs() != null) {
+                for (ResumeSourceRefDTO reference : document.getBasics().getFieldSourceRefs().values()) {
+                    invalid |= invalidReference(reference, sourceIds, document.getSourceRef(), false,
+                            occurrenceTexts, occurrencePrimaryIds);
+                }
+            }
+            for (ResumeDocumentContactDTO contact : safeList(document.getBasics().getContacts())) {
+                if (contact == null) {
+                    continue;
+                }
+                invalid |= invalidReference(contact.getSourceRef(), sourceIds, document.getSourceRef(), false,
+                        occurrenceTexts, occurrencePrimaryIds);
+                invalid |= invalidOccurrenceIds(contact.getSourceOccurrenceIds(), sourceIds);
+                invalid |= inconsistentOccurrenceIds(contact.getSourceRef(), contact.getSourceOccurrenceIds());
+            }
+        }
+        Map<String, String> owners = new HashMap<>();
+        List<ResumeDocumentSectionDTO> sections = document.getSections() == null
+                ? List.of() : document.getSections();
+        for (int sectionIndex = 0; sectionIndex < sections.size(); sectionIndex++) {
+            ResumeDocumentSectionDTO section = sections.get(sectionIndex);
+            if (section == null) {
+                continue;
+            }
+            invalid |= invalidReference(section.getSourceRef(), sourceIds, document.getSourceRef(), false,
+                    occurrenceTexts, occurrencePrimaryIds);
+            invalid |= invalidOccurrenceIds(section.getSourceOccurrenceIds(), sourceIds);
+            invalid |= inconsistentOccurrenceIds(section.getSourceRef(), section.getSourceOccurrenceIds());
+            List<ResumeDocumentEntryDTO> entries = section.getEntries() == null
+                    ? List.of() : section.getEntries();
+            for (int entryIndex = 0; entryIndex < entries.size(); entryIndex++) {
+                ResumeDocumentEntryDTO entry = entries.get(entryIndex);
+                if (entry == null) {
+                    continue;
+                }
+                String owner = "section-" + sectionIndex + "-entry-" + entryIndex;
+                Set<String> entryIds = new HashSet<>();
+                invalid |= invalidReference(entry.getSourceRef(), sourceIds, document.getSourceRef(), false,
+                        occurrenceTexts, occurrencePrimaryIds);
+                invalid |= invalidOccurrenceIds(entry.getSourceOccurrenceIds(), sourceIds);
+                invalid |= inconsistentOccurrenceIds(entry.getSourceRef(), entry.getSourceOccurrenceIds());
+                entryIds.addAll(usableIds(entry.getSourceOccurrenceIds()));
+                entryIds.addAll(referenceIds(entry.getSourceRef()));
+                if (entry.getFieldSourceRefs() != null) {
+                    for (ResumeSourceRefDTO reference : entry.getFieldSourceRefs().values()) {
+                        invalid |= invalidReference(reference, sourceIds, document.getSourceRef(), false,
+                                occurrenceTexts, occurrencePrimaryIds);
+                        entryIds.addAll(referenceIds(reference));
+                    }
+                }
+                invalid |= checkReferenceList(entry.getSkillItemSourceRefs(), sourceIds, entryIds, document,
+                        occurrenceTexts, occurrencePrimaryIds);
+                invalid |= checkReferenceList(entry.getSkillDescriptionSourceRefs(), sourceIds, entryIds, document,
+                        occurrenceTexts, occurrencePrimaryIds);
+                invalid |= checkReferenceList(entry.getTechStackSourceRefs(), sourceIds, entryIds, document,
+                        occurrenceTexts, occurrencePrimaryIds);
+                for (ResumeDocumentBulletDTO bullet : safeList(entry.getBullets())) {
+                    if (bullet == null) {
+                        continue;
+                    }
+                    invalid |= invalidReference(bullet.getSourceRef(), sourceIds, document.getSourceRef(), false,
+                            occurrenceTexts, occurrencePrimaryIds);
+                    invalid |= invalidOccurrenceIds(bullet.getSourceOccurrenceIds(), sourceIds);
+                    invalid |= inconsistentOccurrenceIds(bullet.getSourceRef(), bullet.getSourceOccurrenceIds());
+                    entryIds.addAll(referenceIds(bullet.getSourceRef()));
+                    entryIds.addAll(usableIds(bullet.getSourceOccurrenceIds()));
+                }
+                for (String id : entryIds) {
+                    String previousOwner = owners.putIfAbsent(id, owner);
+                    if (previousOwner != null && !previousOwner.equals(owner)) {
+                        addIssueOnce(issues, CODE_NO_MAIN_DUPLICATION,
+                                "同一来源 occurrence 被多个主条目复用");
+                    }
+                }
+            }
+        }
+        if (invalid) {
+            addIssueOnce(issues, CODE_INVALID_SOURCE_REFERENCE,
+                    "文档包含无法验证的来源引用");
+        }
+    }
+
+    private boolean hasChildProvenance(ResumeDocumentDTO document) {
+        if (document.getBasics() != null) {
+            if (document.getBasics().getSourceRef() != null
+                    || !usableIds(document.getBasics().getSourceOccurrenceIds()).isEmpty()) {
+                return true;
+            }
+            if (document.getBasics().getFieldSourceRefs() != null
+                    && document.getBasics().getFieldSourceRefs().values().stream()
+                    .anyMatch(java.util.Objects::nonNull)) {
+                return true;
+            }
+            if (safeList(document.getBasics().getContacts()).stream().anyMatch(contact -> contact != null
+                    && (contact.getSourceRef() != null
+                    || !usableIds(contact.getSourceOccurrenceIds()).isEmpty()))) {
+                return true;
+            }
+        }
+        for (ResumeDocumentSectionDTO section : document.getSections() == null
+                ? List.<ResumeDocumentSectionDTO>of() : document.getSections()) {
+            if (section == null) {
+                continue;
+            }
+            if (section.getSourceRef() != null
+                    || !usableIds(section.getSourceOccurrenceIds()).isEmpty()) {
+                return true;
+            }
+            for (ResumeDocumentEntryDTO entry : safeList(section.getEntries())) {
+                if (entry == null) {
+                    continue;
+                }
+                if (entry.getSourceRef() != null
+                        || !usableIds(entry.getSourceOccurrenceIds()).isEmpty()
+                        || entry.getFieldSourceRefs() != null
+                        && entry.getFieldSourceRefs().values().stream()
+                        .anyMatch(java.util.Objects::nonNull)
+                        || safeList(entry.getBullets()).stream().anyMatch(bullet -> bullet != null
+                        && (bullet.getSourceRef() != null
+                        || !usableIds(bullet.getSourceOccurrenceIds()).isEmpty()))) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private boolean checkReferenceList(
+            List<ResumeSourceRefDTO> references,
+            Set<String> sourceIds,
+            Set<String> entryIds,
+            ResumeDocumentDTO document,
+            Map<String, String> occurrenceTexts,
+            Map<String, String> occurrencePrimaryIds) {
+        boolean invalid = false;
+        for (ResumeSourceRefDTO reference : safeList(references)) {
+            invalid |= invalidReference(reference, sourceIds, document.getSourceRef(), false,
+                    occurrenceTexts, occurrencePrimaryIds);
+            entryIds.addAll(referenceIds(reference));
+        }
+        return invalid;
+    }
+
+    private boolean validOccurrenceManifest(
+            ResumeDocumentDTO document,
+            Map<String, String> occurrenceTexts,
+            Map<String, String> occurrencePrimaryIds) {
+        if (document == null || document.getSourceRef() == null
+                || occurrenceTexts == null || occurrenceTexts.isEmpty()
+                || occurrencePrimaryIds == null || occurrencePrimaryIds.isEmpty()) {
+            return false;
+        }
+        Set<String> rootReferenceIds = usableIds(document.getSourceRef().getSourceOccurrenceIds());
+        Set<String> rootDocumentIds = usableIds(document.getSourceOccurrenceIds());
+        Set<String> manifestIds = usableIds(new ArrayList<>(occurrenceTexts.keySet()));
+        Set<String> primaryIds = usableIds(new ArrayList<>(occurrencePrimaryIds.keySet()));
+        if (rootReferenceIds.isEmpty()
+                || rootReferenceIds.size() != document.getSourceRef().getSourceOccurrenceIds().size()
+                || rootDocumentIds.size() != (document.getSourceOccurrenceIds() == null
+                ? 0 : document.getSourceOccurrenceIds().size())
+                || manifestIds.size() != occurrenceTexts.size()
+                || primaryIds.size() != occurrencePrimaryIds.size()
+                || !rootReferenceIds.equals(rootDocumentIds)
+                || !rootReferenceIds.equals(manifestIds)
+                || !rootReferenceIds.equals(primaryIds)) {
+            return false;
+        }
+        return occurrenceTexts.entrySet().stream()
+                .allMatch(entry -> isUsableOccurrenceId(entry.getKey())
+                        && entry.getValue() != null && !entry.getValue().isBlank())
+                && occurrencePrimaryIds.entrySet().stream()
+                .allMatch(entry -> isUsableOccurrenceId(entry.getKey())
+                        && isUsableOccurrenceId(entry.getValue())
+                        && occurrenceTexts.containsKey(entry.getKey()));
+    }
+
+    private boolean invalidReference(
+            ResumeSourceRefDTO reference,
+            Set<String> sourceIds,
+            ResumeSourceRefDTO corpusReference,
+            boolean corpus,
+            Map<String, String> occurrenceTexts,
+            Map<String, String> occurrencePrimaryIds) {
+        if (reference == null) {
+            return false;
+        }
+        List<String> ids = reference.getSourceOccurrenceIds();
+        if (ids == null || ids.isEmpty()) {
+            // A non-null sourceRef without occurrence identity cannot be authenticated. Legacy
+            // source-free documents are represented by a null sourceRef, not by a text-only one.
+            return true;
+        }
+        if (reference.getText() == null || reference.getText().isBlank()
+                || ids.stream().anyMatch(id -> !isUsableOccurrenceId(id))
+                || new HashSet<>(ids).size() != ids.size()
+                || ids.stream().anyMatch(id -> !sourceIds.contains(id.strip()))) {
+            return true;
+        }
+        if (reference.getStartLine() != null && reference.getStartLine() < 1
+                || reference.getEndLine() != null && reference.getEndLine() < 1
+                || reference.getStartLine() != null && reference.getEndLine() != null
+                && reference.getStartLine() > reference.getEndLine()) {
+            return true;
+        }
+        if (!corpus && corpusReference != null && corpusReference.getText() != null
+                && !containsNormalized(corpusReference.getText(), reference.getText())) {
+            return true;
+        }
+        if (occurrenceTexts != null && !occurrenceTexts.isEmpty()
+                && !manifestSupportsReference(reference, occurrenceTexts, occurrencePrimaryIds)) {
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Authenticate the association between a reference's IDs and its text using the root
+     * occurrence manifest. Equal IDs with equal text are aliases of one source row; distinct
+     * source rows must all be represented by a multi-row reference, otherwise an unrelated ID
+     * could be attached to an otherwise valid claim.
+     */
+    private boolean manifestSupportsReference(
+            ResumeSourceRefDTO reference,
+            Map<String, String> occurrenceTexts,
+            Map<String, String> occurrencePrimaryIds) {
+        List<String> ids = reference == null ? List.of() : reference.getSourceOccurrenceIds();
+        if (ids == null || ids.isEmpty()) {
+            return false;
+        }
+        Map<String, String> textByPrimary = new LinkedHashMap<>();
+        for (String id : ids) {
+            String normalizedId = id == null ? null : id.strip();
+            String text = occurrenceTexts.get(normalizedId);
+            String primaryId = occurrencePrimaryIds == null ? null : occurrencePrimaryIds.get(normalizedId);
+            if (text == null || text.isBlank() || primaryId == null || primaryId.isBlank()) {
+                return false;
+            }
+            // Aliases of one logical occurrence collapse to one source row; separately
+            // namespaced duplicate rows retain separate groups even when their text is equal.
+            textByPrimary.putIfAbsent(primaryId.strip(), text);
+        }
+        String referenceText = normalize(reference.getText());
+        if (referenceText.isBlank() || textByPrimary.isEmpty()) {
+            return false;
+        }
+        if (textByPrimary.size() == 1) {
+            return containsNormalized(textByPrimary.values().iterator().next(), reference.getText());
+        }
+        // For a true multi-row span the reference is emitted from the exact selected rows. Require
+        // that normalized concatenation rather than mere containment; otherwise a short row such
+        // as "Java" could be smuggled in as an extra ID beside "JavaScript".
+        String selectedText = textByPrimary.values().stream()
+                .map(ResumeDocumentQualityValidatorImpl::normalize)
+                .collect(java.util.stream.Collectors.joining());
+        return referenceText.equals(selectedText);
+    }
+
+    private boolean invalidOccurrenceIds(List<String> ids, Set<String> sourceIds) {
+        if (ids == null) {
+            return false;
+        }
+        return ids.stream().anyMatch(id -> !isUsableOccurrenceId(id)
+                || !sourceIds.contains(id.strip()))
+                || new HashSet<>(ids).size() != ids.size();
+    }
+
+    private boolean inconsistentOccurrenceIds(ResumeSourceRefDTO reference, List<String> ids) {
+        if (reference == null || reference.getSourceOccurrenceIds() == null
+                || reference.getSourceOccurrenceIds().isEmpty()) {
+            return false;
+        }
+        Set<String> referenceIds = usableIds(reference.getSourceOccurrenceIds());
+        Set<String> objectIds = usableIds(ids);
+        return referenceIds.isEmpty() || !objectIds.containsAll(referenceIds);
+    }
+
+    private void addSourceIds(Set<String> target, List<String> ids) {
+        target.addAll(usableIds(ids));
+    }
+
+    private void addSourceIds(Set<String> target, ResumeSourceRefDTO reference) {
+        if (reference != null) {
+            addSourceIds(target, reference.getSourceOccurrenceIds());
+        }
+    }
+
+    private Set<String> referenceIds(ResumeSourceRefDTO reference) {
+        return reference == null ? Set.of() : usableIds(reference.getSourceOccurrenceIds());
+    }
+
+    private Set<String> usableIds(List<String> ids) {
+        Set<String> result = new HashSet<>();
+        for (String id : ids == null ? List.<String>of() : ids) {
+            if (isUsableOccurrenceId(id)) {
+                result.add(id.strip());
+            }
+        }
+        return result;
+    }
+
+    private boolean containsNormalized(String haystack, String needle) {
+        return normalize(haystack).contains(normalize(needle));
+    }
+
+    private boolean isUsableOccurrenceId(String id) {
+        return id != null && !id.isBlank()
+                && !"null".equalsIgnoreCase(id.strip())
+                && !"undefined".equalsIgnoreCase(id.strip());
+    }
+
+    private void addIssueOnce(
+            List<ResumeQualityIssueDTO> issues, String code, String message) {
+        if (issues.stream().noneMatch(issue -> code.equals(issue.getCode()))) {
+            issues.add(blocker(code, message));
+        }
     }
 
     private void checkBasics(ResumeDocumentDTO document, List<ResumeQualityIssueDTO> issues) {
@@ -259,11 +615,13 @@ public class ResumeDocumentQualityValidatorImpl implements ResumeDocumentQuality
                     && entry.getSkillItems().stream().anyMatch(item -> item == null || item.isBlank());
             boolean hasNonBlankSkillItem = entry.getSkillItems() != null
                     && entry.getSkillItems().stream().anyMatch(item -> item != null && !item.isBlank());
+            boolean hasNonBlankSkillDescription = entry.getSkillDescriptions() != null
+                    && entry.getSkillDescriptions().stream().anyMatch(item -> item != null && !item.isBlank());
             if (hasBlankSkillItem) {
                 issues.add(blocker(CODE_EMPTY_SKILL_ITEM, "技能章节存在空白技能项"));
             }
             if (hasNonSkillFields(entry) || nonBlankBulletCount > 0
-                    || !hasNonBlankSkillItem) {
+                    || (!hasNonBlankSkillItem && !hasNonBlankSkillDescription)) {
                 issues.add(blocker(CODE_ENTRY_FIELD_MISMATCH, "技能章节必须使用技能组字段"));
             }
         } else if (kind == ResumeDocumentSectionKind.SUMMARY
@@ -319,7 +677,8 @@ public class ResumeDocumentQualityValidatorImpl implements ResumeDocumentQuality
 
     private boolean hasSkillFields(ResumeDocumentEntryDTO entry) {
         return !isBlank(entry.getGroup())
-                || (entry.getSkillItems() != null && !entry.getSkillItems().isEmpty());
+                || (entry.getSkillItems() != null && !entry.getSkillItems().isEmpty())
+                || (entry.getSkillDescriptions() != null && !entry.getSkillDescriptions().isEmpty());
     }
 
     private boolean hasNonSkillFields(ResumeDocumentEntryDTO entry) {
@@ -387,6 +746,10 @@ public class ResumeDocumentQualityValidatorImpl implements ResumeDocumentQuality
 
     private static boolean endsWithPunctuation(String text) {
         return SENTENCE_ENDING.matcher(text.substring(text.length() - 1)).find();
+    }
+
+    private <T> List<T> safeList(List<T> values) {
+        return values == null ? List.of() : values;
     }
 
     private static boolean isBlank(String value) {

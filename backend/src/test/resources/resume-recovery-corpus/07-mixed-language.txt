@@ -1,0 +1,11 @@
+Synthetic Candidate G
+教育经历
+Cedar University 软件工程 本科
+工作经历
+Cedar Platform 2022.05 - 至今 平台工程师
+维护服务目录与可观测性工具
+技能
+数据库：PostgreSQL、Redis
+项目经历
+Event Atlas 2023.01 - 2023.09
+Implemented a recoverable workflow for platform events.

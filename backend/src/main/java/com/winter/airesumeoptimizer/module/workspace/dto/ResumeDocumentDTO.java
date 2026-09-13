@@ -1,7 +1,9 @@
 package com.winter.airesumeoptimizer.module.workspace.dto;
 
 import io.swagger.v3.oas.annotations.media.Schema;
+import com.winter.airesumeoptimizer.module.resume.dto.ResumeSourceRefDTO;
 import java.util.List;
+import java.util.Map;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;
@@ -21,6 +23,22 @@ public class ResumeDocumentDTO {
 
     @Schema(description = "文档结构版本", example = "RESUME_DOCUMENT_V1")
     private String schemaVersion;
+
+    /** Optional immutable origin metadata for the parser-produced SOURCE projection. */
+    @Schema(description = "整份文档的来源引用，仅用于追溯，不作为编辑后的事实证明")
+    private ResumeSourceRefDTO sourceRef;
+
+    /** Occurrence identities are retained separately from display text so duplicates survive. */
+    @Schema(description = "整份文档覆盖的来源 occurrence ID")
+    private List<String> sourceOccurrenceIds;
+
+    /** Per-occurrence source text is the authenticated root-manifest association for child refs. */
+    @Schema(description = "来源 occurrence 到原始文本的只读映射")
+    private Map<String, String> sourceOccurrenceTexts;
+
+    /** Maps aliases to one logical occurrence so repeated source rows remain distinguishable. */
+    @Schema(description = "来源 occurrence 到逻辑 occurrence 的只读映射")
+    private Map<String, String> sourceOccurrencePrimaryIds;
 
     @Schema(description = "基础信息")
     private ResumeDocumentBasicsDTO basics;

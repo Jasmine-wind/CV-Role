@@ -3,6 +3,7 @@ package com.winter.airesumeoptimizer.module.resume.service.impl;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeQualityIssueDTO;
+import com.winter.airesumeoptimizer.module.resume.dto.ResumeSourceRefDTO;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeUnresolvedItemDTO;
 import com.winter.airesumeoptimizer.module.resume.enums.ResumeQualityStatus;
 import com.winter.airesumeoptimizer.module.resume.service.ResumeDocumentQualityValidator;
@@ -202,6 +203,143 @@ class ResumeDocumentQualityValidatorImplTest {
                 .build());
 
         assertThat(codesOf(document)).contains("SYSTEM_ARTIFACT_PRESENT");
+    }
+
+    @Test
+    void occurrenceManifestMustAuthenticateIdToTextAssociation() {
+        ResumeDocumentDTO document = readyDocument();
+        document.setSourceRef(ResumeSourceRefDTO.builder()
+                .text("李华\n某科技有限公司")
+                .sourceOccurrenceIds(List.of("name-occurrence", "company-occurrence"))
+                .build());
+        document.setSourceOccurrenceIds(List.of("name-occurrence", "company-occurrence"));
+        document.setSourceOccurrenceTexts(java.util.Map.of(
+                "name-occurrence", "李华",
+                "company-occurrence", "某科技有限公司"));
+        document.setSourceOccurrencePrimaryIds(java.util.Map.of(
+                "name-occurrence", "name-occurrence",
+                "company-occurrence", "company-occurrence"));
+        ResumeDocumentEntryDTO entry = document.getSections().get(0).getEntries().get(0);
+        entry.setSourceRef(ResumeSourceRefDTO.builder()
+                .text("某科技有限公司")
+                .sourceOccurrenceIds(List.of("name-occurrence"))
+                .build());
+        entry.setSourceOccurrenceIds(List.of("name-occurrence"));
+
+        assertThat(codesOf(document)).contains("INVALID_SOURCE_REFERENCE");
+    }
+
+    @Test
+    void occurrenceManifestAcceptsAliasesAndRepeatedRows() {
+        ResumeDocumentDTO document = readyDocument();
+        document.setSourceRef(ResumeSourceRefDTO.builder()
+                .text("Java\nJava")
+                .sourceOccurrenceIds(List.of("row-one", "row-one-alias", "row-two"))
+                .build());
+        document.setSourceOccurrenceIds(List.of("row-one", "row-one-alias", "row-two"));
+        document.setSourceOccurrenceTexts(java.util.Map.of(
+                "row-one", "Java",
+                "row-one-alias", "Java",
+                "row-two", "Java"));
+        document.setSourceOccurrencePrimaryIds(java.util.Map.of(
+                "row-one", "row-one",
+                "row-one-alias", "row-one",
+                "row-two", "row-two"));
+
+        assertThat(statusOf(document)).isEqualTo(ResumeQualityStatus.QUALITY_READY);
+    }
+
+    @Test
+    void unknownSourceOccurrenceReferenceShouldBlockReady() {
+        ResumeDocumentDTO document = readyDocument();
+        document.setSourceOccurrenceIds(List.of("known-occurrence"));
+        ResumeDocumentEntryDTO entry = document.getSections().get(0).getEntries().get(0);
+        entry.setSourceRef(ResumeSourceRefDTO.builder()
+                .text("某科技有限公司")
+                .sourceOccurrenceIds(List.of("unknown-occurrence"))
+                .build());
+        entry.setSourceOccurrenceIds(List.of("unknown-occurrence"));
+
+        assertThat(codesOf(document)).contains("INVALID_SOURCE_REFERENCE");
+    }
+
+    @Test
+    void sourceRefWithKnownIdButForeignTextShouldBlock() {
+        ResumeDocumentDTO document = readyDocument();
+        ResumeSourceRefDTO root = ResumeSourceRefDTO.builder()
+                .text("李华\n某科技有限公司")
+                .sourceOccurrenceIds(List.of("known-occurrence"))
+                .build();
+        document.setSourceRef(root);
+        document.setSourceOccurrenceIds(List.of("known-occurrence"));
+        document.getSections().get(0).getEntries().get(0).setSourceRef(
+                ResumeSourceRefDTO.builder()
+                        .text("未出现在来源中的公司")
+                        .sourceOccurrenceIds(List.of("known-occurrence"))
+                        .build());
+        document.getSections().get(0).getEntries().get(0)
+                .setSourceOccurrenceIds(List.of("known-occurrence"));
+
+        assertThat(codesOf(document)).contains("INVALID_SOURCE_REFERENCE");
+    }
+
+    @Test
+    void nullLikeOccurrenceIdShouldNotBecomeAuthenticatedProvenance() {
+        ResumeDocumentDTO document = readyDocument();
+        document.setSourceRef(ResumeSourceRefDTO.builder()
+                .text("李华")
+                .sourceOccurrenceIds(List.of("null"))
+                .build());
+        document.setSourceOccurrenceIds(List.of("null"));
+
+        assertThat(codesOf(document)).contains("INVALID_SOURCE_REFERENCE");
+    }
+
+    @Test
+    void sourceRefAndObjectOccurrenceIdsMustStayConsistent() {
+        ResumeDocumentDTO document = readyDocument();
+        document.setSourceRef(ResumeSourceRefDTO.builder()
+                .text("李华\n某科技有限公司")
+                .sourceOccurrenceIds(List.of("name-occurrence", "company-occurrence"))
+                .build());
+        document.setSourceOccurrenceIds(List.of("name-occurrence", "company-occurrence"));
+        document.getSections().get(0).getEntries().get(0).setSourceRef(
+                ResumeSourceRefDTO.builder()
+                        .text("某科技有限公司")
+                        .sourceOccurrenceIds(List.of("company-occurrence"))
+                        .build());
+        document.getSections().get(0).getEntries().get(0)
+                .setSourceOccurrenceIds(List.of("name-occurrence"));
+
+        assertThat(codesOf(document)).contains("INVALID_SOURCE_REFERENCE");
+    }
+
+    @Test
+    void oneSourceOccurrenceCannotOwnTwoMainEntries() {
+        ResumeDocumentDTO document = readyDocument();
+        document.setSourceOccurrenceIds(List.of("shared-occurrence"));
+        ResumeDocumentEntryDTO experience = document.getSections().get(0).getEntries().get(0);
+        ResumeSourceRefDTO shared = ResumeSourceRefDTO.builder()
+                .text("某科技有限公司")
+                .sourceOccurrenceIds(List.of("shared-occurrence"))
+                .build();
+        experience.setSourceRef(shared);
+        experience.setSourceOccurrenceIds(List.of("shared-occurrence"));
+        document.getSections().add(ResumeDocumentSectionDTO.builder()
+                .kind("PROJECT")
+                .title("项目经历")
+                .entries(new ArrayList<>(List.of(ResumeDocumentEntryDTO.builder()
+                        .organization("复用项目")
+                        .sourceRef(ResumeSourceRefDTO.builder()
+                                .text("某科技有限公司")
+                                .sourceOccurrenceIds(List.of("shared-occurrence"))
+                                .build())
+                        .sourceOccurrenceIds(List.of("shared-occurrence"))
+                        .bullets(new ArrayList<>())
+                        .build())))
+                .build());
+
+        assertThat(codesOf(document)).contains("NO_MAIN_DUPLICATION");
     }
 
     private String statusOf(ResumeDocumentDTO document) {

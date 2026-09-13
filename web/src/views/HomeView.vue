@@ -106,6 +106,8 @@ const startBlockReason = computed(() =>
     preparationTaskId: preparationTaskId.value,
     analysisRunning: analysisRunning.value,
     startingAnalysis: startingAnalysis.value,
+    uploading: uploading.value,
+    resumeListLoading: loading.value,
     aiConfigurationState: aiConfigurationState.value,
   }),
 )

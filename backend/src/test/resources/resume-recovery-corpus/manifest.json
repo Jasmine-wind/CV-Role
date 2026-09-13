@@ -1,0 +1,27 @@
+{
+  "schemaVersion": "resume-structure-recovery-v1",
+  "piiPolicy": "synthetic-only-no-real-identifiers",
+  "caseCount": 20,
+  "cases": [
+    {"id":"C01_SINGLE_COLUMN","file":"01-single-column.txt","expectedFacts":["Orchid University","Northstar Labs","Signal Board"],"minSourceCoverage":90},
+    {"id":"C02_SPLIT_ENTRY_HEADER","file":"02-split-entry-header.txt","expectedFacts":["River Lab","Platform Engineer","Event Ledger"],"minSourceCoverage":90},
+    {"id":"C03_VISUAL_COLUMN_ORDER","file":"03-visual-column-order.txt","expectedFacts":["Harbor Systems","Atlas Console","Kotlin"],"minSourceCoverage":85},
+    {"id":"C04_WRAPPED_SUMMARY","file":"04-wrapped-summary.txt","expectedFacts":["service reliability","observability"],"minSourceCoverage":85},
+    {"id":"C05_BULLET_VARIANTS","file":"05-bullet-variants.txt","expectedFacts":["Queue Monitor","reconciliation"],"minSourceCoverage":90},
+    {"id":"C06_ENGLISH_ONLY","file":"06-english-only.txt","expectedFacts":["Meadow Works","Backend Engineer","Release Notes"],"minSourceCoverage":90},
+    {"id":"C07_MIXED_LANGUAGE","file":"07-mixed-language.txt","expectedFacts":["Cedar Platform","平台工程师","PostgreSQL"],"minSourceCoverage":90},
+    {"id":"C08_PROJECT_METADATA","file":"08-project-metadata.txt","expectedFacts":["项目名称：Signal Archive","技术栈：Java、Redis","统一审计流程"],"minSourceCoverage":90},
+    {"id":"C09_AWARD_DATE_ONLY","file":"09-award-date-only.txt","expectedFacts":["2024年","创新实践奖"],"minSourceCoverage":90},
+    {"id":"C10_AWARD_RANGE","file":"10-award-range.txt","expectedFacts":["2022.09 - 2022.12","校级竞赛一等奖"],"minSourceCoverage":90},
+    {"id":"C11_AWARD_DATE_DEDUP","file":"11-award-date-dedup.txt","expectedFacts":["2023年优秀志愿者","社区服务"],"minSourceCoverage":90},
+    {"id":"C12_SKILL_DESCRIPTION","file":"12-skill-description.txt","expectedFacts":["工具：Git、Docker","构建可重复发布流程"],"minSourceCoverage":90},
+    {"id":"C13_MULTI_WORK","file":"13-multiple-work.txt","expectedFacts":["Lumen Group","Pine Studio","数据服务"],"minSourceCoverage":90},
+    {"id":"C14_MULTI_PROJECT","file":"14-multiple-project.txt","expectedFacts":["Order Mirror","Risk Window","规则拦截"],"minSourceCoverage":90},
+    {"id":"C15_GENERAL_BLOCK","file":"15-general-block.txt","expectedFacts":["可接受异步协作","远程交付"],"minSourceCoverage":85},
+    {"id":"C16_PAGE_ARTIFACT","file":"16-page-artifact.txt","expectedFacts":["Page 1 of 1","Harbor University"],"minSourceCoverage":85},
+    {"id":"C17_LABEL_VALUE","file":"17-label-value.txt","expectedFacts":["所在地：North Harbor","目标岗位：Platform Engineer"],"minSourceCoverage":90},
+    {"id":"C18_NOISY_LAYOUT","file":"18-noisy-layout.txt","expectedFacts":["Telemetry Hub","p95","Kubernetes"],"minSourceCoverage":85},
+    {"id":"C19_INTERN_CAMPUS","file":"19-intern-campus.txt","expectedFacts":["Internship","Campus Lab","最佳辩手"],"minSourceCoverage":90},
+    {"id":"C20_AMBIGUOUS_REVIEW","file":"20-ambiguous-review.txt","expectedFacts":["做过一些服务改造","若干奖励"],"minSourceCoverage":70}
+  ]
+}

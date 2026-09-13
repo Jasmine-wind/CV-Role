@@ -1,6 +1,7 @@
 package com.winter.airesumeoptimizer.module.task.service.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
@@ -10,6 +11,7 @@ import static org.mockito.Mockito.when;
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.winter.airesumeoptimizer.common.exception.BusinessException;
 import com.winter.airesumeoptimizer.module.task.entity.AsyncTask;
+import com.winter.airesumeoptimizer.module.task.enums.AsyncTaskStatus;
 import com.winter.airesumeoptimizer.module.task.enums.AsyncTaskType;
 import com.winter.airesumeoptimizer.module.task.mapper.AsyncTaskMapper;
 import java.time.LocalDateTime;
@@ -77,6 +79,57 @@ class AsyncTaskServiceImplTest {
         assertThatThrownBy(() -> service.updateProgress(100L, 101, "进度错误"))
                 .isInstanceOf(BusinessException.class)
                 .hasMessage("任务进度必须在 0 到 100 之间");
+    }
+
+    @Test
+    void cancellationShouldJoinParentTransactionOrCreateStandaloneTransaction() throws Exception {
+        var attribute = new org.springframework.transaction.annotation.AnnotationTransactionAttributeSource()
+                .getTransactionAttribute(AsyncTaskServiceImpl.class.getMethod(
+                        "cancelActiveTasks", Long.class, String.class, Long.class), AsyncTaskServiceImpl.class);
+
+        assertThat(attribute).isNotNull();
+        assertThat(attribute.getPropagationBehavior())
+                .isEqualTo(org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRED);
+        assertThat(attribute.rollbackOn(new BusinessException(500, "storage failure"))).isTrue();
+    }
+
+    @Test
+    void cancelActiveTasksShouldUseOwnerAndBusinessIdentity() {
+        when(asyncTaskMapper.update(any(), any(Wrapper.class))).thenReturn(1);
+
+        service.cancelActiveTasks(1L, "RESUME", 10L);
+
+        ArgumentCaptor<com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper<AsyncTask>> captor =
+                ArgumentCaptor.forClass(com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper.class);
+        verify(asyncTaskMapper).update(any(), captor.capture());
+        var update = captor.getValue();
+        assertThat(update.getSqlSegment()).contains("user_id =", "biz_type =", "biz_id =", "status IN");
+        assertThat(update.getSqlSet()).contains("status=", "finished_at=", "error_code=");
+        assertThat(update.getParamNameValuePairs().values())
+                .contains(1L, "RESUME", 10L, "PENDING", "RUNNING", "CANCELLED", "RESOURCE_DELETED")
+                .doesNotContain("SUCCESS", "FAILED");
+    }
+
+    @Test
+    void staleCompletionShouldNotOverwriteCancelledTask() {
+        AsyncTask task = new AsyncTask();
+        task.setId(100L);
+        task.setStatus(AsyncTaskStatus.CANCELLED.name());
+        when(asyncTaskMapper.update(any(), any(Wrapper.class))).thenReturn(0);
+        when(asyncTaskMapper.selectById(100L)).thenReturn(task);
+
+        assertThatCode(() -> service.markSuccess(100L, "RESUME_PARSE_RESULT", 10L, "完成"))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void isActiveShouldOnlyReturnOwnedPendingOrRunningTask() {
+        AsyncTask task = new AsyncTask();
+        task.setId(100L);
+        task.setStatus(AsyncTaskStatus.RUNNING.name());
+        when(asyncTaskMapper.selectOne(any(Wrapper.class))).thenReturn(task);
+
+        assertThat(service.isActive(1L, 100L)).isTrue();
     }
 
     @Test

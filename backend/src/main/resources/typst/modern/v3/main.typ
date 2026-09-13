@@ -202,9 +202,21 @@
   v(0.22em)
 }
 
+#let render-skill-descriptions(entry) = {
+  let items = entry.skill-items.join("、")
+  let prefix = if entry.group != "" { entry.group + "：" } else { "" }
+  for description in entry.skill-descriptions {
+    if description != "" and description != items and description != prefix + items {
+      text(description)
+      linebreak()
+    }
+  }
+}
+
 #let render-skill-entry(entry) = {
   let items = entry.skill-items.join("、")
   if items == "" {
+    render-skill-descriptions(entry)
     return
   }
   if entry.group != "" {
@@ -214,6 +226,7 @@
     text(size: 9.8pt, items)
   }
   linebreak()
+  render-skill-descriptions(entry)
 }
 
 #let render-generic-entry(entry) = {

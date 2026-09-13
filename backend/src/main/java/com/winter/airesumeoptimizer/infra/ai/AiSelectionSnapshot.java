@@ -27,7 +27,10 @@ public record AiSelectionSnapshot(
         baseUrl = normalize(baseUrl, "");
         model = normalize(model, "");
         configJson = normalize(configJson, "{}");
-        configFingerprint = normalize(configFingerprint, fingerprint(configJson));
+        // A caller-supplied fingerprint is metadata, not an authority. Derive the cache
+        // identity from the actual frozen configuration so two different configs can never
+        // collide because they reused or forged a fingerprint.
+        configFingerprint = fingerprint(configJson);
     }
 
     public String cacheIdentity(Long userId) {

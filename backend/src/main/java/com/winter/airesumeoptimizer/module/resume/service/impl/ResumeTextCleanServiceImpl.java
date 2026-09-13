@@ -1,8 +1,12 @@
 package com.winter.airesumeoptimizer.module.resume.service.impl;
 
+import com.winter.airesumeoptimizer.module.resume.dto.ResumeBlockDTO;
+import com.winter.airesumeoptimizer.module.resume.dto.ResumeRawSectionBlockDTO;
+import com.winter.airesumeoptimizer.module.resume.dto.ResumeSourceBlockRole;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeTextCleanResultDTO;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeTextSectionDTO;
 import com.winter.airesumeoptimizer.module.resume.dto.SourceSectionConfidence;
+import com.winter.airesumeoptimizer.module.resume.service.ResumeLayoutAwareTextCleanService;
 import com.winter.airesumeoptimizer.module.resume.service.ResumeTextCleanService;
 import java.text.Normalizer;
 import java.util.ArrayList;
@@ -15,7 +19,7 @@ import java.util.regex.Pattern;
 import org.springframework.stereotype.Service;
 
 @Service
-public class ResumeTextCleanServiceImpl implements ResumeTextCleanService {
+public class ResumeTextCleanServiceImpl implements ResumeTextCleanService, ResumeLayoutAwareTextCleanService {
 
     private static final Pattern HORIZONTAL_SPACE_PATTERN = Pattern.compile("[\\t\\x0B\\f\\r 　]+");
     private static final Pattern BULLET_PATTERN = Pattern.compile("^[\\s>*•·●▪■◆◇○◦▶►✓✔-]+");
@@ -84,6 +88,470 @@ public class ResumeTextCleanServiceImpl implements ResumeTextCleanService {
                 .build();
     }
 
+    @Override
+    public ResumeTextCleanResultDTO cleanAndSplitSections(String extractedText, List<ResumeBlockDTO> sourceBlocks) {
+        if (sourceBlocks == null || sourceBlocks.isEmpty()) {
+            return cleanAndSplitSections(extractedText);
+        }
+        boolean layoutCandidate = sourceBlocks.stream()
+                .anyMatch(block -> block != null && "pdf-layout-lite".equalsIgnoreCase(block.getSourceType()));
+        // Classify the visual rows before recovery so a section or entry header cannot be
+        // swallowed as the continuation of the preceding paragraph.
+        markStructuralRoles(sourceBlocks);
+        List<ResumeBlockDTO> logicalBlocks = layoutCandidate
+                ? recoverWrappedLines(sourceBlocks)
+                : sourceBlocks.stream().filter(block -> block != null).toList();
+        markStructuralRoles(logicalBlocks);
+        String visualText = layoutCandidate
+                ? logicalBlocks.stream()
+                        .map(ResumeBlockDTO::getText)
+                        .filter(line -> line != null && !line.isBlank())
+                        .reduce((left, right) -> left + "\n" + right)
+                        .orElse(extractedText)
+                : extractedText;
+        ResumeTextCleanResultDTO result = cleanAndSplitSections(visualText);
+        result.setSourceBlocks(logicalBlocks);
+        result.setExtractionCandidateType(layoutCandidate ? "LAYOUT_LITE" : "SOURCE_METADATA");
+        attachSourceBlocks(result.getSections(), logicalBlocks);
+        return result;
+    }
+
+    private void markStructuralRoles(List<ResumeBlockDTO> blocks) {
+        for (ResumeBlockDTO block : blocks) {
+            if (block == null || block.getText() == null || block.getText().isBlank()) {
+                continue;
+            }
+            if (matchHeading(block.getText()) != null) {
+                block.setRole(ResumeSourceBlockRole.SECTION_HEADING);
+            } else if (block.getRole() == null || block.getRole() == ResumeSourceBlockRole.UNKNOWN) {
+                block.setRole(classifySourceRole(block.getText()));
+            }
+        }
+    }
+
+    private List<ResumeBlockDTO> recoverWrappedLines(List<ResumeBlockDTO> sourceBlocks) {
+        List<ResumeBlockDTO> ordered = sourceBlocks.stream()
+                .filter(block -> block != null && block.getText() != null && !block.getText().isBlank())
+                .sorted(java.util.Comparator.comparingInt(block -> block.getOriginalIndex() == null
+                        ? block.getIndex() == null ? Integer.MAX_VALUE : block.getIndex()
+                        : block.getOriginalIndex()))
+                .toList();
+        List<ResumeBlockDTO> result = new ArrayList<>();
+        for (ResumeBlockDTO block : ordered) {
+            if (!result.isEmpty() && canMergeWrappedLine(result.get(result.size() - 1), block)) {
+                result.set(result.size() - 1, mergeWrappedLines(result.get(result.size() - 1), block));
+            } else {
+                result.add(block);
+            }
+        }
+        for (int index = 0; index < result.size(); index++) {
+            result.get(index).setDisplayOrder(index);
+        }
+        return List.copyOf(result);
+    }
+
+    private boolean canMergeWrappedLine(ResumeBlockDTO previous, ResumeBlockDTO current) {
+        if (previous == null || current == null
+                || previous.getText() == null || current.getText() == null
+                || Boolean.TRUE.equals(current.getBulletHint())
+                || Boolean.TRUE.equals(previous.getBoldHint())
+                || Boolean.TRUE.equals(current.getBoldHint())
+                || matchHeading(previous.getText()) != null
+                || matchHeading(current.getText()) != null
+                || isBoundaryRole(previous.getRole())
+                || isBoundaryRole(current.getRole())) {
+            return false;
+        }
+        if (previous.getPage() != null && current.getPage() != null && !previous.getPage().equals(current.getPage())) {
+            return false;
+        }
+        if (previous.getX() != null && current.getX() != null
+                && Math.abs(previous.getX() - current.getX()) > 6.0d) {
+            return false;
+        }
+        if (previous.getY() != null && current.getY() != null) {
+            double gap = current.getY() - previous.getY();
+            double fontSize = previous.getFontSize() == null ? 10.0d : previous.getFontSize();
+            if (gap < 0.0d || gap > Math.max(8.0d, fontSize * 1.65d)) {
+                return false;
+            }
+        }
+        String previousText = previous.getText().strip();
+        String currentText = current.getText().strip();
+        if (previousText.length() < 20 || currentText.length() < 3
+                || endsSentence(previousText)
+                || looksLikeNewStructuralRow(currentText)) {
+            return false;
+        }
+        return !looksLikeBullet(previousText) && !looksLikeLabelValue(currentText);
+    }
+
+    private ResumeBlockDTO mergeWrappedLines(ResumeBlockDTO previous, ResumeBlockDTO current) {
+        String previousText = previous.getText() == null ? "" : previous.getText().strip();
+        String currentText = current.getText() == null ? "" : current.getText().strip();
+        String separator = needsAsciiSpace(previousText, currentText) ? " " : "";
+        List<String> sourceIds = new ArrayList<>();
+        addSourceIds(sourceIds, previous);
+        addSourceIds(sourceIds, current);
+        sourceIds = sourceIds.stream()
+                .filter(this::isUsableSourceId)
+                .map(String::strip)
+                .distinct()
+                .toList();
+        List<String> occurrenceIds = new ArrayList<>();
+        addOccurrenceIds(occurrenceIds, previous);
+        addOccurrenceIds(occurrenceIds, current);
+        // Occurrence multiplicity is meaningful when an older source view reused an explicit
+        // ID for two physical rows. Keep every usable value; the later occurrence index applies
+        // deterministic collision suffixes instead of silently dropping a row here.
+        occurrenceIds = occurrenceIds.stream()
+                .filter(this::isUsableOccurrenceId)
+                .map(String::strip)
+                .toList();
+        double left = min(previous.getX(), current.getX());
+        double right = max(end(previous.getX(), previous.getWidth()), end(current.getX(), current.getWidth()));
+        double top = min(top(previous), top(current));
+        double bottom = max(bottom(previous), bottom(current));
+        Double mergedY = Double.isNaN(top) ? previous.getY() : top;
+        Double mergedHeight = Double.isNaN(top) || Double.isNaN(bottom) ? max(previous.getHeight(), current.getHeight()) : bottom - top;
+        return ResumeBlockDTO.builder()
+                .id(previous.getId() == null ? current.getId() : previous.getId())
+                .index(minIndex(previous.getIndex(), current.getIndex()))
+                .originalIndex(minIndex(previous.getOriginalIndex(), current.getOriginalIndex()))
+                .displayOrder(minIndex(previous.getDisplayOrder(), current.getDisplayOrder()))
+                .text(previousText + separator + currentText)
+                .page(previous.getPage() == null ? current.getPage() : previous.getPage())
+                .x(Double.isNaN(left) ? previous.getX() : left)
+                .y(mergedY)
+                .width(Double.isNaN(right) || Double.isNaN(left) ? max(previous.getWidth(), current.getWidth()) : right - left)
+                .height(mergedHeight)
+                .fontSize(max(previous.getFontSize(), current.getFontSize()))
+                .fontName(previous.getFontName() == null ? current.getFontName() : previous.getFontName())
+                .boldHint(Boolean.TRUE.equals(previous.getBoldHint()) || Boolean.TRUE.equals(current.getBoldHint()))
+                .indent(previous.getIndent() == null ? current.getIndent() : previous.getIndent())
+                .bulletHint(Boolean.TRUE.equals(previous.getBulletHint()) || Boolean.TRUE.equals(current.getBulletHint()))
+                .role(ResumeSourceBlockRole.PARAGRAPH)
+                .sourceBlockIds(sourceIds)
+                .sourceOccurrenceIds(occurrenceIds)
+                .sourceType(previous.getSourceType() == null ? current.getSourceType() : previous.getSourceType())
+                .build();
+    }
+
+    private void attachSourceBlocks(List<ResumeTextSectionDTO> sections, List<ResumeBlockDTO> sourceBlocks) {
+        int cursor = 0;
+        int unmatched = 0;
+        for (ResumeTextSectionDTO section : sections == null ? List.<ResumeTextSectionDTO>of() : sections) {
+            List<ResumeBlockDTO> attached = new ArrayList<>();
+            for (String line : section.getLines() == null ? List.<String>of() : section.getLines()) {
+                SourceBlockMatch match = findMatchingSourceBlock(sourceBlocks, cursor, line);
+                if (match.start() < 0) {
+                    // The line remains visible and is later surfaced by the canonical unresolved
+                    // sidecar. Give it a unique local identity; never reuse the search cursor.
+                    int syntheticIndex = sourceBlocks.size() + unmatched++;
+                    attached.add(ResumeBlockDTO.builder()
+                            .id("unmatched-" + syntheticIndex)
+                            .index(syntheticIndex)
+                            .originalIndex(syntheticIndex)
+                            .displayOrder(syntheticIndex)
+                            .text(line)
+                            .role(classifySourceRole(line))
+                            .sourceType("cleanedText-unmatched")
+                            .build());
+                    continue;
+                }
+                ResumeBlockDTO block = sourceBlocks.get(match.start());
+                for (int sourceIndex = match.start() + 1; sourceIndex <= match.end(); sourceIndex++) {
+                    block = mergeWrappedLines(block, sourceBlocks.get(sourceIndex));
+                }
+                if (match.consumesSource()) {
+                    cursor = match.end() + 1;
+                }
+                attached.add(toRawBlock(block, line));
+            }
+            section.setBlocks(attached);
+        }
+    }
+
+    private SourceBlockMatch findMatchingSourceBlock(List<ResumeBlockDTO> blocks, int start, String line) {
+        String target = normalizeSourceText(line);
+        if (target.isBlank()) {
+            return new SourceBlockMatch(-1, -1, false);
+        }
+        for (int index = Math.max(0, start); index < blocks.size(); index++) {
+            ResumeBlockDTO block = blocks.get(index);
+            if (block == null) {
+                continue;
+            }
+            String candidate = normalizeSourceText(block.getText());
+            if (candidate.equals(target)) {
+                return new SourceBlockMatch(index, index, true);
+            }
+            // Header expansion (for example a contact value extracted from a mixed visual row)
+            // may produce a strict projection of one source occurrence. Reuse that occurrence
+            // without consuming the next source row, and never accept arbitrary token scattering.
+            if (isConservativeProjection(candidate, target)) {
+                return new SourceBlockMatch(index, index, false);
+            }
+            // The cleaner joins only an explicitly hyphenated line. Carry all source IDs into
+            // the resulting logical block instead of attaching only the first prefix row.
+            if (block.getText() != null && block.getText().strip().endsWith("-")) {
+                StringBuilder joined = new StringBuilder(candidate);
+                for (int end = index + 1; end < blocks.size(); end++) {
+                    ResumeBlockDTO continuation = blocks.get(end);
+                    if (continuation == null) {
+                        break;
+                    }
+                    joined.append(normalizeSourceText(continuation.getText()));
+                    if (joined.toString().equals(target)) {
+                        return new SourceBlockMatch(index, end, true);
+                    }
+                    if (joined.length() >= target.length()) {
+                        break;
+                    }
+                }
+            }
+        }
+        return new SourceBlockMatch(-1, -1, false);
+    }
+
+    private boolean isConservativeProjection(String candidate, String target) {
+        if (candidate == null || target == null || target.length() < 2 || candidate.length() <= target.length()) {
+            return false;
+        }
+        if (isGithubProjection(target)) {
+            // The cleaner adds a human-readable "GitHub:" label while PDF extraction often
+            // contains only the URL in the mixed contact row. The URL is still a strict
+            // projection of that one source occurrence; do not manufacture an unmatched block.
+            String githubUrl = target.replaceFirst("(?i)^github:", "");
+            return candidate.contains(githubUrl);
+        }
+        if (!candidate.contains(target)) {
+            return false;
+        }
+        return hasAtLeastTwoHanCharacters(target)
+                || isHeaderSkillProjection(target)
+                || EMAIL_PATTERN.matcher(target).matches()
+                || PHONE_PATTERN.matcher(target).matches();
+    }
+
+    private boolean hasAtLeastTwoHanCharacters(String value) {
+        return value.codePoints()
+                .filter(codePoint -> codePoint >= '\u4e00' && codePoint <= '\u9fa5')
+                .count() >= 2;
+    }
+
+    private boolean isHeaderSkillProjection(String target) {
+        return HEADER_SIDE_SKILLS.stream()
+                .map(this::normalizeSourceText)
+                .anyMatch(target::equalsIgnoreCase);
+    }
+
+    private boolean isGithubProjection(String target) {
+        String github = target.replaceFirst("(?i)^github:", "");
+        return !github.equals(target) && GITHUB_PATTERN.matcher(github).matches();
+    }
+
+    private record HeaderContact(int start, int end, String value) {
+    }
+
+    private record SourceBlockMatch(int start, int end, boolean consumesSource) {
+    }
+
+    private ResumeBlockDTO toRawBlock(ResumeBlockDTO block, String text) {
+        return ResumeBlockDTO.builder()
+                .id(block.getId())
+                .index(block.getIndex())
+                .text(text)
+                .originalIndex(block.getOriginalIndex())
+                .displayOrder(block.getDisplayOrder())
+                .page(block.getPage())
+                .x(block.getX())
+                .y(block.getY())
+                .width(block.getWidth())
+                .height(block.getHeight())
+                .fontSize(block.getFontSize())
+                .fontName(block.getFontName())
+                .boldHint(block.getBoldHint())
+                .indent(block.getIndent())
+                .bulletHint(block.getBulletHint())
+                .role(block.getRole() == null ? classifySourceRole(text) : block.getRole())
+                .sourceBlockIds(sanitizeSourceIds(block.getSourceBlockIds()))
+                .sourceOccurrenceIds(sanitizeOccurrenceIds(block.getSourceOccurrenceIds()))
+                .sourceType(block.getSourceType())
+                .iconType(block.getIconType())
+                .build();
+    }
+
+    private ResumeSourceBlockRole classifySourceRole(String line) {
+        if (line == null || line.isBlank()) {
+            return ResumeSourceBlockRole.UNKNOWN;
+        }
+        if (looksLikeBullet(line)) {
+            return ResumeSourceBlockRole.BULLET;
+        }
+        if (looksLikeLabelValue(line)) {
+            return ResumeSourceBlockRole.LABEL_VALUE;
+        }
+        if (line.matches(".*(?:19|20)\\d{2}.*(?:至今|Present|[-~—至到]).*")) {
+            return ResumeSourceBlockRole.ENTRY_HEADER;
+        }
+        return line.length() <= 80 ? ResumeSourceBlockRole.PARAGRAPH : ResumeSourceBlockRole.PARAGRAPH;
+    }
+
+    private boolean isBoundaryRole(ResumeSourceBlockRole role) {
+        return role == ResumeSourceBlockRole.SECTION_HEADING
+                || role == ResumeSourceBlockRole.ENTRY_HEADER
+                || role == ResumeSourceBlockRole.BULLET;
+    }
+
+    private boolean looksLikeNewStructuralRow(String line) {
+        return line.length() <= 80 && (line.matches(".*(?:19|20)\\d{2}.*")
+                || line.matches("^(?:教育|工作|项目|实习|技能|证书|奖项|经历|Experience|Projects|Education|Skills)\\b.*$"));
+    }
+
+    private boolean endsSentence(String text) {
+        return text.matches(".*[。！？!?；;:：]$");
+    }
+
+    private boolean looksLikeBullet(String text) {
+        return text != null && text.matches("^[\\s>*•·●▪■◆◇○◦▶►✓✔-]+.*$");
+    }
+
+    private boolean looksLikeLabelValue(String text) {
+        return text != null && text.matches("^[^:：]{1,20}[:：]\\s*.+$");
+    }
+
+    private boolean needsAsciiSpace(String left, String right) {
+        if (left == null || right == null || left.isBlank() || right.isBlank()) {
+            return false;
+        }
+        int leftCodePoint = left.codePointBefore(left.length());
+        int rightCodePoint = right.codePointAt(0);
+        if (!isAsciiWordCharacter(leftCodePoint) || !isAsciiWordCharacter(rightCodePoint)) {
+            return false;
+        }
+        // A line break inside a CJK run never represents an omitted ASCII word separator.
+        // ASCII-only boundaries are handled below so mixed-language text is not silently split.
+        return !looksLikeWordContinuation(left, right);
+    }
+
+    private boolean isAsciiWordCharacter(int codePoint) {
+        return (codePoint >= 'A' && codePoint <= 'Z')
+                || (codePoint >= 'a' && codePoint <= 'z')
+                || (codePoint >= '0' && codePoint <= '9');
+    }
+
+    private boolean looksLikeWordContinuation(String left, String right) {
+        String normalizedLeft = left.toLowerCase(Locale.ROOT);
+        String normalizedRight = right.toLowerCase(Locale.ROOT);
+        if (!normalizedLeft.endsWith("-") && normalizedRight.startsWith("-")) {
+            return false;
+        }
+        // PDF line extraction does not retain the logical space at a wrapped boundary. These
+        // common English morphemes are a conservative guard against turning implementation into
+        // "implemen tation" while ordinary word-to-word boundaries still receive one space.
+        if (List.of("implemen", "develo", "applica", "communica", "configura", "documenta",
+                        "organiza", "administra", "optimiza", "authentica", "presenta")
+                .stream().anyMatch(normalizedLeft::endsWith)) {
+            return true;
+        }
+        return List.of("tation", "tion", "sion", "ment", "ing", "ed", "er", "ly", "ity", "ive", "ous",
+                        "ance", "ence", "able", "ible", "ize", "ise", "ness", "ship")
+                .stream().anyMatch(normalizedRight::startsWith);
+    }
+
+    private double min(Double left, Double right) {
+        if (left == null) {
+            return right == null ? Double.NaN : right;
+        }
+        return right == null ? left : Math.min(left, right);
+    }
+
+    private double max(Double left, Double right) {
+        if (left == null) {
+            return right == null ? Double.NaN : right;
+        }
+        return right == null ? left : Math.max(left, right);
+    }
+
+    private void addSourceIds(List<String> target, ResumeBlockDTO block) {
+        if (block == null) {
+            return;
+        }
+        if (block.getSourceBlockIds() != null && !block.getSourceBlockIds().isEmpty()) {
+            target.addAll(block.getSourceBlockIds());
+        } else if (isUsableSourceId(block.getId())) {
+            target.add(block.getId().strip());
+        }
+    }
+
+    private void addOccurrenceIds(List<String> target, ResumeBlockDTO block) {
+        if (block == null || block.getSourceOccurrenceIds() == null
+                || block.getSourceOccurrenceIds().isEmpty()) {
+            return;
+        }
+        target.addAll(block.getSourceOccurrenceIds().stream()
+                .filter(this::isUsableOccurrenceId)
+                .map(String::strip)
+                .toList());
+    }
+
+    private List<String> sanitizeSourceIds(List<String> values) {
+        if (values == null) {
+            return null;
+        }
+        List<String> sanitized = values.stream()
+                .filter(this::isUsableSourceId)
+                .map(String::strip)
+                .toList();
+        return sanitized.isEmpty() ? List.of() : sanitized;
+    }
+
+    private List<String> sanitizeOccurrenceIds(List<String> values) {
+        if (values == null) {
+            return null;
+        }
+        List<String> sanitized = values.stream()
+                .filter(this::isUsableOccurrenceId)
+                .map(String::strip)
+                .toList();
+        return sanitized.isEmpty() ? List.of() : sanitized;
+    }
+
+    private boolean isUsableSourceId(String value) {
+        return value != null && !value.isBlank()
+                && !"null".equalsIgnoreCase(value.strip())
+                && !"undefined".equalsIgnoreCase(value.strip());
+    }
+
+    private boolean isUsableOccurrenceId(String value) {
+        return isUsableSourceId(value);
+    }
+
+    private int minIndex(Integer left, Integer right) {
+        if (left == null) return right == null ? Integer.MAX_VALUE : right;
+        if (right == null) return left;
+        return Math.min(left, right);
+    }
+
+    private double top(ResumeBlockDTO block) {
+        if (block == null || block.getY() == null) return Double.NaN;
+        return block.getHeight() == null ? block.getY() : block.getY() - block.getHeight();
+    }
+
+    private double bottom(ResumeBlockDTO block) {
+        if (block == null || block.getY() == null) return Double.NaN;
+        return block.getHeight() == null ? block.getY() : block.getY();
+    }
+
+    private double end(Double left, Double width) {
+        return left == null || width == null ? Double.NaN : left + width;
+    }
+
+    private String normalizeSourceText(String value) {
+        return value == null ? "" : value.replaceAll("[\\s>*•·●▪■◆◇○◦▶►✓✔-]+", "").toLowerCase(Locale.ROOT);
+    }
+
     private CleanLines cleanLines(String text) {
         if (text == null || text.isBlank()) {
             return new CleanLines(List.of(), 0, 0);
@@ -119,10 +587,12 @@ public class ResumeTextCleanServiceImpl implements ResumeTextCleanService {
             List<String> expandedLines = expandTopMixedHeaderLine(line, rawIconType, beforeFirstHeading);
             for (String expandedLine : expandedLines) {
                 String dedupeKey = normalizeForDedupe(expandedLine);
-                // 只折叠相邻重复抽取；全局去重会吞掉跨章节合法重复事实。
+                // Count adjacent duplicates as an extraction-quality signal, but retain the
+                // occurrence. Text equality is not identity: the same source line may be a
+                // deliberate repeated fact and downstream provenance must be able to distinguish
+                // both occurrences.
                 if (dedupeKey.equals(previousNormalizedLine)) {
                     duplicateCount++;
-                    continue;
                 }
                 previousNormalizedLine = dedupeKey;
                 appendLine(result, expandedLine);
@@ -158,32 +628,9 @@ public class ResumeTextCleanServiceImpl implements ResumeTextCleanService {
 
         List<String> result = new ArrayList<>();
         String remaining = line.strip();
-        if ("EMAIL_ICON".equals(iconType) || EMAIL_PATTERN.matcher(remaining).find()) {
-            Matcher matcher = EMAIL_PATTERN.matcher(remaining);
-            if (matcher.find()) {
-                result.add(matcher.group());
-                remaining = removeSpan(remaining, matcher.start(), matcher.end());
-            }
-            addHeaderTrailingContent(result, remaining);
-            return result.isEmpty() ? List.of(line) : result;
-        }
-        if ("PHONE_ICON".equals(iconType) || PHONE_PATTERN.matcher(remaining).find()) {
-            Matcher matcher = PHONE_PATTERN.matcher(remaining);
-            if (matcher.find()) {
-                result.add(matcher.group().strip());
-                remaining = removeSpan(remaining, matcher.start(), matcher.end());
-            }
-            addHeaderTrailingContent(result, remaining);
-            return result.isEmpty() ? List.of(line) : result;
-        }
-        if ("GITHUB_ICON".equals(iconType) || GITHUB_PATTERN.matcher(remaining).find()) {
-            Matcher matcher = GITHUB_PATTERN.matcher(remaining);
-            if (matcher.find()) {
-                result.add("GitHub: " + matcher.group().strip());
-                remaining = removeSpan(remaining, matcher.start(), matcher.end());
-            }
-            addHeaderTrailingContent(result, remaining);
-            return result.isEmpty() ? List.of(line) : result;
+        List<HeaderContact> contacts = findHeaderContacts(remaining);
+        if (!contacts.isEmpty()) {
+            return projectHeaderContacts(remaining, contacts);
         }
         if ("LINKEDIN_ICON".equals(iconType)) {
             addHeaderTrailingContent(result, remaining.replaceFirst("^-+$", "").strip());
@@ -202,17 +649,76 @@ public class ResumeTextCleanServiceImpl implements ResumeTextCleanService {
         return List.of(line);
     }
 
+    private List<HeaderContact> findHeaderContacts(String line) {
+        List<HeaderContact> contacts = new ArrayList<>();
+        collectHeaderContacts(contacts, line, EMAIL_PATTERN, "");
+        collectHeaderContacts(contacts, line, PHONE_PATTERN, "");
+        collectHeaderContacts(contacts, line, GITHUB_PATTERN, "GitHub: ");
+        contacts.sort(java.util.Comparator.comparingInt(HeaderContact::start)
+                .thenComparingInt(HeaderContact::end));
+
+        List<HeaderContact> nonOverlapping = new ArrayList<>();
+        int lastEnd = -1;
+        for (HeaderContact contact : contacts) {
+            if (contact.start() >= lastEnd) {
+                nonOverlapping.add(contact);
+                lastEnd = contact.end();
+            }
+        }
+        return List.copyOf(nonOverlapping);
+    }
+
+    private void collectHeaderContacts(
+            List<HeaderContact> contacts, String line, Pattern pattern, String prefix) {
+        Matcher matcher = pattern.matcher(line);
+        while (matcher.find()) {
+            contacts.add(new HeaderContact(matcher.start(), matcher.end(), prefix + matcher.group().strip()));
+        }
+    }
+
+    private List<String> projectHeaderContacts(String line, List<HeaderContact> contacts) {
+        List<String> result = new ArrayList<>();
+        int cursor = 0;
+        for (HeaderContact contact : contacts) {
+            addHeaderTrailingContent(result, line.substring(cursor, contact.start()));
+            result.add(contact.value());
+            cursor = contact.end();
+        }
+        addHeaderTrailingContent(result, line.substring(cursor));
+        return result.isEmpty() ? List.of(line) : List.copyOf(result);
+    }
+
     /**
      * 头部混合行抽出联系方式后的剩余内容不允许静默丢弃：
      * 命中头部技能词表则归一，否则整段保留，交由后续解析/确认链裁决归属。
      */
     private void addHeaderTrailingContent(List<String> result, String value) {
-        String cleaned = value == null ? "" : value.replaceFirst("^[-:：|·\\s]+", "").strip();
+        String cleaned = value == null ? "" : value
+                .replaceFirst("^[-:：|·/，,、\\s]+", "")
+                .replaceFirst("[-:：|·/，,、\\s]+$", "")
+                .strip();
         if (cleaned.isEmpty()) {
             return;
         }
         String skill = trailingHeaderSkill(cleaned);
-        result.add(skill != null ? skill : cleaned);
+        if (skill == null) {
+            result.add(cleaned);
+            return;
+        }
+        String prefix = cleaned.substring(0, cleaned.length() - skill.length()).strip();
+        if (prefix.isBlank()) {
+            result.add(skill);
+        } else if (isHeaderNameCandidate(prefix)) {
+            result.add(prefix);
+            result.add(skill);
+        } else {
+            result.add(cleaned);
+        }
+    }
+
+    private boolean isHeaderNameCandidate(String value) {
+        return value != null && (value.matches("[\\u4e00-\\u9fa5]{2,6}")
+                || value.matches("[A-Za-z]+(?:[ .·-][A-Za-z]+){1,3}"));
     }
 
     private String trailingHeaderSkill(String line) {
@@ -406,7 +912,7 @@ public class ResumeTextCleanServiceImpl implements ResumeTextCleanService {
                 .heading(heading)
                 .sourceSectionConfidence(SourceSectionConfidence.HIGH.name())
                 .iconType(source.getIconType())
-                .lines(lines.stream().map(String::strip).filter(line -> !line.isBlank()).distinct().toList())
+                .lines(lines.stream().map(String::strip).filter(line -> !line.isBlank()).toList())
                 .blocks(source.getBlocks())
                 .build();
     }
@@ -414,7 +920,7 @@ public class ResumeTextCleanServiceImpl implements ResumeTextCleanService {
     private List<String> mergeLines(List<String> first, List<String> second) {
         List<String> result = new ArrayList<>(first);
         result.addAll(second);
-        return result.stream().filter(line -> !line.isBlank()).distinct().toList();
+        return result.stream().filter(line -> !line.isBlank()).toList();
     }
 
     private List<ResumeTextSectionDTO> mergeAdjacentSameTypeSections(List<ResumeTextSectionDTO> sections) {

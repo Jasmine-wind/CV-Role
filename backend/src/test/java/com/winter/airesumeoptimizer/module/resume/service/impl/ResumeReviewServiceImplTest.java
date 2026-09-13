@@ -5,7 +5,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import org.mockito.ArgumentCaptor;
 
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
@@ -137,9 +139,14 @@ class ResumeReviewServiceImplTest {
         source.setUserId(USER_ID);
         source.setResumeId(RESUME_ID);
         source.setVersionType("SOURCE");
-        source.setContentStatus("READY");
+        source.setContentStatus("PENDING");
         source.setStructuredContent(objectMapper.writeValueAsString(document));
         when(resumeVersionMapper.selectOne(any())).thenReturn(source);
+        when(resumeVersionMapper.insert(any(ResumeVersion.class))).thenAnswer(invocation -> {
+            ResumeVersion replacement = invocation.getArgument(0);
+            replacement.setId(41L);
+            return 1;
+        });
         when(resumeVersionMapper.update(isNull(), any())).thenReturn(1);
         when(resumeParseResultMapper.update(isNull(), any())).thenReturn(1);
     }
@@ -151,6 +158,26 @@ class ResumeReviewServiceImplTest {
         assertThat(review.getQualityStatus()).isEqualTo("NEEDS_REVIEW");
         assertThat(review.getCanonicalDocument()).contains("某科技有限公司");
         assertThat(review.getUnresolvedItems()).contains("u-1");
+    }
+
+    @Test
+    void acceptContactCandidatePublishesNewSourceWithoutMutatingPreviousSnapshot() throws Exception {
+        String previousContent = source.getStructuredContent();
+
+        ResumeReviewVO review = service.resolve(USER_ID, RESUME_ID, ResumeReviewResolveRequestDTO.builder()
+                .itemId("u-1")
+                .action("ACCEPT")
+                .build());
+
+        ArgumentCaptor<ResumeVersion> inserted = ArgumentCaptor.forClass(ResumeVersion.class);
+        verify(resumeVersionMapper).insert(inserted.capture());
+        assertThat(inserted.getValue().getId()).isEqualTo(41L);
+        assertThat(inserted.getValue().getContentStatus()).isEqualTo("READY");
+        assertThat(inserted.getValue().getStructuredContent()).contains("lihua@example.com");
+        assertThat(source.getId()).isEqualTo(40L);
+        assertThat(source.getStructuredContent()).isEqualTo(previousContent);
+        assertThat(source.getContentStatus()).isEqualTo("PENDING");
+        assertThat(review.getCanonicalDocument()).isEqualTo(inserted.getValue().getStructuredContent());
     }
 
     @Test

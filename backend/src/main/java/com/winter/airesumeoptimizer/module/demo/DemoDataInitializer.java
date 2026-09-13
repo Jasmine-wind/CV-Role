@@ -192,6 +192,7 @@ public class DemoDataInitializer implements ApplicationRunner {
 
         ResumeParseResult parseResult = new ResumeParseResult();
         parseResult.setResumeId(resume.getId());
+        parseResult.setUserId(user.getId());
         parseResult.setParseStatus("SUCCESS");
         parseResult.setExtractedText("Demo Candidate Java");
         parseResult.setCleanedText("Demo Candidate Java");

@@ -36,6 +36,34 @@ class ResumePointerValidatorImplTest {
     }
 
     @Test
+    void sourceRefShouldJoinContiguousLinesAcrossPages() {
+        List<ResumeIndexedLineDTO> lines = List.of(
+                line(1, "entry header", false, 1, "internship"),
+                line(2, "first body line", false, 1, "internship"),
+                line(3, "second body line", false, 2, "internship"));
+
+        ResumeSourceRefDTO sourceRef = validator.sourceRef(1, 3, lines);
+
+        assertThat(sourceRef).isNotNull();
+        assertThat(sourceRef.getText()).isEqualTo("entry header\nfirst body line\nsecond body line");
+        assertThat(sourceRef.getPage()).isNull();
+    }
+
+    @Test
+    void sourceRefShouldRejectSparseOrCrossSectionRanges() {
+        List<ResumeIndexedLineDTO> sparse = List.of(
+                line(1, "first", false, 1, "internship"),
+                line(3, "third", false, 1, "internship"));
+        List<ResumeIndexedLineDTO> crossSection = List.of(
+                line(1, "first", false, 1, "internship"),
+                line(2, "other section", false, 1, "education"),
+                line(3, "third", false, 2, "internship"));
+
+        assertThat(validator.sourceRef(1, 3, sparse)).isNull();
+        assertThat(validator.sourceRef(1, 3, crossSection)).isNull();
+    }
+
+    @Test
     void validEntityLineShouldRejectFieldLabelsAndNoise() {
         List<ResumeIndexedLineDTO> lines = lines();
 
@@ -54,11 +82,16 @@ class ResumePointerValidatorImplTest {
     }
 
     private ResumeIndexedLineDTO line(int id, String text, boolean noise) {
+        return line(id, text, noise, 1, null);
+    }
+
+    private ResumeIndexedLineDTO line(int id, String text, boolean noise, int page, String rawSectionId) {
         return ResumeIndexedLineDTO.builder()
                 .lineId(id)
-                .page(1)
+                .page(page)
                 .text(text)
                 .normalizedText(text)
+                .rawSectionId(rawSectionId)
                 .isNoise(noise)
                 .build();
     }

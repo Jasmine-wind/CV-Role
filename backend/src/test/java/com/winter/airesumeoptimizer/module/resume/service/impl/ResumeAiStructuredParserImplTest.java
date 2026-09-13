@@ -1,7 +1,7 @@
 package com.winter.airesumeoptimizer.module.resume.service.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -11,8 +11,7 @@ import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.winter.airesumeoptimizer.infra.ai.AiClientService;
-import com.winter.airesumeoptimizer.infra.ai.AiFailureCode;
-import com.winter.airesumeoptimizer.infra.ai.AiGatewayException;
+import com.winter.airesumeoptimizer.infra.ai.AiGateway;
 import com.winter.airesumeoptimizer.infra.ai.AiSelectionSnapshot;
 import com.winter.airesumeoptimizer.infra.ai.AiSource;
 import com.winter.airesumeoptimizer.module.resume.config.ResumeParseProperties;
@@ -33,100 +32,171 @@ class ResumeAiStructuredParserImplTest {
             new ObjectMapper());
 
     @Test
-    void parseShouldReturnDisabledWhenConfigOff() {
-        properties.setAiStructuredParseEnabled(false);
+    void normalParseNeverDispatchesAiEvenWhenEnabled() {
+        properties.setAiStructuredParseEnabled(true);
+        when(aiClientService.complete(anyString())).thenReturn("{\"name\":\"编造姓名\"}");
         ResumeStructuredContentDTO rule = ResumeStructuredContentDTO.builder()
-                .name("张三")
-                .skills(List.of("Java"))
+                .name("规则姓名")
                 .build();
 
-        var result = service.parse(blocks(), rule, List.of());
+        ResumeStructuredContentDTO returned = rule;
+        var result = service.parse(blocks(), returned, List.of(), true);
 
-        assertThat(result.shouldApply()).isFalse();
+        assertThat(result.getAiStatus()).isEqualTo("SKIPPED");
+        assertThat(result.getSkippedReason()).isEqualTo("AI_STRUCTURED_PARSE_RULES_CANONICAL");
+        assertThat(result.getAiInvoked()).isFalse();
+        assertThat(result.getApplied()).isFalse();
         assertThat(result.getStructuredContent()).isSameAs(rule);
         verify(aiClientService, never()).complete(anyString());
     }
 
     @Test
-    void parseShouldApplyValidAiJsonAfterValidation() {
-        properties.setAiStructuredParseEnabled(true);
-        when(aiClientService.complete(anyString())).thenReturn("""
-                {
-                  "name": "张三",
-                  "phone": "13800000000",
-                  "email": "zhangsan@example.com",
-                  "skills": ["Java", "Spring Boot", "项目简介"],
-                  "projects": ["AI 简历优化系统"],
-                  "qualityWarnings": ["AI_LOW_CONFIDENCE"]
-                }
-                """);
+    void selectionAwareNormalParseStillNeverDispatchesAi() {
+        AiSelectionSnapshot selection = byokSelection();
 
-        var result = service.parse(blocks(), ResumeStructuredContentDTO.builder().build(), List.of("SECTION_TOO_FEW"));
+        var result = service.parse(
+                1L, 99L, blocks(), ResumeStructuredContentDTO.builder().build(), List.of(), true, selection);
 
-        assertThat(result.shouldApply()).isTrue();
-        assertThat(result.getStructuredContent().getName()).isEqualTo("张三");
-        assertThat(result.getStructuredContent().getSkills()).containsExactly("Java", "Spring Boot");
-        assertThat(result.getStructuredContent().getQualityWarnings()).contains("SECTION_TOO_FEW", "AI_SKILLS_NON_TECH_TEXT_FILTERED");
+        assertThat(result.getAiStatus()).isEqualTo("SKIPPED");
+        assertThat(result.getSkippedReason()).isEqualTo("AI_STRUCTURED_PARSE_RULES_CANONICAL");
+        assertThat(result.getAiInvoked()).isFalse();
+        verify(aiClientService, never()).complete(anyString());
     }
 
     @Test
-    void parseShouldExtractJsonObjectFromAiText() {
+    void referenceRepairRequiresAResolvedByokSelection() {
         properties.setAiStructuredParseEnabled(true);
-        when(aiClientService.complete(anyString())).thenReturn("""
-                下面是结构化结果：
-                ```JSON
-                {
-                  "name": "张三",
-                  "phone": "13800000000",
-                  "email": "zhangsan@example.com",
-                  "skills": ["Java", "Spring Boot"]
-                }
-                ```
-                请核对。
-                """);
 
-        var result = service.parse(blocks(), ResumeStructuredContentDTO.builder().build(), List.of());
+        var result = service.parseReferenceOnly(
+                1L, blocks(), ResumeStructuredContentDTO.builder().build(), List.of(), true, null);
 
-        assertThat(result.shouldApply()).isTrue();
-        assertThat(result.getStructuredContent().getName()).isEqualTo("张三");
-        assertThat(result.getStructuredContent().getSkills()).containsExactly("Java", "Spring Boot");
+        assertThat(result.getAiStatus()).isEqualTo("SKIPPED");
+        assertThat(result.getSkippedReason()).isEqualTo("AI_CONFIGURATION_REQUIRED");
+        assertThat(result.getReferenceOnly()).isTrue();
+        assertThat(result.getAiInvoked()).isFalse();
+        verify(aiClientService, never()).complete(anyString());
     }
 
     @Test
-    void parseShouldNormalizeWrappedObjectArrays() {
-        properties.setAiStructuredParseEnabled(true);
-        when(aiClientService.complete(anyString())).thenReturn("""
-                {
-                  "structuredResult": {
-                    "basicInfo": {
-                      "name": "张三",
-                      "age": 23,
-                      "phone": "13800000000",
-                      "email": "zhangsan@example.com"
-                    },
-                    "skills": ["Java", {"name": "Spring Boot"}],
-                    "projects": [
-                      {"name": "AI 简历优化系统", "description": "负责解析模块"}
-                    ],
-                    "qualityWarnings": ["AI_LOW_CONFIDENCE"]
-                  }
-                }
-                """);
+    void referenceRepairRejectsSystemSelectionWithoutDispatch() {
+        AiSelectionSnapshot systemSelection = new AiSelectionSnapshot(
+                AiSource.SYSTEM_DEFAULT,
+                AiSelectionSnapshot.OPENAI_COMPATIBLE,
+                null,
+                null,
+                "https://provider.example.com:443/v1",
+                "system-model",
+                "{}",
+                null);
 
-        var result = service.parse(blocks(), ResumeStructuredContentDTO.builder().build(), List.of());
+        var result = service.parseReferenceOnly(
+                1L, blocks(), ResumeStructuredContentDTO.builder().build(), List.of(), true, systemSelection);
 
-        assertThat(result.shouldApply()).isTrue();
-        assertThat(result.getStructuredContent().getName()).isEqualTo("张三");
-        assertThat(result.getStructuredContent().getBasicInfo()).containsEntry("age", "23");
-        assertThat(result.getStructuredContent().getSkills()).containsExactly("Java", "Spring Boot");
-        assertThat(result.getStructuredContent().getProjects()).containsExactly("{\"name\":\"AI 简历优化系统\",\"description\":\"负责解析模块\"}");
+        assertThat(result.getAiStatus()).isEqualTo("SKIPPED");
+        assertThat(result.getSkippedReason()).isEqualTo("AI_BYOK_REQUIRED");
+        assertThat(result.getAiInvoked()).isFalse();
+        verify(aiClientService, never()).complete(anyString());
     }
 
     @Test
-    void byokMalformedOutputShouldFailClosedInsteadOfRuleFallback() {
+    void referenceRepairIsSourceBackedAndCachedAtMostOnce() {
+        properties.setAiStructuredParseEnabled(true);
+        when(aiClientService.complete(anyString())).thenReturn("""
+                {"name":"张三","skills":["Java","Kotlin"],"projects":["Invented Project"]}
+                """);
+        AiSelectionSnapshot selection = byokSelection();
+        ResumeStructuredContentDTO rule = ResumeStructuredContentDTO.builder()
+                .parseMode("BALANCED")
+                .build();
+
+        var first = service.parseReferenceOnly(1L, 77L, blocks(), rule, List.of(), true, selection);
+        var second = service.parseReferenceOnly(1L, 77L, blocks(), rule, List.of(), true, selection);
+
+        assertThat(first.getReferenceOnly()).isTrue();
+        assertThat(first.getApplied()).isFalse();
+        assertThat(first.getAiStatus()).isEqualTo("REFERENCE_ONLY");
+        assertThat(first.getReferenceConfidence()).isLessThan(0.5d);
+        assertThat(first.getStructuredContent()).isSameAs(rule);
+        assertThat(first.getReferenceContent()).isNotNull();
+        assertThat(first.getReferenceContent().getName()).isEqualTo("张三");
+        assertThat(first.getReferenceContent().getSkills()).containsExactly("Java");
+        assertThat(first.getReferenceContent().getProjects()).isEmpty();
+        assertThat(second.getCacheHit()).isTrue();
+        assertThat(second.getAiInvoked()).isFalse();
+        verify(aiClientService, times(1)).complete(anyString());
+    }
+
+    @Test
+    void referenceRepairFallsBackWithoutApplyingMalformedProviderOutput() {
         properties.setAiStructuredParseEnabled(true);
         when(aiClientService.complete(anyString())).thenReturn("not-json");
-        AiSelectionSnapshot selection = new AiSelectionSnapshot(
+
+        var result = service.parseReferenceOnly(
+                1L,
+                blocks(),
+                ResumeStructuredContentDTO.builder().rawText("张三").build(),
+                List.of(),
+                true,
+                byokSelection());
+
+        assertThat(result.getReferenceOnly()).isTrue();
+        assertThat(result.getApplied()).isFalse();
+        assertThat(result.getAiStatus()).isEqualTo("FALLBACK");
+        assertThat(result.getFallbackOccurred()).isTrue();
+        assertThat(result.getAiInvoked()).isTrue();
+        assertThat(result.getStructuredContent().getRawText()).isEqualTo("张三");
+    }
+
+    @Test
+    void referenceRepairDoesNotAcceptResolvedSystemSelection() {
+        AiGateway gateway = mock(AiGateway.class);
+        when(gateway.selectionForNewTask(1L)).thenReturn(new AiSelectionSnapshot(
+                AiSource.SYSTEM_DEFAULT,
+                AiSelectionSnapshot.OPENAI_COMPATIBLE,
+                null,
+                null,
+                "https://provider.example.com:443/v1",
+                "system-model",
+                "{}",
+                null));
+        ResumeAiStructuredParserImpl gatewayService = new ResumeAiStructuredParserImpl(
+                properties,
+                new ResumeStructuredParsePromptServiceImpl(new ObjectMapper()),
+                new ResumeParseValidatorImpl(),
+                gateway,
+                new ObjectMapper());
+
+        var result = gatewayService.parseReferenceOnly(
+                1L, blocks(), ResumeStructuredContentDTO.builder().build(), List.of(), true, null);
+
+        assertThat(result.getAiStatus()).isEqualTo("SKIPPED");
+        assertThat(result.getSkippedReason()).isEqualTo("AI_BYOK_REQUIRED");
+        verify(gateway, never()).complete(any(), any());
+    }
+
+    @Test
+    void normalParseKeepsStableRuleSectionsWithoutCallingProvider() {
+        properties.setAiStructuredParseEnabled(true);
+        ResumeStructuredContentDTO rule = ResumeStructuredContentDTO.builder()
+                .skills(List.of("Java"))
+                .build();
+        List<ResumeBlockDTO> lockedBlocks = List.of(ResumeBlockDTO.builder()
+                .index(0)
+                .text("Java")
+                .sourceSection("SKILLS")
+                .sectionLocked(true)
+                .build());
+
+        var result = service.parse(lockedBlocks, rule, List.of());
+
+        assertThat(result.getAiStatus()).isEqualTo("SKIPPED");
+        assertThat(result.getSkippedReason()).isEqualTo("STABLE_FIELDS_RULE_CONFIRMED");
+        assertThat(result.getStructuredContent()).isSameAs(rule);
+        verify(aiClientService, never()).complete(anyString());
+    }
+
+    private AiSelectionSnapshot byokSelection() {
+        return new AiSelectionSnapshot(
                 AiSource.USER_BYOK,
                 AiSelectionSnapshot.OPENAI_COMPATIBLE,
                 77L,
@@ -135,121 +205,17 @@ class ResumeAiStructuredParserImplTest {
                 "byok-model",
                 "{}",
                 null);
-
-        assertThatThrownBy(() -> service.parse(
-                1L,
-                blocks(),
-                ResumeStructuredContentDTO.builder().name("张三").build(),
-                List.of(),
-                true,
-                selection))
-                .isInstanceOf(AiGatewayException.class)
-                .extracting(exception -> ((AiGatewayException) exception).getFailureCode())
-                .isEqualTo(AiFailureCode.SCHEMA_INVALID);
-    }
-
-    @Test
-    void parseShouldFallbackWhenAiReturnsInvalidJson() {
-        properties.setAiStructuredParseEnabled(true);
-        ResumeStructuredContentDTO rule = ResumeStructuredContentDTO.builder()
-                .name("张三")
-                .build();
-        when(aiClientService.complete(anyString())).thenReturn("not-json");
-
-        var result = service.parse(blocks(), rule, List.of());
-
-        assertThat(result.shouldApply()).isFalse();
-        assertThat(result.getFallbackReason()).contains("JSON");
-        assertThat(result.getStructuredContent()).isSameAs(rule);
-    }
-
-    @Test
-    void parseShouldFallbackWhenAiFails() {
-        properties.setAiStructuredParseEnabled(true);
-        when(aiClientService.complete(anyString())).thenThrow(new RuntimeException("timeout"));
-
-        var result = service.parse(blocks(), ResumeStructuredContentDTO.builder().build(), List.of());
-
-        assertThat(result.shouldApply()).isFalse();
-        assertThat(result.getFallbackReason()).contains("AI 结构化补全失败");
-    }
-
-    @Test
-    void parseShouldSkipWhenAllBlocksAreLockedStableSections() {
-        properties.setAiStructuredParseEnabled(true);
-        ResumeStructuredContentDTO rule = ResumeStructuredContentDTO.builder()
-                .name("张三")
-                .skills(List.of("Java"))
-                .build();
-
-        var result = service.parse(List.of(ResumeBlockDTO.builder()
-                .index(0)
-                .text("Java Spring Boot")
-                .sourceType("cleanedText")
-                .sourceSection("SKILLS")
-                .sectionLocked(true)
-                .build()), rule, List.of());
-
-        assertThat(result.shouldApply()).isFalse();
-        assertThat(result.getAiStatus()).isEqualTo("SKIPPED");
-        assertThat(result.getSkippedReason()).isEqualTo("STABLE_FIELDS_RULE_CONFIRMED");
-        assertThat(result.getFallbackOccurred()).isFalse();
-        assertThat(result.getDurationMs()).isNotNull();
-        verify(aiClientService, never()).complete(anyString());
-    }
-
-    @Test
-    void parseShouldUseCacheForSameBlocksPromptAndModel() {
-        properties.setAiStructuredParseEnabled(true);
-        when(aiClientService.modelName()).thenReturn("test-model");
-        when(aiClientService.complete(anyString())).thenReturn("""
-                {"phone":"13800000000","email":"zhangsan@example.com"}
-                """);
-
-        var first = service.parse(blocks(), ResumeStructuredContentDTO.builder().build(), List.of());
-        var second = service.parse(blocks(), ResumeStructuredContentDTO.builder().build(), List.of());
-
-        assertThat(first.shouldApply()).isTrue();
-        assertThat(first.getCacheHit()).isFalse();
-        assertThat(second.shouldApply()).isTrue();
-        assertThat(second.getCacheHit()).isTrue();
-        assertThat(second.getCacheKey()).isEqualTo(first.getCacheKey());
-        assertThat(first.getCacheKey())
-                .contains("cleanedTextHash=")
-                .contains("promptVersion=resume-structured-parse-v2")
-                .contains("modelName=test-model")
-                .contains("parserVersion=" + ResumeParseVersions.PARSER_VERSION)
-                .contains("parseMode=unknown")
-                .contains("blockBuilderVersion=" + ResumeParseVersions.BLOCK_BUILDER_VERSION)
-                .contains("sectionRuleVersion=" + ResumeParseVersions.SECTION_RULE_VERSION);
-        verify(aiClientService, times(1)).complete(anyString());
-    }
-
-    @Test
-    void parseShouldUseDifferentCacheKeyForDifferentParseMode() {
-        properties.setAiStructuredParseEnabled(true);
-        when(aiClientService.modelName()).thenReturn("test-model");
-        when(aiClientService.complete(anyString())).thenReturn("""
-                {"phone":"13800000000","email":"zhangsan@example.com"}
-                """);
-
-        var fast = service.parse(blocks(), ResumeStructuredContentDTO.builder()
-                .parseMode("FAST")
-                .build(), List.of());
-        var accurate = service.parse(blocks(), ResumeStructuredContentDTO.builder()
-                .parseMode("ACCURATE")
-                .build(), List.of());
-
-        assertThat(fast.getCacheKey()).isNotEqualTo(accurate.getCacheKey());
-        verify(aiClientService, times(2)).complete(anyString());
     }
 
     private List<ResumeBlockDTO> blocks() {
         return List.of(ResumeBlockDTO.builder()
+                .id("source-1")
+                .sourceBlockIds(List.of("source-1"))
+                .sourceOccurrenceIds(List.of("source-occurrence-1"))
                 .index(0)
                 .text("张三 13800000000 Java Spring Boot")
                 .sourceType("cleanedText")
-                .sourceSection("GENERAL")
+                .sourceSection("SKILLS")
                 .build());
     }
 }

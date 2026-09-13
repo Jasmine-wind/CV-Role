@@ -41,7 +41,7 @@ AI / Embedding API
 | minio | 简历文件对象存储 |
 | certbot | Let's Encrypt 证书申请和续期 |
 
-渲染依赖：PDF 预览与导出在后端容器内同步调用 Typst CLI。编译器版本与发布包 SHA-256 固定在 `backend/Dockerfile`（当前 v0.15.1，与 CI 一致）；升级 Typst 时必须同步回归三套内置模板、PDF checksum 确定性和渲染器版本。`APP_RENDER_TIMEOUT` 控制单次编译超时，`APP_RENDER_PREVIEW_RECEIPT_TTL` 控制签名 Preview receipt 有效期（默认 10 分钟）。导出物写入既有私有存储（本地为 `uploads/exports/`，生产为 MinIO bucket）；删除失败保留 DELETE_PENDING 元数据供用户重试，不新增容器或后台清理基础设施。
+渲染依赖：PDF 预览与导出在后端容器内同步调用 Typst CLI。编译器版本与发布包 SHA-256 固定在 `backend/Dockerfile`（当前 v0.15.1，与 CI 一致）；升级 Typst 时必须同步回归三套内置模板、PDF checksum 确定性和渲染器版本。`APP_RENDER_TIMEOUT` 控制单次编译超时，`APP_RENDER_PREVIEW_RECEIPT_TTL` 控制签名 Preview receipt 有效期（默认 10 分钟）。导出物写入既有私有存储（本地为 `uploads/exports/`，生产为 MinIO bucket）；单个导出物删除失败保留 DELETE_PENDING 元数据供重试，父级删除的 async task `CANCELLED` fence 随父事务提交或回滚，DELETE_PENDING 元数据仍独立提交并保留到数据库级联成功，回滚也可重试；不新增容器或后台清理基础设施。
 
 ---
 
@@ -470,6 +470,25 @@ https://resume.dawn04.xyz
 8. AI 历史
 ```
 
+### 5.5.1 Resume Structure Recovery v1 手工验收
+
+自动回归使用 `backend/src/test/resources/resume-recovery-corpus/` 中的 20 个 PII-free synthetic case；运行：
+
+```bash
+cd backend
+JAVA_HOME=/usr/lib/jvm/java-21-temurin-jdk PATH="$JAVA_HOME/bin:$PATH" ./mvnw -q -Dtest=ResumeStructureRecoveryCorpusTest test
+```
+
+该测试只输出 case ID 与聚合健康指标到 `backend/target/resume-recovery-effect-report.json`，不写入简历原文。真实样本手工验收时必须使用未跟踪的本地文件，不得放入仓库或日志，至少核对：
+
+- 原文逐行可回溯；页码、坐标、字体、粗体、缩进、项目符号和合并行保留 provenance；
+- 多栏或绝对定位 PDF 只有在 `LAYOUT_LITE` 健康指标达到保守优势时采用，否则进入 Resume Review；扫描 PDF 不 OCR；
+- 工作 / 实习 / 项目边界、技能描述、奖项日期与原文不重复、不丢失；不依赖章节顺序；
+- 健康元数据满足 `NO_LOSS`、`NO_HALLUCINATION`、`NO_DUPLICATION`、`ENTRY_BOUNDARY`；不确定内容保持未决；
+- 开启可选 AI 时最多一次调用；PostgreSQL durable repair reservation 在 Provider dispatch 前提交，CLAIMED 与 dispatch 后失败不 reclaim，明确零 dispatch 的失败才可安全重试，跨节点协调不确定时 fail closed。结果显示为低置信度 reference-only 候选；规则内容、canonical SOURCE 和导出事实不改变，只有未来显式用户 Apply 才能进入事实链；AI 失败或配置缺失必须回退到规则结果。
+
+验收记录只保留文件类型、页数、选中候选类型、健康分数、覆盖率和未决数量等聚合数据；不记录姓名、联系方式、雇主、学校、项目名或原文片段。
+
 ---
 
 ## 5.6 严禁随意执行的命令
@@ -633,6 +652,20 @@ MINIO_ENDPOINT=http://minio:9000
 ```env
 MINIO_ENDPOINT=http://localhost:9000
 ```
+
+### 9.1 切换对象存储后端
+
+当前应用按 `APP_STORAGE_TYPE` 装配单一 `FileStorageService`；`resumes.storage_type` 是审计字段，不是运行时路由器，`export_artifacts` 也不记录独立后端。因此 local / MinIO 切换必须作为停写迁移执行，禁止只修改环境变量：
+
+1. 进入维护窗口并停止 backend，确保上传、解析、导出和删除均无并发写入。
+2. 使用 `backup-postgres.sh`，并按源后端使用 `backup-uploads.sh` 或 `backup-minio.sh`；源对象在观察期结束前不得删除。
+3. 从 PostgreSQL 导出全部非空 `resumes.object_key` 与 `export_artifacts.storage_key`，去重后形成 expected-key manifest。`DELETE_PENDING` 也必须包含，不能因不可下载而遗漏。
+4. 把源对象逐 key 复制到目标，保持 key 完全不变；不得仅按目录数量判断成功。逐项验证源/目标字节数与 SHA-256，且 manifest 中每个 key 在目标都存在；额外对象另行审计，不能覆盖 expected-key 缺失。
+5. 仅在全部对象验证通过后，用单个已审计事务把现有 `resumes.storage_type` 更新为目标值（`LOCAL` 或 `MINIO`）。`export_artifacts` 没有该列，不执行虚构回填。
+6. 修改 `APP_STORAGE_TYPE`，保留目标后端完整配置并启动 backend。使用 synthetic 维护数据验证原简历读取/重新解析、既有导出下载、新上传/导出及删除；随后运行 authenticated smoke，再恢复写入。
+7. 若任一步失败，停止 backend、恢复原配置并继续使用仍保留的源对象；数据库与对象必须作为同一恢复点处理。完成观察期和备份复核前不得清理源后端。
+
+多后端并存读取需要单独批准并实现按持久化后端路由；本 Phase 不以 fallback 探测替代确定性迁移，因为同 key 双写、探测顺序和部分迁移会使删除及审计语义不明确。
 
 ---
 

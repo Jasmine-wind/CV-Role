@@ -4,6 +4,7 @@ import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
+import java.util.List;
 import lombok.Setter;
 
 @Getter
@@ -13,6 +14,9 @@ import lombok.Setter;
 @AllArgsConstructor
 public class ResumeBlockDTO {
 
+    /** Stable source-backed identifier for a logical block. */
+    private String id;
+
     private Integer index;
 
     private Integer originalIndex;
@@ -20,6 +24,34 @@ public class ResumeBlockDTO {
     private Integer displayOrder;
 
     private String text;
+
+    private Integer page;
+
+    private Double x;
+
+    private Double y;
+
+    private Double width;
+
+    private Double height;
+
+    private Double fontSize;
+
+    private String fontName;
+
+    private Boolean boldHint;
+
+    private Integer indent;
+
+    private Boolean bulletHint;
+
+    private ResumeSourceBlockRole role;
+
+    /** IDs of the visual source lines represented by this logical block. */
+    private List<String> sourceBlockIds;
+
+    /** Stable logical occurrences represented by this block; preserves repeated source rows. */
+    private List<String> sourceOccurrenceIds;
 
     private String prevText;
 

@@ -59,16 +59,23 @@ public class ResumePointerExtractionServiceImpl implements ResumePointerExtracti
         if (parseMode == ResumeParseMode.FAST || indexedLines == null || indexedLines.isEmpty()) {
             return empty(extractorType, false, false);
         }
-        if (selection == null && userId != null) {
-            try {
-                selection = AiGatewaySupport.selectionForNewTask(
-                        aiGateway, userId, "RESUME_POINTER_EXTRACTION_SELECTION");
-            } catch (AiGatewayException exception) {
-                if (exception.getFailureCode() == AiFailureCode.AI_CONFIGURATION_REQUIRED) {
-                    return empty(extractorType, false, false);
-                }
-                throw exception;
+        if (userId != null && (selection == null || !selection.isUserByok())) {
+            selection = resolveByokSelection(userId, selection);
+            if (selection == null || !selection.isUserByok()) {
+                // A user-bound pointer extraction must never silently use the legacy
+                // SYSTEM_DEFAULT compatibility snapshot. Pointer output is advisory, but it can
+                // still affect provenance shown to the user, so fail closed before prompt/cache
+                // work when no active BYOK selection is available.
+                return empty(extractorType, false, false);
             }
+        } else if (userId == null && selection != null) {
+            return empty(extractorType, false, false);
+        }
+        // The old four-argument overload has no user identity and is retained for legacy test /
+        // compatibility gateways. A real context-aware gateway still requires a valid user
+        // context, so do not attempt an unbound call through it.
+        if (userId == null && aiGateway instanceof AiGatewaySupport.ContextAwareAiGateway) {
+            return empty(extractorType, false, false);
         }
         String cacheKey = cacheKey(userId, resumeId, indexedLines, parseMode, extractorType, selection);
         ResumePointerExtractionResultDTO cached = cache.get(cacheKey);
@@ -103,6 +110,23 @@ public class ResumePointerExtractionServiceImpl implements ResumePointerExtracti
                 throw new AiGatewayException(AiFailureCode.SCHEMA_INVALID, "AI 简历定位结果格式异常");
             }
             return empty(extractorType, true, false);
+        }
+    }
+
+    private AiSelectionSnapshot resolveByokSelection(Long userId, AiSelectionSnapshot requested) {
+        if (requested != null) {
+            return requested.isUserByok() ? requested : null;
+        }
+        if (aiGateway == null) {
+            return null;
+        }
+        try {
+            // Resolve directly so the compatibility helper cannot synthesize a
+            // SYSTEM_DEFAULT selection for this user-bound resume seam.
+            AiSelectionSnapshot resolved = aiGateway.selectionForNewTask(userId);
+            return resolved != null && resolved.isUserByok() ? resolved : null;
+        } catch (AiGatewayException exception) {
+            return null;
         }
     }
 

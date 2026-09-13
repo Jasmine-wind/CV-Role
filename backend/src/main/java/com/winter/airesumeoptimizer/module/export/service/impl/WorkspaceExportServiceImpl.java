@@ -6,7 +6,6 @@ import com.winter.airesumeoptimizer.infra.render.ResumePdfRenderer;
 import com.winter.airesumeoptimizer.infra.render.ResumePdfRenderResult;
 import com.winter.airesumeoptimizer.infra.render.ResumeRenderException;
 import com.winter.airesumeoptimizer.infra.render.ResumeTemplateId;
-import com.winter.airesumeoptimizer.infra.storage.FileStorageException;
 import com.winter.airesumeoptimizer.infra.storage.FileStorageService;
 import com.winter.airesumeoptimizer.infra.storage.StoreFileCommand;
 import com.winter.airesumeoptimizer.infra.storage.StoredFile;
@@ -155,7 +154,7 @@ public class WorkspaceExportServiceImpl implements WorkspaceExportService {
         try {
             stored = fileStorageService.store(new StoreFileCommand(
                     userId, fileName, MIME_PDF, pdf.length, new ByteArrayInputStream(pdf), STORAGE_BIZ_TYPE));
-        } catch (FileStorageException exception) {
+        } catch (RuntimeException exception) {
             log.warn("导出 PDF 存储失败: taskId={}", optimizationTaskId, exception);
             throw new BusinessException(500, "简历导出失败，请稍后重试");
         }
@@ -183,8 +182,15 @@ public class WorkspaceExportServiceImpl implements WorkspaceExportService {
         artifact.setCreatedAt(LocalDateTime.now());
 
         try {
-            // 独立事务保证“插入已提交”才继续；提交失败时补偿删除存储对象，不留孤儿文件。
+            // Lock the task in the same transaction as metadata insertion. Parent deletion takes
+            // the same lock before enumerating artifacts, so an export cannot be inserted after
+            // cleanup has already passed the artifact list.
             transactionTemplate.executeWithoutResult(status -> {
+                OptimizationTask lockedTask = optimizationTaskMapper.selectOwnedForUpdate(
+                        userId, content.getOptimizationTaskId());
+                if (lockedTask == null) {
+                    throw new BusinessException(404, "优化任务不存在");
+                }
                 int rows = exportArtifactMapper.insert(artifact);
                 if (rows != 1) {
                     throw new IllegalStateException("导出记录写入行数不正确");
@@ -220,7 +226,7 @@ public class WorkspaceExportServiceImpl implements WorkspaceExportService {
         byte[] pdf;
         try {
             pdf = fileStorageService.loadAsBytes(artifact.getStorageKey());
-        } catch (FileStorageException exception) {
+        } catch (RuntimeException exception) {
             log.warn("导出文件读取失败: artifactId={}", artifactId, exception);
             throw new BusinessException(500, "导出文件读取失败，请稍后重试");
         }
@@ -337,7 +343,7 @@ public class WorkspaceExportServiceImpl implements WorkspaceExportService {
     private void compensateStorage(String storageKey, Long optimizationTaskId) {
         try {
             fileStorageService.delete(storageKey);
-        } catch (FileStorageException exception) {
+        } catch (RuntimeException exception) {
             log.error("导出补偿删除存储对象失败，需要人工清理: taskId={}", optimizationTaskId, exception);
         }
     }

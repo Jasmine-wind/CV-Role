@@ -179,8 +179,51 @@ class ResumeDocumentConverterImplTest {
                 .containsExactly(
                         org.assertj.core.groups.Tuple.tuple("PHONE", "13800000000"),
                         org.assertj.core.groups.Tuple.tuple("EMAIL", "zhangsan@example.com"),
-                        org.assertj.core.groups.Tuple.tuple("LOCATION", "上海"));
+                        org.assertj.core.groups.Tuple.tuple("LOCATION", "上海"),
+                        org.assertj.core.groups.Tuple.tuple("OTHER", "13800000000"));
         assertThat(upgraded.getBasics().getHighestEducation()).isEqualTo("本科");
+    }
+
+    @Test
+    void upgradeLegacyShouldDefaultHistoricalNullOptionalArrays() {
+        String legacy = """
+                {
+                  "schemaVersion": "RESUME_DOCUMENT_V1",
+                  "basics": { "name": "张三", "contacts": null },
+                  "sections": [
+                    { "kind": "PROJECT", "title": "项目经历", "entries": [
+                      { "organization": "旧项目", "role": "负责人", "startDate": "2022", "endDate": "至今", "bullets": null }
+                    ] }
+                  ]
+                }
+                """;
+
+        ResumeDocumentDTO upgraded = converter.upgradeLegacyDocument(legacy);
+
+        assertThat(upgraded.getBasics().getContacts()).isEmpty();
+        ResumeDocumentEntryDTO entry = upgraded.getSections().get(0).getEntries().get(0);
+        assertThat(entry.getOrganization()).isEqualTo("旧项目");
+        assertThat(entry.getRole()).isEqualTo("负责人");
+        assertThat(entry.getStartDate()).isEqualTo("2022");
+        assertThat(entry.getEndDate()).isEqualTo("至今");
+        assertThat(entry.getBullets()).isEmpty();
+    }
+
+    @Test
+    void upgradeLegacyShouldRejectNonTextualGenericScalarInsteadOfCoercingIt() {
+        String legacy = """
+                {
+                  "schemaVersion": "RESUME_DOCUMENT_V1",
+                  "basics": { "name": "张三", "contacts": [
+                    { "label": "自定义", "value": 13800000000 }
+                  ] },
+                  "sections": null
+                }
+                """;
+
+        assertThatThrownBy(() -> converter.upgradeLegacyDocument(legacy))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("格式不正确");
     }
 
     @Test
@@ -259,6 +302,55 @@ class ResumeDocumentConverterImplTest {
         assertThat(education.getSchool()).isEqualTo("某大学");
         assertThat(education.getStartDate()).isEqualTo("2018.09");
         assertThat(education.getEndDate()).isEqualTo("2022.06");
+    }
+
+    @Test
+    void upgradeLegacyShouldProjectAchievementHeadingAndDateMeta() {
+        String legacy = """
+                {
+                  "schemaVersion": "RESUME_DOCUMENT_V1",
+                  "basics": { "name": "张三", "contacts": [] },
+                  "sections": [
+                    { "kind": "ACHIEVEMENT", "title": "荣誉奖项", "entries": [
+                      { "heading": "校级一等奖", "meta": "2022.09 - 2022.12", "bullets": [] }
+                    ] }
+                  ]
+                }
+                """;
+
+        ResumeDocumentEntryDTO upgraded = converter.upgradeLegacyDocument(legacy)
+                .getSections().get(0).getEntries().get(0);
+
+        assertThat(upgraded.getAwardTitle()).isEqualTo("校级一等奖");
+        assertThat(upgraded.getAwardDate()).isEqualTo("2022.09 - 2022.12");
+        assertThat(upgraded.getBullets()).isEmpty();
+        assertThat(upgraded.getHeading()).isNull();
+        assertThat(upgraded.getMeta()).isNull();
+    }
+
+    @Test
+    void upgradeLegacyShouldPreserveUnprojectableEducationMetaOnlyOnce() {
+        String legacy = """
+                {
+                  "schemaVersion": "RESUME_DOCUMENT_V1",
+                  "basics": { "name": "张三", "contacts": [] },
+                  "sections": [
+                    { "kind": "EDUCATION", "title": "教育经历", "entries": [
+                      { "heading": "某大学", "meta": "2018 - 2022 · 软件工程", "bullets": [] }
+                    ] }
+                  ]
+                }
+                """;
+
+        ResumeDocumentEntryDTO upgraded = converter.upgradeLegacyDocument(legacy)
+                .getSections().get(0).getEntries().get(0);
+
+        assertThat(upgraded.getSchool()).isEqualTo("某大学");
+        assertThat(upgraded.getStartDate()).isEqualTo("2018");
+        assertThat(upgraded.getEndDate()).isEqualTo("2022");
+        assertThat(upgraded.getBullets())
+                .extracting(ResumeDocumentBulletDTO::getText)
+                .containsExactly("2018 - 2022 · 软件工程");
     }
 
     @Test

@@ -19,8 +19,9 @@ public class TypstRenderProperties {
     private Duration timeout = Duration.ofSeconds(30);
 
     /**
-     * 可选的固定字体目录。生产镜像提供只包含审核过的 CJK 静态字重的目录；
-     * 为空时保留本地系统字体发现，便于开发机运行。
+     * 固定字体目录。生产镜像提供只包含审核过的 CJK 静态 Regular/Bold 字重的目录；
+     * 为空时由 renderer 从受控的本地候选目录中发现同名静态字体，找不到即 fail closed，
+     * 不回退到宿主机 variable/Thin 字体。
      */
     private String fontPath = "";
 }

@@ -15,10 +15,12 @@ import com.winter.airesumeoptimizer.module.task.service.AsyncTaskFailureHandler;
 import com.winter.airesumeoptimizer.module.task.service.AsyncTaskService;
 import com.winter.airesumeoptimizer.module.task.vo.AsyncTaskVO;
 import java.util.List;
-import java.util.concurrent.RejectedExecutionException;
+import com.winter.airesumeoptimizer.module.task.service.CommittedTaskDispatcher;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.task.TaskExecutor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class ResumeAsyncTaskServiceImpl implements ResumeAsyncTaskService {
@@ -32,6 +34,7 @@ public class ResumeAsyncTaskServiceImpl implements ResumeAsyncTaskService {
     private final AsyncTaskService asyncTaskService;
     private final AsyncTaskFailureHandler asyncTaskFailureHandler;
     private final TaskExecutor taskExecutor;
+    private final CommittedTaskDispatcher taskDispatcher;
 
     public ResumeAsyncTaskServiceImpl(
             ResumeService resumeService,
@@ -39,16 +42,31 @@ public class ResumeAsyncTaskServiceImpl implements ResumeAsyncTaskService {
             ResumeEmbeddingService resumeEmbeddingService,
             AsyncTaskService asyncTaskService,
             AsyncTaskFailureHandler asyncTaskFailureHandler,
-            @Qualifier("applicationTaskExecutor") TaskExecutor taskExecutor) {
+            TaskExecutor taskExecutor) {
+        this(resumeService, resumeAnalysisService, resumeEmbeddingService, asyncTaskService,
+                asyncTaskFailureHandler, taskExecutor, CommittedTaskDispatcher.nonTransactional());
+    }
+
+    @Autowired
+    public ResumeAsyncTaskServiceImpl(
+            ResumeService resumeService,
+            ResumeAnalysisService resumeAnalysisService,
+            ResumeEmbeddingService resumeEmbeddingService,
+            AsyncTaskService asyncTaskService,
+            AsyncTaskFailureHandler asyncTaskFailureHandler,
+            @Qualifier("applicationTaskExecutor") TaskExecutor taskExecutor,
+            CommittedTaskDispatcher taskDispatcher) {
         this.resumeService = resumeService;
         this.resumeAnalysisService = resumeAnalysisService;
         this.resumeEmbeddingService = resumeEmbeddingService;
         this.asyncTaskService = asyncTaskService;
         this.asyncTaskFailureHandler = asyncTaskFailureHandler;
         this.taskExecutor = taskExecutor;
+        this.taskDispatcher = taskDispatcher;
     }
 
     @Override
+    @Transactional
     public AsyncTaskVO submitParseTask(Long userId, Long resumeId, ResumeParseOptionsDTO options) {
         resumeService.getDetail(userId, resumeId);
         return submitTask(userId, resumeId, AsyncTaskType.RESUME_PARSE,
@@ -56,6 +74,7 @@ public class ResumeAsyncTaskServiceImpl implements ResumeAsyncTaskService {
     }
 
     @Override
+    @Transactional
     public AsyncTaskVO submitDiagnosisTask(Long userId, Long resumeId) {
         resumeService.getDetail(userId, resumeId);
         return submitTask(userId, resumeId, AsyncTaskType.RESUME_DIAGNOSIS,
@@ -63,6 +82,7 @@ public class ResumeAsyncTaskServiceImpl implements ResumeAsyncTaskService {
     }
 
     @Override
+    @Transactional
     public AsyncTaskVO submitEmbeddingTask(Long userId, Long resumeId) {
         resumeService.getDetail(userId, resumeId);
         return submitTask(userId, resumeId, AsyncTaskType.RESUME_EMBEDDING,
@@ -70,26 +90,40 @@ public class ResumeAsyncTaskServiceImpl implements ResumeAsyncTaskService {
     }
 
     private AsyncTaskVO submitTask(Long userId, Long resumeId, AsyncTaskType taskType, TaskRunner runner) {
+        // Resume deletion and every resume-scoped submission serialize on the same parent row.
+        // Keep insertion atomic with the parent lock; dispatch only after committed completion.
+        resumeService.lockForAsyncTaskSubmission(userId, resumeId);
         AsyncTaskVO activeTask = asyncTaskService.findActiveTask(userId, taskType, BIZ_TYPE_RESUME, resumeId);
         if (activeTask != null) {
             return activeTask;
         }
 
         Long taskId = asyncTaskService.createTask(userId, taskType, BIZ_TYPE_RESUME, resumeId);
-        try {
-            taskExecutor.execute(() -> runner.run(taskId));
-        } catch (RejectedExecutionException exception) {
-            asyncTaskFailureHandler.markFailed(taskId, AsyncTaskErrorCode.TASK_REJECTED, exception);
-        }
+        taskDispatcher.dispatch(taskExecutor, () -> runner.run(taskId), exception -> {
+            // Deletion may have canceled the task between insertion and executor submission.
+            // Do not turn that terminal cancellation into a failure callback.
+            if (isTaskActive(userId, taskId)) {
+                asyncTaskFailureHandler.markFailed(taskId, AsyncTaskErrorCode.TASK_REJECTED, exception);
+            }
+        });
         return asyncTaskService.getTask(taskId, userId);
     }
 
     private void runParseTask(Long taskId, Long userId, Long resumeId, ResumeParseOptionsDTO options) {
         try {
             asyncTaskService.markRunning(taskId, "简历解析任务已启动");
+            if (!isTaskActive(userId, taskId)) {
+                return;
+            }
             asyncTaskService.updateStage(taskId, "正在读取简历文件");
             asyncTaskService.updateStage(taskId, "正在提取、清洗和结构化解析");
+            if (!isTaskActive(userId, taskId)) {
+                return;
+            }
             ResumeParseResultVO result = resumeService.parse(userId, resumeId, options);
+            if (!isTaskActive(userId, taskId)) {
+                return;
+            }
             if (!STATUS_SUCCESS.equals(result.getParseStatus())) {
                 asyncTaskService.markFailed(
                         taskId,
@@ -100,16 +134,27 @@ public class ResumeAsyncTaskServiceImpl implements ResumeAsyncTaskService {
             asyncTaskService.updateStage(taskId, "正在保存解析结果");
             asyncTaskService.markSuccess(taskId, "RESUME_PARSE_RESULT", resumeId, "简历解析完成");
         } catch (RuntimeException exception) {
-            asyncTaskFailureHandler.markFailed(taskId, null, exception);
+            if (isTaskActive(userId, taskId)) {
+                asyncTaskFailureHandler.markFailed(taskId, null, exception);
+            }
         }
     }
 
     private void runDiagnosisTask(Long taskId, Long userId, Long resumeId) {
         try {
             asyncTaskService.markRunning(taskId, "简历诊断任务已启动");
-            asyncTaskService.updateProgress(taskId, 20, "正在准备简历上下文");
-            asyncTaskService.updateProgress(taskId, 50, "正在调用 AI 模型");
+            if (!isTaskActive(userId, taskId)) {
+                return;
+            }
+            asyncTaskService.updateStage(taskId, "正在准备简历上下文");
+            asyncTaskService.updateStage(taskId, "正在调用 AI 模型");
+            if (!isTaskActive(userId, taskId)) {
+                return;
+            }
             ResumeAiAnalysis analysis = resumeAnalysisService.analyze(userId, resumeId);
+            if (!isTaskActive(userId, taskId)) {
+                return;
+            }
             if (!STATUS_SUCCESS.equals(analysis.getAnalysisStatus())) {
                 asyncTaskService.markFailed(
                         taskId,
@@ -117,19 +162,30 @@ public class ResumeAsyncTaskServiceImpl implements ResumeAsyncTaskService {
                         firstPresent(analysis.getErrorMessage(), "简历诊断失败"));
                 return;
             }
-            asyncTaskService.updateProgress(taskId, 90, "正在保存诊断结果");
+            asyncTaskService.updateStage(taskId, "正在保存诊断结果");
             asyncTaskService.markSuccess(taskId, "RESUME_AI_ANALYSIS", analysis.getId(), "简历诊断完成");
         } catch (RuntimeException exception) {
-            asyncTaskFailureHandler.markFailed(taskId, null, exception);
+            if (isTaskActive(userId, taskId)) {
+                asyncTaskFailureHandler.markFailed(taskId, null, exception);
+            }
         }
     }
 
     private void runEmbeddingTask(Long taskId, Long userId, Long resumeId) {
         try {
             asyncTaskService.markRunning(taskId, "简历向量生成任务已启动");
-            asyncTaskService.updateProgress(taskId, 20, "正在读取解析结果");
-            asyncTaskService.updateProgress(taskId, 50, "正在调用 Embedding 模型");
+            if (!isTaskActive(userId, taskId)) {
+                return;
+            }
+            asyncTaskService.updateStage(taskId, "正在读取解析结果");
+            asyncTaskService.updateStage(taskId, "正在调用 Embedding 模型");
+            if (!isTaskActive(userId, taskId)) {
+                return;
+            }
             ResumeEmbeddingSummaryVO summary = resumeEmbeddingService.generate(userId, resumeId);
+            if (!isTaskActive(userId, taskId)) {
+                return;
+            }
             if (!STATUS_SUCCESS.equals(summary.getEmbeddingStatus())) {
                 asyncTaskService.markFailed(
                         taskId,
@@ -137,11 +193,17 @@ public class ResumeAsyncTaskServiceImpl implements ResumeAsyncTaskService {
                         buildEmbeddingFailureMessage(summary));
                 return;
             }
-            asyncTaskService.updateProgress(taskId, 90, "正在保存向量结果");
+            asyncTaskService.updateStage(taskId, "正在保存向量结果");
             asyncTaskService.markSuccess(taskId, "RESUME_EMBEDDING", resumeId, "简历向量生成完成");
         } catch (RuntimeException exception) {
-            asyncTaskFailureHandler.markFailed(taskId, null, exception);
+            if (isTaskActive(userId, taskId)) {
+                asyncTaskFailureHandler.markFailed(taskId, null, exception);
+            }
         }
+    }
+
+    private boolean isTaskActive(Long userId, Long taskId) {
+        return asyncTaskService.isActive(userId, taskId);
     }
 
     private String firstPresent(String value, String fallback) {

@@ -1,0 +1,6 @@
+Synthetic Candidate M
+工作经历
+Lumen Group 2020.01 - 2022.05 数据服务工程师
+维护数据服务与批处理任务
+Pine Studio 2022.06 - Present 平台工程师
+建设内部配置与发布工具

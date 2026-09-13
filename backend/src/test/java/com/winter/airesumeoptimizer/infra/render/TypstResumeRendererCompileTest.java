@@ -3,6 +3,9 @@ package com.winter.airesumeoptimizer.infra.render;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeStructuredContentDTO;
 import com.winter.airesumeoptimizer.module.resume.fixture.ResumeFixtures;
@@ -36,6 +39,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.slf4j.LoggerFactory;
 
 /**
  * 真实 Typst 编译验证：仅当本机存在 typst 可执行文件时运行（CI 已安装）；
@@ -305,6 +309,42 @@ class TypstResumeRendererCompileTest {
                         () -> slowRenderer.render(realisticDocument(), ResumeTemplateId.CLASSIC))
                 .isInstanceOf(ResumeRenderException.class)
                 .hasMessageContaining("超时");
+    }
+
+    @Test
+    void compilerDiagnosticsMustNotLeakResumeContentToLogs() throws IOException {
+        assumeTrue(typstAvailable, "本机未安装 typst，跳过真实渲染环境验证");
+        String sensitiveDiagnostic = "PRIVATE-RESUME-CONTENT liming.dev@example.com 13812345678";
+        Path noisyCompiler = tempDir.resolve("noisy-typst");
+        Files.writeString(noisyCompiler, "#!/bin/sh\necho '" + sensitiveDiagnostic + "' >&2\nexit 1\n");
+        assertThat(noisyCompiler.toFile().setExecutable(true)).isTrue();
+
+        TypstRenderProperties properties = renderProperties();
+        properties.setTypstBinary(noisyCompiler.toString());
+        TypstResumeRenderer failingRenderer = new TypstResumeRenderer(
+                properties, new TypstResumeSourceMapper(), new PdfLayoutInspector());
+        Logger logger = (Logger) LoggerFactory.getLogger(TypstResumeRenderer.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            org.assertj.core.api.Assertions.assertThatThrownBy(
+                            () -> failingRenderer.render(realisticDocument(), ResumeTemplateId.CLASSIC))
+                    .isInstanceOf(ResumeRenderException.class)
+                    .hasMessageNotContaining(sensitiveDiagnostic)
+                    .hasMessageNotContaining("liming.dev@example.com")
+                    .hasMessageNotContaining("13812345678");
+        } finally {
+            logger.detachAppender(appender);
+            appender.stop();
+        }
+
+        String logFacingOutput = appender.list.stream()
+                .map(ILoggingEvent::getFormattedMessage)
+                .collect(java.util.stream.Collectors.joining("\n"));
+        assertThat(logFacingOutput)
+                .contains("exitCode=1")
+                .doesNotContain(sensitiveDiagnostic, "liming.dev@example.com", "13812345678");
     }
 
     @Test

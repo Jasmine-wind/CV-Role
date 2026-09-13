@@ -1,5 +1,6 @@
 package com.winter.airesumeoptimizer.module.workspace.dto;
 
+import com.winter.airesumeoptimizer.module.resume.dto.ResumeSourceRefDTO;
 import io.swagger.v3.oas.annotations.media.Schema;
 import java.util.List;
 import lombok.AllArgsConstructor;
@@ -15,6 +16,12 @@ import lombok.Setter;
 @AllArgsConstructor
 @Schema(description = "简历章节")
 public class ResumeDocumentSectionDTO {
+
+    @Schema(description = "章节来源引用，仅用于追溯")
+    private ResumeSourceRefDTO sourceRef;
+
+    @Schema(description = "章节覆盖的来源 occurrence ID")
+    private List<String> sourceOccurrenceIds;
 
     @Schema(description = "章节稳定 ID", example = "s-1")
     private String id;

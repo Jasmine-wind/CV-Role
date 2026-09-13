@@ -10,6 +10,7 @@ import com.winter.airesumeoptimizer.module.task.mapper.AsyncTaskMapper;
 import com.winter.airesumeoptimizer.module.task.service.AsyncTaskService;
 import com.winter.airesumeoptimizer.module.task.vo.AsyncTaskVO;
 import java.time.LocalDateTime;
+import java.util.List;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -19,6 +20,8 @@ public class AsyncTaskServiceImpl implements AsyncTaskService {
     private static final int MESSAGE_MAX_LENGTH = 255;
     private static final int RESULT_SUMMARY_MAX_LENGTH = 500;
     private static final int ERROR_CODE_MAX_LENGTH = 100;
+    private static final String RESOURCE_DELETED_ERROR_CODE = "RESOURCE_DELETED";
+    private static final String RESOURCE_DELETED_MESSAGE = "关联资源已删除";
 
     private final AsyncTaskMapper asyncTaskMapper;
 
@@ -59,6 +62,7 @@ public class AsyncTaskServiceImpl implements AsyncTaskService {
         LocalDateTime now = LocalDateTime.now();
         updateTask(taskId, new UpdateWrapper<AsyncTask>()
                 .eq("id", taskId)
+                .in("status", activeStatuses())
                 .set("status", AsyncTaskStatus.RUNNING.name())
                 .set("started_at", now)
                 .set("message", truncate(message, MESSAGE_MAX_LENGTH))
@@ -70,6 +74,7 @@ public class AsyncTaskServiceImpl implements AsyncTaskService {
     public void updateStage(Long taskId, String message) {
         updateTask(taskId, new UpdateWrapper<AsyncTask>()
                 .eq("id", taskId)
+                .in("status", activeStatuses())
                 .set("status", AsyncTaskStatus.RUNNING.name())
                 .set("message", truncate(message, MESSAGE_MAX_LENGTH))
                 .set("updated_at", LocalDateTime.now()));
@@ -81,6 +86,7 @@ public class AsyncTaskServiceImpl implements AsyncTaskService {
         validateProgress(progress);
         updateTask(taskId, new UpdateWrapper<AsyncTask>()
                 .eq("id", taskId)
+                .in("status", activeStatuses())
                 .set("status", AsyncTaskStatus.RUNNING.name())
                 .set("progress", progress)
                 .set("message", truncate(message, MESSAGE_MAX_LENGTH))
@@ -93,6 +99,7 @@ public class AsyncTaskServiceImpl implements AsyncTaskService {
         LocalDateTime now = LocalDateTime.now();
         updateTask(taskId, new UpdateWrapper<AsyncTask>()
                 .eq("id", taskId)
+                .in("status", activeStatuses())
                 .set("status", AsyncTaskStatus.SUCCESS.name())
                 .set("progress", 100)
                 .set("message", "任务完成")
@@ -111,12 +118,60 @@ public class AsyncTaskServiceImpl implements AsyncTaskService {
         LocalDateTime now = LocalDateTime.now();
         updateTask(taskId, new UpdateWrapper<AsyncTask>()
                 .eq("id", taskId)
+                .in("status", activeStatuses())
                 .set("status", AsyncTaskStatus.FAILED.name())
                 .set("message", "任务失败")
                 .set("error_code", truncate(errorCode, ERROR_CODE_MAX_LENGTH))
                 .set("error_message", errorMessage)
                 .set("finished_at", now)
                 .set("updated_at", now));
+    }
+
+    @Override
+    // Cancellation must commit or roll back with parent deletion. Unlike the
+    // export DELETE_PENDING retry record, it must not survive a failed delete.
+    @Transactional
+    public void cancelActiveTasks(Long userId, String bizType, Long bizId) {
+        if (userId == null) {
+            return;
+        }
+
+        LocalDateTime now = LocalDateTime.now();
+        UpdateWrapper<AsyncTask> updateWrapper = new UpdateWrapper<AsyncTask>()
+                .eq("user_id", userId)
+                .in("status", activeStatuses())
+                .set("status", AsyncTaskStatus.CANCELLED.name())
+                .set("error_code", RESOURCE_DELETED_ERROR_CODE)
+                .set("error_message", RESOURCE_DELETED_MESSAGE)
+                .set("message", RESOURCE_DELETED_MESSAGE)
+                .set("finished_at", now)
+                .set("updated_at", now);
+        String normalizedBizType = normalizeBlank(bizType);
+        if (normalizedBizType == null) {
+            updateWrapper.isNull("biz_type");
+        } else {
+            updateWrapper.eq("biz_type", normalizedBizType);
+        }
+        if (bizId == null) {
+            updateWrapper.isNull("biz_id");
+        } else {
+            updateWrapper.eq("biz_id", bizId);
+        }
+        // Cancellation is deliberately idempotent. A task may have completed or
+        // been canceled by a concurrent deletion by the time this update runs.
+        asyncTaskMapper.update(null, updateWrapper);
+    }
+
+    @Override
+    public boolean isActive(Long userId, Long taskId) {
+        if (userId == null || taskId == null) {
+            return false;
+        }
+        AsyncTask task = asyncTaskMapper.selectOne(new QueryWrapper<AsyncTask>()
+                .eq("id", taskId)
+                .eq("user_id", userId)
+                .in("status", activeStatuses()));
+        return task != null;
     }
 
     @Override
@@ -169,9 +224,27 @@ public class AsyncTaskServiceImpl implements AsyncTaskService {
             throw new BusinessException(400, "任务 ID 不能为空");
         }
         int rows = asyncTaskMapper.update(null, updateWrapper);
-        if (rows != 1) {
-            throw new BusinessException(404, "任务不存在");
+        if (rows == 1) {
+            return;
         }
+        // Completion/progress callbacks race with parent deletion. Once a task
+        // is terminal, the callback is a stale worker callback and must not turn
+        // CANCELLED into FAILED/SUCCESS (or fail the worker again).
+        AsyncTask current = asyncTaskMapper.selectById(taskId);
+        if (current != null && isTerminal(current.getStatus())) {
+            return;
+        }
+        throw new BusinessException(404, "任务不存在");
+    }
+
+    private List<String> activeStatuses() {
+        return List.of(AsyncTaskStatus.PENDING.name(), AsyncTaskStatus.RUNNING.name());
+    }
+
+    private boolean isTerminal(String status) {
+        return AsyncTaskStatus.SUCCESS.name().equals(status)
+                || AsyncTaskStatus.FAILED.name().equals(status)
+                || AsyncTaskStatus.CANCELLED.name().equals(status);
     }
 
     private void validateUserId(Long userId) {

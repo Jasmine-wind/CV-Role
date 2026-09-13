@@ -111,6 +111,7 @@ public class TypstResumeSourceMapper {
             builder.append("          location: ").append(toTypstString(entry.getLocation())).append(",\n");
             builder.append("          group: ").append(toTypstString(entry.getGroup())).append(",\n");
             builder.append("          skill-items: ").append(mapSkillItems(entry.getSkillItems())).append(",\n");
+            builder.append("          skill-descriptions: ").append(mapStrings(entry.getSkillDescriptions())).append(",\n");
             builder.append("          bullets: ").append(mapBullets(entry.getBullets())).append(",\n");
             builder.append("        ),\n");
         }
@@ -128,6 +129,18 @@ public class TypstResumeSourceMapper {
             builder.append("            ")
                     .append(toTypstString(item))
                     .append(",\n");
+        }
+        builder.append("          )");
+        return builder.toString();
+    }
+
+    private String mapStrings(List<String> values) {
+        if (values == null || values.isEmpty()) {
+            return "()";
+        }
+        StringBuilder builder = new StringBuilder("(\n");
+        for (String value : values) {
+            builder.append("            ").append(toTypstString(value)).append(",\n");
         }
         builder.append("          )");
         return builder.toString();

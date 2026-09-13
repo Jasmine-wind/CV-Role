@@ -18,6 +18,7 @@ import com.winter.airesumeoptimizer.module.resume.dto.ResumeExperienceDTO;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeProjectDTO;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeRawSectionBlockDTO;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeRawSectionDTO;
+import com.winter.airesumeoptimizer.module.resume.dto.ResumeSkillEvidenceDTO;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeSkillSetDTO;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeSourceRefDTO;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeStructuredContentDTO;
@@ -145,18 +146,25 @@ public class ResumeDisplayModelServiceImpl implements ResumeDisplayModelService 
             AiSelectionSnapshot selection) {
         long startedAt = System.nanoTime();
         ResumeDisplayModelDTO ruleModel = buildRuleDisplayModel(resumeId, structuredContent);
-        if (selection == null && userId != null) {
-            try {
-                selection = AiGatewaySupport.selectionForNewTask(
-                        aiGateway, userId, "RESUME_DISPLAY_MODEL_SELECTION");
-            } catch (AiGatewayException exception) {
-                if (exception.getFailureCode() == AiFailureCode.AI_CONFIGURATION_REQUIRED) {
-                    applyDisplayMeta(ruleModel, "RULE", false, true, "AI_CONFIGURATION_REQUIRED",
-                            elapsedMs(startedAt), false, "", null);
-                    return ruleModel;
-                }
-                throw exception;
+        if (userId != null && (selection == null || !selection.isUserByok())) {
+            boolean requestedByok = selection != null;
+            selection = resolveByokSelection(userId, selection);
+            if (selection == null) {
+                applyDisplayMeta(ruleModel, "RULE", false, true,
+                        requestedByok ? "AI_BYOK_REQUIRED" : "AI_CONFIGURATION_REQUIRED",
+                        elapsedMs(startedAt), false, "", null);
+                return ruleModel;
             }
+        }
+        // The legacy two-argument overload is retained for old compatibility doubles. A real
+        // context-aware gateway must never receive an unbound display request, and an explicit
+        // selection without a user cannot be safely attributed to anyone.
+        if (userId == null && (selection != null
+                || aiGateway instanceof AiGatewaySupport.ContextAwareAiGateway)) {
+            applyDisplayMeta(ruleModel, "RULE", false, true,
+                    selection == null ? "AI_CONFIGURATION_REQUIRED" : "AI_BYOK_REQUIRED",
+                    elapsedMs(startedAt), false, "", null);
+            return ruleModel;
         }
         try {
             Map<String, Object> promptInput = buildPromptInput(structuredContent);
@@ -214,16 +222,15 @@ public class ResumeDisplayModelServiceImpl implements ResumeDisplayModelService 
             ResumeStructuredContentDTO structuredContent,
             AiSelectionSnapshot selection) {
         long startedAt = System.nanoTime();
-        if (selection == null && userId != null) {
-            try {
-                selection = AiGatewaySupport.selectionForNewTask(
-                        aiGateway, userId, "RESUME_DISPLAY_MODEL_CACHE_SELECTION");
-            } catch (AiGatewayException exception) {
-                if (exception.getFailureCode() == AiFailureCode.AI_CONFIGURATION_REQUIRED) {
-                    return null;
-                }
-                throw exception;
+        if (userId != null && (selection == null || !selection.isUserByok())) {
+            selection = resolveByokSelection(userId, selection);
+            if (selection == null) {
+                return null;
             }
+        }
+        if (userId == null && (selection != null
+                || aiGateway instanceof AiGatewaySupport.ContextAwareAiGateway)) {
+            return null;
         }
         try {
             Map<String, Object> promptInput = buildPromptInput(structuredContent);
@@ -239,6 +246,23 @@ public class ResumeDisplayModelServiceImpl implements ResumeDisplayModelService 
             log.warn("Resume cached AI display model ignored: resumeId={}, exceptionType={}",
                     resumeId,
                     exception.getClass().getSimpleName());
+            return null;
+        }
+    }
+
+    private AiSelectionSnapshot resolveByokSelection(Long userId, AiSelectionSnapshot requested) {
+        if (requested != null) {
+            return requested.isUserByok() ? requested : null;
+        }
+        if (aiGateway == null) {
+            return null;
+        }
+        try {
+            // Do not use the compatibility selector here: it can synthesize a SYSTEM_DEFAULT
+            // snapshot for legacy doubles, which is not valid for a user-bound display call.
+            AiSelectionSnapshot resolved = aiGateway.selectionForNewTask(userId);
+            return resolved != null && resolved.isUserByok() ? resolved : null;
+        } catch (AiGatewayException exception) {
             return null;
         }
     }
@@ -297,6 +321,7 @@ public class ResumeDisplayModelServiceImpl implements ResumeDisplayModelService 
                 .map(entry -> ResumeDisplayModelDTO.SkillGroup.builder()
                         .name(entry.getKey())
                         .skills(unique(entry.getValue()).stream().filter(this::isSkillTag).limit(20).toList())
+                        .descriptions(skillDescriptions(skills, entry.getValue()))
                         .build())
                 .filter(group -> group.getSkills() != null && !group.getSkills().isEmpty())
                 .toList();
@@ -304,7 +329,66 @@ public class ResumeDisplayModelServiceImpl implements ResumeDisplayModelService 
         return ResumeDisplayModelDTO.SkillSummary.builder()
                 .topSkills(topSkills)
                 .groups(groups)
+                .descriptions(skills == null ? List.of() : unique(skills.getDescriptions()).stream()
+                        .filter(this::isUsefulValue)
+                        .limit(12)
+                        .toList())
                 .build();
+    }
+
+    private List<String> skillDescriptions(ResumeSkillSetDTO skills, List<String> keywords) {
+        if (skills == null || skills.getEvidence() == null) {
+            return List.of();
+        }
+        List<ResumeSkillEvidenceDTO> evidence = skills.getEvidence();
+        List<String> descriptions = new ArrayList<>();
+        for (int index = 0; index < evidence.size(); index++) {
+            ResumeSkillEvidenceDTO item = evidence.get(index);
+            if (item == null) {
+                continue;
+            }
+            boolean matchesKeyword = keywords == null || keywords.isEmpty()
+                    || keywords.stream().anyMatch(keyword -> keyword != null
+                    && (keyword.equals(item.getSkill())
+                    || (item.getKeywords() != null && item.getKeywords().contains(keyword))));
+            boolean unmatchedDescriptionBelongsToGroup = (item.getKeywords() == null || item.getKeywords().isEmpty())
+                    && nearestTaggedEvidenceBelongsToGroup(evidence, index, keywords);
+            if (matchesKeyword || unmatchedDescriptionBelongsToGroup) {
+                String description = item.getDescription();
+                if (description == null && (item.getKeywords() == null || item.getKeywords().isEmpty())) {
+                    description = item.getSourceText();
+                }
+                if (isUsefulValue(description) && !descriptions.contains(description)) {
+                    descriptions.add(description);
+                }
+            }
+            if (descriptions.size() >= 10) {
+                break;
+            }
+        }
+        return List.copyOf(descriptions);
+    }
+
+    private boolean nearestTaggedEvidenceBelongsToGroup(
+            List<ResumeSkillEvidenceDTO> evidence,
+            int index,
+            List<String> keywords) {
+        if (evidence == null || index < 0 || keywords == null || keywords.isEmpty()) {
+            return false;
+        }
+        for (int cursor = index - 1; cursor >= 0; cursor--) {
+            ResumeSkillEvidenceDTO candidate = evidence.get(cursor);
+            if (candidate != null && candidate.getKeywords() != null && !candidate.getKeywords().isEmpty()) {
+                return candidate.getKeywords().stream().anyMatch(keywords::contains);
+            }
+        }
+        for (int cursor = index + 1; cursor < evidence.size(); cursor++) {
+            ResumeSkillEvidenceDTO candidate = evidence.get(cursor);
+            if (candidate != null && candidate.getKeywords() != null && !candidate.getKeywords().isEmpty()) {
+                return candidate.getKeywords().stream().anyMatch(keywords::contains);
+            }
+        }
+        return false;
     }
 
     private List<ResumeDisplayModelDTO.EducationCard> buildEducationCards(ResumeStructuredContentDTO content, ResumeStructuredDataDTO data) {
@@ -1192,11 +1276,42 @@ public class ResumeDisplayModelServiceImpl implements ResumeDisplayModelService 
                 .distinct()
                 .reduce((left, right) -> left + "\n" + right)
                 .orElse("");
+        ResumeSourceRefDTO first = usable.get(0);
         return ResumeSourceRefDTO.builder()
                 .startLine(start)
                 .endLine(end)
                 .text(text)
+                .sourceBlockIds(usable.stream()
+                        .flatMap(ref -> ref.getSourceBlockIds() == null ? java.util.stream.Stream.<String>empty() : ref.getSourceBlockIds().stream())
+                        .filter(this::hasUsableSourceId)
+                        .map(String::strip)
+                        .distinct()
+                        .toList())
+                .sourceOccurrenceIds(usable.stream()
+                        .flatMap(ref -> ref.getSourceOccurrenceIds() == null ? java.util.stream.Stream.<String>empty() : ref.getSourceOccurrenceIds().stream())
+                        .filter(this::hasUsableSourceId)
+                        .map(String::strip)
+                        .distinct()
+                        .toList())
+                .page(first.getPage())
+                .x(first.getX())
+                .y(first.getY())
+                .width(first.getWidth())
+                .height(first.getHeight())
+                .fontSize(first.getFontSize())
+                .fontName(first.getFontName())
+                .boldHint(first.getBoldHint())
+                .indent(first.getIndent())
+                .bulletHint(first.getBulletHint())
+                .role(first.getRole())
+                .sourceType(first.getSourceType())
                 .build();
+    }
+
+    private boolean hasUsableSourceId(String value) {
+        return value != null && !value.isBlank()
+                && !"null".equalsIgnoreCase(value.strip())
+                && !"undefined".equalsIgnoreCase(value.strip());
     }
 
     private boolean validName(String value) {

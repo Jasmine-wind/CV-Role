@@ -83,7 +83,8 @@ public class ResumeReviewServiceImpl implements ResumeReviewService {
         }
         ResumeParseResult parseResult = getOwnedParseResult(userId, resumeId);
         ResumeVersion canonicalSource = getCanonicalSource(userId, parseResult);
-        if (canonicalSource == null || canonicalSource.getStructuredContent() == null
+        if (canonicalSource == null || canonicalSource.getId() == null
+                || canonicalSource.getStructuredContent() == null
                 || canonicalSource.getStructuredContent().isBlank()) {
             throw new BusinessException(409, "简历内容尚未就绪，请先完成解析");
         }
@@ -137,6 +138,7 @@ public class ResumeReviewServiceImpl implements ResumeReviewService {
         UpdateWrapper<ResumeParseResult> update = new UpdateWrapper<ResumeParseResult>()
                 .eq("id", parseResult.getId())
                 .eq("resume_id", parseResult.getResumeId())
+                .eq("canonical_source_version_id", canonicalSource.getId())
                 .in("quality_status",
                         ResumeQualityStatus.QUALITY_NEEDS_REVIEW,
                         ResumeQualityStatus.QUALITY_READY);
@@ -145,24 +147,24 @@ public class ResumeReviewServiceImpl implements ResumeReviewService {
         } else {
             update.eq("unresolved_items", expectedUnresolvedItems);
         }
-        if (ResumeReviewResolveRequestDTO.ACTION_ACCEPT.equals(action)
-                && !serializedDocument.equals(canonicalDocument)) {
-            int sourceRows = resumeVersionMapper.update(null, new UpdateWrapper<ResumeVersion>()
-                    .eq("id", canonicalSource.getId())
-                    .eq("user_id", userId)
-                    .eq("resume_id", resumeId)
-                    .eq("version_type", "SOURCE")
-                    .isNull("source_version_id")
-                    .isNull("job_target_id")
-                    .eq("content_status", "READY")
-                    .eq("content_revision", 0L)
-                    .eq("structured_content", canonicalDocument)
-                    .set("structured_content", serializedDocument)
-                    .set("updated_at", LocalDateTime.now()));
-            if (sourceRows != 1) {
-                throw new BusinessException(409, "简历内容正在更新，请刷新后重试");
+
+        String nextContentStatus = ResumeQualityStatus.QUALITY_READY.equals(validation.qualityStatus())
+                ? "READY" : "PENDING";
+        boolean documentChanged = !serializedDocument.equals(canonicalDocument);
+        boolean contentStatusChanged = !nextContentStatus.equals(canonicalSource.getContentStatus());
+        boolean sourceSnapshotChanged = documentChanged || contentStatusChanged;
+        ResumeVersion replacementSource = null;
+        if (sourceSnapshotChanged) {
+            // Canonical SOURCE rows are immutable once the parse result points at them. Review
+            // therefore publishes a replacement row and moves the parse pointer in the same
+            // transaction; the previous row remains an auditable historical snapshot.
+            replacementSource = newReviewSource(
+                    userId, resumeId, canonicalSource, nextContentStatus, serializedDocument);
+            int sourceRows = resumeVersionMapper.insert(replacementSource);
+            if (sourceRows != 1 || replacementSource.getId() == null) {
+                throw new BusinessException(500, "简历内容保存失败");
             }
-            canonicalSource.setStructuredContent(serializedDocument);
+            update.set("canonical_source_version_id", replacementSource.getId());
         }
         int rows = resumeParseResultMapper.update(null, update
                 .set("unresolved_items", serializedItems)
@@ -175,7 +177,31 @@ public class ResumeReviewServiceImpl implements ResumeReviewService {
         parseResult.setUnresolvedItems(serializedItems);
         parseResult.setQualityIssues(serializedIssues);
         parseResult.setQualityStatus(validation.qualityStatus());
-        return toVO(userId, parseResult);
+        if (replacementSource != null) {
+            parseResult.setCanonicalSourceVersionId(replacementSource.getId());
+        }
+        return toVO(userId, parseResult, replacementSource == null ? canonicalSource : replacementSource);
+    }
+
+    private ResumeVersion newReviewSource(
+            Long userId,
+            Long resumeId,
+            ResumeVersion previousSource,
+            String contentStatus,
+            String structuredContent) {
+        ResumeVersion replacement = new ResumeVersion();
+        replacement.setUserId(userId);
+        replacement.setResumeId(resumeId);
+        replacement.setVersionType("SOURCE");
+        replacement.setSourceType(previousSource.getSourceType() == null
+                || previousSource.getSourceType().isBlank() ? "PARSED_UPLOAD" : previousSource.getSourceType());
+        replacement.setContentStatus(contentStatus);
+        replacement.setStructuredContent(structuredContent);
+        replacement.setContentRevision(0L);
+        LocalDateTime now = LocalDateTime.now();
+        replacement.setCreatedAt(now);
+        replacement.setUpdatedAt(now);
+        return replacement;
     }
 
     private void applyNameEdit(ResumeDocumentDTO document, String name) {
@@ -579,7 +605,13 @@ public class ResumeReviewServiceImpl implements ResumeReviewService {
     }
 
     private ResumeReviewVO toVO(Long userId, ResumeParseResult parseResult) {
-        ResumeVersion source = getCanonicalSource(userId, parseResult);
+        return toVO(userId, parseResult, null);
+    }
+
+    private ResumeReviewVO toVO(
+            Long userId, ResumeParseResult parseResult, ResumeVersion sourceOverride) {
+        ResumeVersion source = sourceOverride == null
+                ? getCanonicalSource(userId, parseResult) : sourceOverride;
         return ResumeReviewVO.builder()
                 .resumeId(parseResult.getResumeId())
                 .qualityStatus(parseResult.getQualityStatus())

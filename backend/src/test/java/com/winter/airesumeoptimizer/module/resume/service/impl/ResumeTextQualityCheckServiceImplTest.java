@@ -18,6 +18,24 @@ class ResumeTextQualityCheckServiceImplTest {
     }
 
     @Test
+    void checkShouldClassifyPdfWithoutImagesAsEmptyPdf() {
+        var result = service.check(" ", "PDF", false);
+
+        assertThat(result.getStatus()).isEqualTo("FAILED");
+        assertThat(result.getIssues()).containsExactly("EMPTY_TEXT", "EMPTY_PDF");
+        assertThat(result.getIssues()).doesNotContain("SCANNED_PDF");
+        assertThat(result.getMessage()).contains("不包含可提取文字或图像");
+    }
+
+    @Test
+    void checkShouldClassifyPdfWithImagesAsScannedPdf() {
+        var result = service.check(" ", "PDF", true);
+
+        assertThat(result.getStatus()).isEqualTo("FAILED");
+        assertThat(result.getIssues()).containsExactly("EMPTY_TEXT", "SCANNED_PDF");
+    }
+
+    @Test
     void checkShouldWarnWhenTextTooShort() {
         var result = service.check("Java SQL 项目", "DOCX");
 

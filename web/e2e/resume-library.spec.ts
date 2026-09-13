@@ -41,6 +41,19 @@ async function mockShell(page: Page, resumes: unknown[]) {
     createdAt: '2026-01-01T00:00:00Z',
   })))
   await page.route('**/api/resumes', (route) => route.fulfill(response(resumes)))
+  await page.route('**/api/settings/ai-provider', (route) =>
+    route.fulfill(response({
+      providerType: 'OPENAI_COMPATIBLE',
+      baseUrl: 'https://api.example.invalid/v1',
+      model: 'e2e-model',
+      config: {},
+      status: 'ACTIVE',
+      configured: true,
+      apiKeyConfigured: true,
+      maskedApiKey: '••••••••',
+      credentialStorageAvailable: true,
+    })),
+  )
   await page.route('**/api/job-direction-insights', (route) =>
     route.fulfill(response({ cohorts: [] })),
   )

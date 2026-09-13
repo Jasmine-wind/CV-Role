@@ -1,0 +1,8 @@
+Synthetic Candidate R
+Experience
+Telemetry Hub 2021.02 - Present Reliability Engineer
+p95 latency improved through a measured cache change
+Skills
+Kubernetes、PostgreSQL
+Projects
+Signal Gate 2022.02 - 2022.06

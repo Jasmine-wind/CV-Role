@@ -6,6 +6,8 @@ import static org.assertj.core.api.Assertions.assertThatNoException;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeExperienceDTO;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeIndexedLineDTO;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeProjectDTO;
+import com.winter.airesumeoptimizer.module.resume.dto.ResumeSourceBlockRole;
+import com.winter.airesumeoptimizer.module.resume.dto.ResumeSourceRefDTO;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeStructuredContentDTO;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeStructuredDataDTO;
 import java.util.List;
@@ -51,6 +53,65 @@ class ResumePointerPostProcessorImplTest {
     }
 
     @Test
+    void attachSourceRefsShouldPreserveContiguousExperienceAcrossPageBreak() {
+        ResumeStructuredContentDTO content = ResumeStructuredContentDTO.builder()
+                .structuredData(ResumeStructuredDataDTO.builder()
+                        .experiences(List.of(ResumeExperienceDTO.builder()
+                                .type("INTERNSHIP")
+                                .organization("上海某金融科技公司")
+                                .role("后端开发实习生")
+                                .sourceSectionId("internship")
+                                .description("参与支付清结算模块开发")
+                                .bullets(List.of(
+                                        "参与支付清结算模块开发，完成第 1 项改造",
+                                        "参与支付清结算模块开发，完成第 2 项改造",
+                                        "参与支付清结算模块开发，完成第 3 项改造",
+                                        "参与支付清结算模块开发，完成第 4 项改造"))
+                                .build()))
+                        .build())
+                .build();
+
+        ResumeIndexedLineDTO header = line(1, "上海某金融科技公司", "internship", 1);
+        header.setRole(ResumeSourceBlockRole.ENTRY_HEADER);
+        postProcessor.attachSourceRefs(content, List.of(
+                header,
+                line(2, "后端开发实习生", "internship", 1),
+                line(3, "参与支付清结算模块开发，完成第 1 项改造", "internship", 1),
+                line(4, "参与支付清结算模块开发，完成第 2 项改造", "internship", 2),
+                line(5, "参与支付清结算模块开发，完成第 3 项改造", "internship", 2),
+                line(6, "参与支付清结算模块开发，完成第 4 项改造", "internship", 2)));
+
+        assertThat(content.getStructuredData().getExperiences().get(0).getSourceRef())
+                .extracting(ResumeSourceRefDTO::getStartLine, ResumeSourceRefDTO::getEndLine,
+                        ResumeSourceRefDTO::getText)
+                .containsExactly(1, 6, "上海某金融科技公司\n后端开发实习生\n参与支付清结算模块开发，完成第 1 项改造\n参与支付清结算模块开发，完成第 2 项改造\n参与支付清结算模块开发，完成第 3 项改造\n参与支付清结算模块开发，完成第 4 项改造");
+    }
+
+    @Test
+    void attachSourceRefsShouldIncludePrefixedProjectNameOccurrence() {
+        ResumeStructuredContentDTO content = ResumeStructuredContentDTO.builder()
+                .structuredData(ResumeStructuredDataDTO.builder()
+                        .projects(List.of(ResumeProjectDTO.builder()
+                                .name("订单结算平台")
+                                .timeRange("2023.01 - 2023.09")
+                                .responsibilities(List.of("技术负责人：建设可恢复结算流程"))
+                                .sourceSectionId("project")
+                                .build()))
+                        .build())
+                .build();
+
+        postProcessor.attachSourceRefs(content, List.of(
+                line(1, "项目一：订单结算平台", "project"),
+                line(2, "开发时间：2023.01 - 2023.09", "project"),
+                line(3, "技术负责人：建设可恢复结算流程", "project")));
+
+        assertThat(content.getStructuredData().getProjects().get(0).getSourceRef())
+                .extracting(ResumeSourceRefDTO::getStartLine, ResumeSourceRefDTO::getEndLine,
+                        ResumeSourceRefDTO::getText)
+                .containsExactly(1, 3, "项目一：订单结算平台\n开发时间：2023.01 - 2023.09\n技术负责人：建设可恢复结算流程");
+    }
+
+    @Test
     void attachSourceRefsShouldIgnoreNullSummaryAndBlankEducation() {
         ResumeStructuredContentDTO content = ResumeStructuredContentDTO.builder()
                 .structuredData(ResumeStructuredDataDTO.builder()
@@ -83,9 +144,13 @@ class ResumePointerPostProcessorImplTest {
     }
 
     private ResumeIndexedLineDTO line(int id, String text, String rawSectionId) {
+        return line(id, text, rawSectionId, 1);
+    }
+
+    private ResumeIndexedLineDTO line(int id, String text, String rawSectionId, int page) {
         return ResumeIndexedLineDTO.builder()
                 .lineId(id)
-                .page(1)
+                .page(page)
                 .text(text)
                 .normalizedText(text)
                 .rawSectionId(rawSectionId)

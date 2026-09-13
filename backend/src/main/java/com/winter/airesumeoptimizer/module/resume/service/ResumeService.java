@@ -18,6 +18,12 @@ public interface ResumeService {
 
     ResumeDetailVO getDetail(Long userId, Long resumeId);
 
+    /**
+     * Acquires the resume lifecycle lock before creating or attaching a child async task.
+     * The caller keeps the surrounding transaction open through task creation/submission.
+     */
+    void lockForAsyncTaskSubmission(Long userId, Long resumeId);
+
     ResumeDetailVO updateDisplayName(Long userId, Long resumeId, ResumeDisplayNameUpdateRequestDTO request);
 
     ResumeParseResultVO parse(Long userId, Long resumeId);

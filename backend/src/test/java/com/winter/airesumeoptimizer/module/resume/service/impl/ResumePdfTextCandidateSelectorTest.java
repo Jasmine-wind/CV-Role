@@ -90,6 +90,38 @@ class ResumePdfTextCandidateSelectorTest {
     }
 
     @Test
+    void allBlankCandidatesHaveExplicitNoneType() {
+        var selection = selector.select(" ", null, "\n");
+
+        assertThat(selection.candidateType())
+                .isEqualTo(ResumePdfTextCandidateSelector.CandidateType.NONE);
+        assertThat(selection.text()).isEmpty();
+        assertThat(selection.legacyScore()).isEqualTo(-100);
+        assertThat(selection.positionScore()).isEqualTo(-100);
+        assertThat(selection.layoutLiteScore()).isEqualTo(-100);
+    }
+
+    @Test
+    void blankStableCandidatesCanUseAnAvailableLayoutCandidate() {
+        var selection = selector.select(" ", null, "Recovered visual text");
+
+        assertThat(selection.candidateType()).isEqualTo(ResumePdfTextCandidateSelector.CandidateType.LAYOUT_LITE);
+        assertThat(selection.text()).isEqualTo("Recovered visual text");
+        assertThat(selection.legacyScore()).isEqualTo(-100);
+        assertThat(selection.positionScore()).isEqualTo(-100);
+    }
+
+    @Test
+    void nullSelectionValuesAreNormalized() {
+        var selection = new ResumePdfTextCandidateSelector.Selection(
+                null, null, -100, -100, -100);
+
+        assertThat(selection.text()).isEmpty();
+        assertThat(selection.candidateType())
+                .isEqualTo(ResumePdfTextCandidateSelector.CandidateType.LEGACY);
+    }
+
+    @Test
     void textWithoutStandardHeadingsDoesNotLoseLegacyStability() {
         String legacy = "Alex Chen\nalex@example.com\nJava Spring Boot\nBuilt reliable services";
 

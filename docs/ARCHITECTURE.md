@@ -41,7 +41,7 @@ scripts/  生产运维脚本
 当前业务模块：
 
 - `auth` / `user`：账号、登录和当前用户；`PATCH /api/users/me` 只允许 JWT 当前用户更新 nickname，返回 `UserProfileVO`，username / email 保持只读。
-- `resume`：简历文件、解析、质量检查与展示模型。
+- `resume`：简历文件、解析、质量检查与展示模型。Parse generation/token claim 由独立 `REQUIRES_NEW` 事务在 CPU、文件和 Provider 工作前提交；SOURCE materialization 与解析结果 CAS 更新仍在同一 service-level 事务内。
 - `job`：预置岗位、用户目标 JD、岗位解析和旧匹配。
 - `analysis`：诊断、优化建议、局部改写和聚合报告；旧 AI 匹配仍在其中，公开写入口已停用，仅服务历史兼容读取，不再是主链路正式结果。
 - `optimization`：`ResumeVersion`、`JobTarget`、`OptimizationTask`，负责版本派生、输入与配置快照、任务归属和正式结果入口。
@@ -50,7 +50,7 @@ scripts/  生产运维脚本
 - `evidence`：Phase 3 正式 Evidence Matching 与 Gap Analysis；岗位要求、简历证据与匹配结论的正式 Source of Truth。
 - `embedding`：文本分块、向量生成、相似度与 RAG 上下文；当前不进入正式证据匹配主链路。
 - `history`：旧历史聚合与 AI 结果回看。
-- `task`：单进程异步执行记录、归属校验和状态查询；不再承担正式优化业务模型。
+- `task`：单进程异步执行记录、归属校验和状态查询；不再承担正式优化业务模型。Resume、OptimizationTask 与 JobDescription 父级删除在级联前通过内部归属条件把 PENDING / RUNNING 任务持久化为 `CANCELLED`；Resume / OptimizationTask 的提交路径先锁定共享父级行，并把 `async_tasks` 插入与关联放在同一事务内，避免删除快照漏掉刚提交的 worker；从既有 JD 新建任务还按 Resume → JobDescription 顺序锁定父行，JD 删除先持有同一 JD 生命周期锁再发现派生任务；线程池只在事务 committed completion 后接收 worker，回滚不 dispatch，拒绝执行的失败状态用新事务保存；正式 OptimizationTask worker 还必须以精确 `asyncTaskId` 和完整 task type / biz type / biz ID 绑定通过数据库 CAS 更新 RUNNING / SUCCESS / FAILED。worker 在外部调用前后复核 active fence，所有进度 / SUCCESS / FAILED 回调只允许更新 active 状态，不能复活已取消或已替换的执行。
 - `insight`：Phase 9 的只读 Multi-JD 聚合 seam；只读 Task / SOURCE / Evidence，不能创建 Capability 或修改任何正式事实。
 - `observability`：只查询 committed retained rows 的内部汇总；没有 product event、用户 dashboard 或事件存储。
 - `ai/usage`：Provider attempt ledger、独立事务写入和 90 天 retention；不是产品漏斗 Source of Truth。
@@ -73,11 +73,11 @@ scripts/  生产运维脚本
 → 保存成功后可在 Preview / Export 中选择内置模板，同步渲染服务端已保存内容得到 PDF；导出成功后生成带归属与生命周期记录的导出物
 ```
 
-`ResumeIntakeService`、`JobAnalysisService` 与 `OptimizationTaskService` 是默认用户流的深模块 seam：前者负责上传与准备，第二个负责后台分析编排，第三个负责正式业务身份、版本关系和快照。调用方不需要编排 Parse、Embedding、Prompt 或供应商步骤。`WorkspaceContentService` 是 Phase 4 的编辑 seam：只接受 optimizationTaskId，内部解析并校验 Task → SOURCE / TARGET / JobTarget / Resume / User 完整版本链，把候选解析经确定性验证与未决候选裁决后唯一物化为 `resume_versions.structured_content` 中的 RESUME_DOCUMENT_V1 SOURCE；解析表只保存当前 SOURCE 指针和审查 sidecar。任务引用该冻结 SOURCE 并把 canonical 文档写入 task 的 SOURCE/TARGET 快照，以单条条件 UPDATE 实现 expectedRevision 乐观并发；Workspace 不回写当前解析结果、任务输入快照或证据分析。Phase 3 已建立正式 Evidence / Gap 模型：正式分析结果是每个任务一条 `evidence_analyses` 及其 `evidence_requirements` / `requirement_evidences` 行，每条岗位要求只按当前冻结材料的支持强度判定为足够支持（MATCHED）、存在相关但不完整证据（PARTIAL_EVIDENCE）或未找到支持证据（NO_EVIDENCE）。具体匹配实现位于 `EvidenceMatchingStrategy` interface 之后（当前为单次 AI 结构化输出 + Requirement / quote / ResumeVersion 代码校核），后续可在不改动编排的情况下替换。该模型不判断用户现实世界中的完整能力，也不保留 EXPRESSION_GAP 兼容语义。
+`ResumeIntakeService`、`JobAnalysisService` 与 `OptimizationTaskService` 是默认用户流的深模块 seam：前者负责上传与准备，第二个负责后台分析编排，第三个负责正式业务身份、版本关系和快照。调用方不需要编排 Parse、Embedding、Prompt 或供应商步骤。`WorkspaceContentService` 是 Phase 4 的编辑 seam：只接受 optimizationTaskId，内部解析并校验 Task → SOURCE / TARGET / JobTarget / Resume / User 完整版本链，把规则候选经确定性验证与未决候选裁决后物化为 `resume_versions.structured_content` 中的 RESUME_DOCUMENT_V1 SOURCE：`READY` 为可交付快照，`NEEDS_REVIEW` 为 `PENDING` 的 source-backed 审查草稿；审查确认通过后发布新的 SOURCE 并移动当前指针，旧快照保留。解析表只保存当前 SOURCE 指针和审查 sidecar。任务引用该冻结 SOURCE 并把 canonical 文档写入 task 的 SOURCE/TARGET 快照，以单条条件 UPDATE 实现 expectedRevision 乐观并发；Workspace 不回写当前解析结果、任务输入快照或证据分析。Phase 3 已建立正式 Evidence / Gap 模型：正式分析结果是每个任务一条 `evidence_analyses` 及其 `evidence_requirements` / `requirement_evidences` 行，每条岗位要求只按当前冻结材料的支持强度判定为足够支持（MATCHED）、存在相关但不完整证据（PARTIAL_EVIDENCE）或未找到支持证据（NO_EVIDENCE）。具体匹配实现位于 `EvidenceMatchingStrategy` interface 之后（当前为单次 AI 结构化输出 + Requirement / quote / ResumeVersion 代码校核），后续可在不改动编排的情况下替换。该模型不判断用户现实世界中的完整能力，也不保留 EXPRESSION_GAP 兼容语义。
 
-`ResumePdfRenderer` 是 Phase 6 的渲染 seam：把结构化简历文档确定性映射为转义后的 Typst 数据文件，在隔离临时目录中用内置版本化模板（Classic 当前 v4、Modern / Minimal 当前 v3，历史 v3/v2/v1 保留供导出物解释；按章节类型分支；渲染器版本仍为 `typst-resume-renderer/3`）同步编译为 PDF；固定创建时间戳与文档 metadata 使相同输入逐字节确定，PDFBox 随后解析真实页数、字号、末页 glyph 占用并检查文字是否超出页面 CropBox。渲染进程以 `--root` 限制文件读取，内置模板不引用外部包且用户内容无法触发 Typst 语法；生产镜像通过 `APP_RENDER_FONT_PATH` 指向只含审核过的静态 Noto CJK Regular/Bold 字体目录，并让 Typst 忽略宿主机字体，避免 Thin/variable fallback；当前没有 OS 级网络沙箱，该防御深度限制记录为残余风险。
+`ResumePdfRenderer` 是 Phase 6 的渲染 seam：把结构化简历文档确定性映射为转义后的 Typst 数据文件，在隔离临时目录中用内置版本化模板（Classic 当前 v5、Modern / Minimal 当前 v3，历史版本保留供导出物解释；按章节类型分支；渲染器版本仍为 `typst-resume-renderer/3`）同步编译为 PDF；固定创建时间戳与文档 metadata 使相同输入逐字节确定，PDFBox 随后解析真实页数、字号、末页 glyph 占用并检查文字是否超出页面 CropBox。渲染进程以 `--root` 限制文件读取，内置模板不引用外部包且用户内容无法触发 Typst 语法；生产镜像通过 `APP_RENDER_FONT_PATH` 指向只含审核过的静态 Noto CJK Regular/Bold 字体目录，并让 Typst 忽略宿主机字体，避免 Thin/variable fallback；当前没有 OS 级网络沙箱，该防御深度限制记录为残余风险。
 
-`WorkspaceExportService` 只调用 `WorkspaceContentService.getPersistedContentForRender`，因此 revision 0 的 snapshot 投影不能渲染。Preview receipt 由服务端短期签名并绑定 user / task / TARGET / revision / template+version / renderer / PDF checksum；Export 重新校验并重编译比对。`ExportArtifactCleanupService` 用独立小事务持久化 DELETE_PENDING，再删除对象和元数据；对象或元数据删除失败时记录仍可重试。Resume 与 JobDescription 是当前仅有的真实父删除入口，均在级联前调用该 seam。
+`WorkspaceExportService` 只调用 `WorkspaceContentService.getPersistedContentForRender`，因此 revision 0 的 snapshot 投影不能渲染。Preview receipt 由服务端短期签名并绑定 user / task / TARGET / revision / template+version / renderer / PDF checksum；Export 重新校验并重编译比对。`ExportArtifactCleanupService` 对单个导出物用独立小事务持久化 DELETE_PENDING，再删除对象和元数据；父资源删除的任务取消 fence 参与父事务，与删除一起提交或回滚，避免删除失败后保留资源却永久取消执行；Resume / JD 跨多个任务清理时按 task ID 全局升序加锁，避免不同发现顺序形成数据库死锁；DELETE_PENDING 仍独立持久化后再删除对象，保留元数据到父事务成功级联，回滚时仍可重试。对象删除失败时记录仍可重试。Resume、OptimizationTask 与 JobDescription 的删除入口均在级联前调用该 seam。
 
 重要边界：
 
@@ -93,13 +93,21 @@ scripts/  生产运维脚本
 - Phase 9 Insight 在读取时按 `(userId, resumeId, SHA-256(resume_input_snapshot))` 建立兼容 cohort；近 180 天、去重后的最新 Task、最多 20 个不同 JD、至少 8 个样本。技术锚点只表示“岗位要求包含该字面词”，否则要求文本精确分组；输出只展示三态分布和原始追溯。
 - Phase 9 Observability 从既有业务表和 `ai_usage_records` 查询已提交事实。Usage 每次真实 dispatch 都独立记录，ledger 写入失败不改变业务结果；它不得被用作逻辑漏斗分母。Prompt、输入、输出、URL、Key 和成本不进入 ledger 或日志。
 - `demo` profile 使用确定性 in-process Provider，而生产 profile 仍只装配 pinned OpenAI-compatible Adapter；Demo 环境禁用 BYOK，采用普通 JWT/ownership/Storage/Typst 路径。
+- Resume Structure Recovery v1 保持在 Resume 模块内部：规则解析先生成候选，PDF 文本抽取可选用 PDFBox `LAYOUT_LITE`（仅在确定性健康分数领先至少 8 分时采用），raw section block 保存 source ID、页码、坐标、字体和视觉提示。PDF 的 `ResumeParseMeta.pageCount` 使用真实物理页数；DOC/DOCX 没有可靠分页能力时固定为 `0`，其 source block `page` 保持未知，不伪造页码。有效但没有可提取 glyph 的 PDF 进入 `EMPTY_PDF`，检测到图像内容且没有文本时进入 `SCANNED_PDF`；当前不提供 OCR，无法证明的旧调用保持保守分类。`NO_LOSS`、`NO_HALLUCINATION`、`NO_DUPLICATION` 与 `ENTRY_BOUNDARY` 是确定性检查项；不通过时保留规则源证据并进入审阅，可物化为 `PENDING` canonical 草稿但不得作为交付事实；不把 AI 候选物化为 canonical。AI repair 每次解析最多一次、reference-only、低置信度且 source-backed，显式用户 Apply 之前不进入事实链。
 
 ## 4. 数据与外部系统
 
 - PostgreSQL 是账号、简历元数据、解析结果、岗位、分析结果、向量和任务的事实来源；`export_artifacts` 只记录 PDF 派生文件的归属与位置，不是内容来源。
 - V20.1 将 Phase 3 正式状态原位收敛为 MATCHED / PARTIAL_EVIDENCE / NO_EVIDENCE，并把 Evidence 支持程度收敛为 SUFFICIENT / PARTIAL；旧语义生成的派生分析会失效并保留冻结输入供重试，V1 历史结果不受影响。
 - V22 加法式建立 `export_artifacts`；模板源码随应用打包，不存在 Template 表。
-- V23 加法式建立用户加密 Credential、OptimizationTask AI Selection Snapshot 与最小 attempt Usage ledger；System Default Secret 不进入数据库，Credential / Task / Usage 使用复合用户归属约束。Phase 9 没有新增业务表或 migration；Insight 与 Observability 均使用已有事实表。
+- V23 加法式建立用户加密 Credential、OptimizationTask AI Selection Snapshot 与最小 attempt Usage ledger；System Default Secret 不进入数据库，Credential / Task / Usage 使用复合用户归属约束。Phase 9 的 Insight 与 Observability 仍只使用已有事实表。
+- V29 为可选的 reference-only Resume repair 建立 PostgreSQL durable reservation/result 表；claim 在 Provider dispatch 前独立提交，CLAIMED 与 dispatch 后失败永不 reclaim，只有明确为零 dispatch 的失败可再次 claim。表只保存受校验的 reference projection，不成为 canonical 或用户事实 Source of Truth。
+- V30 加法式强化已被 task、子版本、canonical pointer 或正式 Evidence 引用的 SOURCE 形状不可变；审查修改通过发布新 SOURCE 并 CAS 移动 pointer，不覆盖旧 SOURCE；保留 V27/V29 已发布迁移的 checksum，不原位修改历史迁移。
+- V32 加法式阻止直接删除仍被引用的 SOURCE，补强 SOURCE→TARGET 与 task source/target 的同简历约束；Resume 的正式删除路径先清理 Evidence/Task，再执行父级级联，避免为审计便利破坏整份资源删除。
+- V33 在启用 task 同简历保护前校验既有正式 task 边，发现历史越权关系即停止迁移，避免把坏数据默认为可信。
+- V34 在迁移前校验正式 Evidence 回溯到其分析任务的同一 SOURCE，阻止跨 Resume / 跨任务 Evidence，并阻止已有 Evidence 的 task/source 关系被重挂。
+- V35 为 `resume_parse_results` 补齐 owner 并将 canonical SOURCE 指针升级为 `(user_id, resume_id)` 复合外键，直接 SQL 也不能跨租户/跨简历重挂。
+- V36 冻结正式图的 ownership identity edges：ResumeVersion 归属、OptimizationTask 的 SOURCE / TARGET / JobTarget 输入，以及 EvidenceAnalysis / EvidenceRequirement 父关系均在插入后不可重挂；内容、状态、revision 与 async/result attachment 仍按各自 CAS 更新。该约束关闭“并发发布 Evidence 与父级重挂”及“task 创建后直接重挂 TARGET”的数据库绕过。
 - pgvector 当前用于简历 / JD 分块语义检索；向量不可用时部分 AI 链路可以降级。
 - 简历原文件由 `FileStorageService` 抽象访问，本地开发默认 local，生产默认 MinIO。
 - Chat 只通过业务侧 `AiGateway` 调用 OpenAI-compatible Adapter；生成式 Chat 为 BYOK-only，Embedding 保持独立的 platform-only 语义检索基础设施。二者共享 pinned HTTPS transport，密钥不得进入前端、日志或 Git。AI settings GET 只返回 `credentialStorageAvailable` 与用户 Credential 状态等 capability，不返回任何 secret；BYOK storage 未启用时仍可 Test，但不能 Save。

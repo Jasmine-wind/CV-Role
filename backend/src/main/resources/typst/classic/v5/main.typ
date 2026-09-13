@@ -205,6 +205,17 @@
   v(entry-gap)
 }
 
+#let render-skill-descriptions(entry) = {
+  let items = entry.skill-items.join("、")
+  let prefix = if entry.group != "" { entry.group + "：" } else { "" }
+  for description in entry.skill-descriptions {
+    if description != "" and description != items and description != prefix + items {
+      text(description)
+      linebreak()
+    }
+  }
+}
+
 #let render-skill-entry(entry) = {
   let items = entry.skill-items.join("、")
   if items != "" {
@@ -213,6 +224,9 @@
     }
     text(items)
     linebreak()
+  }
+  render-skill-descriptions(entry)
+  if items != "" or entry.skill-descriptions.len() > 0 {
     v(bullet-gap)
   }
 }

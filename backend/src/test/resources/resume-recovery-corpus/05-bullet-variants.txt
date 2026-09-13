@@ -1,0 +1,10 @@
+Synthetic Candidate E
+教育背景
+Maple University 信息系统 本科
+项目经历
+Queue Monitor 2022.04 - 2022.12
+• built a queue monitor for reconciliation jobs
+▪ reduced repeated manual checks
+- documented failure recovery steps
+技能
+工具：Git、Docker

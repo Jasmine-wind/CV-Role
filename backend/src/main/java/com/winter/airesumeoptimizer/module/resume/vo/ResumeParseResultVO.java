@@ -40,6 +40,15 @@ public class ResumeParseResultVO {
     @Schema(description = "文本提取质量提示")
     private String textQualityMessage;
 
+    @Schema(description = "原始文件物理页数；可能为已确认的零页")
+    private Integer pageCount;
+
+    @Schema(description = "是否已确认原始文件物理页数")
+    private Boolean pageCountKnown;
+
+    @Schema(description = "是否检测到 PDF 图像内容；未知时为空")
+    private Boolean imageContentPresent;
+
     @Schema(description = "结构化解析质量状态", example = "GOOD")
     private String parseQualityStatus;
 

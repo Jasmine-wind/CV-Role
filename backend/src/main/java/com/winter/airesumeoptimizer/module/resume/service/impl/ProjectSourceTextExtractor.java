@@ -1,5 +1,6 @@
 package com.winter.airesumeoptimizer.module.resume.service.impl;
 
+import com.winter.airesumeoptimizer.module.resume.dto.ResumeBlockDTO;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeProjectDTO;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeRawSectionBlockDTO;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeRawSectionDTO;
@@ -114,7 +115,7 @@ final class ProjectSourceTextExtractor {
         for (int index = 0; index < lines.size(); index++) {
             String line = lines.get(index);
             if (hasText(line)) {
-                sourceLines.add(new SourceLine(line.strip(), index + 1, index + 1));
+                sourceLines.add(new SourceLine(line.strip(), index + 1, index + 1, List.of(), null));
             }
         }
         List<ResumeProjectDTO> projects = new ArrayList<>();
@@ -171,7 +172,14 @@ final class ProjectSourceTextExtractor {
             return List.of();
         }
         Integer startLine = sourceRef.getStartLine();
-        List<ProjectSegment> segments = splitSegments(linesFromSourceRef(sourceRef), project.getSourceSectionId(), startLine);
+        List<SourceLine> sourceLines = linesFromSourceRef(sourceRef);
+        if (!canPartitionSourceOccurrences(sourceRef, sourceLines)) {
+            // Splitting a parent reference whose IDs cannot be assigned one-to-one to its rows
+            // would copy the whole boundary into every child project. Keep the parent candidate
+            // intact and let the review path resolve the ambiguous boundary.
+            return List.of();
+        }
+        List<ProjectSegment> segments = splitSegments(sourceLines, project.getSourceSectionId(), startLine);
         List<ResumeProjectDTO> projects = new ArrayList<>();
         List<SourceLine> pendingPrefixLines = new ArrayList<>();
         for (ProjectSegment segment : segments) {
@@ -257,14 +265,15 @@ final class ProjectSourceTextExtractor {
         }
         ResumeSourceRefDTO leftRef = left.getSourceRef();
         ResumeSourceRefDTO rightRef = right.getSourceRef();
-        if (sameSourceRange(leftRef, rightRef) || sourceRangeOverlap(leftRef, rightRef) >= 0.6) {
+        if (sameSourceRange(leftRef, rightRef) || sourceRangeOverlap(leftRef, rightRef) >= 0.6
+                || sameSourceOccurrence(leftRef, rightRef)) {
             return true;
         }
         String leftName = cleanProjectName(left.getName());
         String rightName = cleanProjectName(right.getName());
-        if (hasText(leftName) && hasText(rightName) && similarText(leftName, rightName)) {
-            return true;
-        }
+        // Similar display names do not prove the same occurrence. Two projects with the same
+        // title are legitimate; only an identical/overlapping source range or occurrence ID
+        // may be merged as an extraction echo.
         return false;
     }
 
@@ -294,6 +303,22 @@ final class ProjectSourceTextExtractor {
                 && left.getEndLine().equals(right.getEndLine());
     }
 
+    private static boolean sameSourceOccurrence(
+            ResumeSourceRefDTO left, ResumeSourceRefDTO right) {
+        if (left == null || right == null
+                || left.getSourceOccurrenceIds() == null || right.getSourceOccurrenceIds() == null) {
+            return false;
+        }
+        Set<String> rightIds = right.getSourceOccurrenceIds().stream()
+                .filter(ProjectSourceTextExtractor::hasUsableOccurrenceId)
+                .map(String::strip)
+                .collect(java.util.stream.Collectors.toSet());
+        return left.getSourceOccurrenceIds().stream()
+                .filter(ProjectSourceTextExtractor::hasUsableOccurrenceId)
+                .map(String::strip)
+                .anyMatch(rightIds::contains);
+    }
+
     private static double sourceRangeOverlap(ResumeSourceRefDTO left, ResumeSourceRefDTO right) {
         if (left == null || right == null || left.getStartLine() == null || left.getEndLine() == null || right.getStartLine() == null || right.getEndLine() == null) {
             return 0.0;
@@ -313,8 +338,13 @@ final class ProjectSourceTextExtractor {
         List<ResumeRawSectionBlockDTO> blocks = section == null || section.getBlocks() == null ? List.of() : section.getBlocks();
         for (ResumeRawSectionBlockDTO block : blocks) {
             if (block != null && hasText(block.getText())) {
-                Integer lineId = positiveOrFallback(block.getDisplayOrder(), block.getOriginalIndex(), block.getIndex(), lines.size() + 1);
-                lines.add(new SourceLine(block.getText().strip(), lineId, lineId));
+                Integer lineId = positiveOrFallback(
+                        increment(block.getOriginalIndex()),
+                        increment(block.getIndex()),
+                        increment(block.getDisplayOrder()),
+                        lines.size() + 1);
+                lines.add(new SourceLine(
+                        block.getText().strip(), lineId, lineId, sourceBlockIds(block), sourceRefMetadata(block)));
             }
         }
         return lines;
@@ -325,16 +355,72 @@ final class ProjectSourceTextExtractor {
             return List.of();
         }
         List<String> rawLines = sourceRef.getText().lines().toList();
+        int sourceLineCount = (int) rawLines.stream().filter(ProjectSourceTextExtractor::hasText).count();
+        List<String> occurrenceIds = usableIds(sourceRef.getSourceOccurrenceIds());
+        List<String> blockIds = usableIds(sourceRef.getSourceBlockIds());
         List<SourceLine> lines = new ArrayList<>();
         int start = sourceRef.getStartLine() == null ? 1 : sourceRef.getStartLine();
+        int sourceIndex = 0;
         for (int index = 0; index < rawLines.size(); index++) {
             String line = rawLines.get(index);
             if (hasText(line)) {
                 int lineId = start + index;
-                lines.add(new SourceLine(line.strip(), lineId, index));
+                List<String> lineOccurrenceIds = occurrenceIds.size() == sourceLineCount
+                        ? List.of(occurrenceIds.get(sourceIndex))
+                        : occurrenceIds.size() == 1 ? occurrenceIds : List.of();
+                List<String> lineBlockIds = blockIds.size() == sourceLineCount
+                        ? List.of(blockIds.get(sourceIndex)) : blockIds;
+                ResumeSourceRefDTO metadata = sourceRefForLine(
+                        sourceRef, line.strip(), lineId, lineBlockIds, lineOccurrenceIds);
+                lines.add(new SourceLine(line.strip(), lineId, index, lineBlockIds, metadata));
+                sourceIndex++;
             }
         }
         return lines;
+    }
+
+    private static boolean canPartitionSourceOccurrences(
+            ResumeSourceRefDTO sourceRef, List<SourceLine> sourceLines) {
+        if (sourceRef == null || sourceLines == null || sourceLines.isEmpty()) {
+            return false;
+        }
+        List<String> occurrenceIds = usableIds(sourceRef.getSourceOccurrenceIds());
+        return occurrenceIds.isEmpty() || occurrenceIds.size() == sourceLines.size();
+    }
+
+    private static ResumeSourceRefDTO sourceRefForLine(
+            ResumeSourceRefDTO parent,
+            String text,
+            int line,
+            List<String> blockIds,
+            List<String> occurrenceIds) {
+        return ResumeSourceRefDTO.builder()
+                .startLine(line)
+                .endLine(line)
+                .text(text)
+                .sourceBlockIds(blockIds.isEmpty() ? null : blockIds)
+                .sourceOccurrenceIds(occurrenceIds.isEmpty() ? null : occurrenceIds)
+                .page(parent.getPage())
+                .x(parent.getX())
+                .y(parent.getY())
+                .width(parent.getWidth())
+                .height(parent.getHeight())
+                .fontSize(parent.getFontSize())
+                .fontName(parent.getFontName())
+                .boldHint(parent.getBoldHint())
+                .indent(parent.getIndent())
+                .bulletHint(parent.getBulletHint())
+                .role(parent.getRole())
+                .sourceType(parent.getSourceType())
+                .build();
+    }
+
+    private static List<String> usableIds(List<String> values) {
+        return values == null ? List.of() : values.stream()
+                .filter(ProjectSourceTextExtractor::hasUsableOccurrenceId)
+                .map(String::strip)
+                .distinct()
+                .toList();
     }
 
     private static List<ProjectSegment> splitSegments(List<SourceLine> sourceLines, String sourceSectionId, Integer sourceStartLine) {
@@ -353,7 +439,18 @@ final class ProjectSourceTextExtractor {
                     && hasText(cleanProjectName(projectNameLabel.value()))
                     && current != null
                     && current.hasProjectFieldContent();
-            if (startsByIndex || startsByDatedHeader || startsByRepeatedName) {
+            boolean startsByStandaloneName = current != null
+                    && current.hasProjectFieldContent()
+                    && looksLikeStandaloneProjectName(line)
+                    && !startsByDatedHeader;
+            // A visual layout commonly emits a title row followed by a date/role row. Keep
+            // that pair in one segment; the dated row is a header signal, not a new project.
+            if (startsByDatedHeader && current != null && current.canPairWithDatedHeader()
+                    && isMetadataOnlyDatedHeader(line)) {
+                current.add(sourceLine);
+                continue;
+            }
+            if (startsByIndex || startsByDatedHeader || startsByRepeatedName || startsByStandaloneName) {
                 if (current != null && current.hasMeaningfulContent()) {
                     segments.add(current);
                 }
@@ -361,7 +458,9 @@ final class ProjectSourceTextExtractor {
                 if (startsByIndex) {
                     String tail = indexMatcher.group("tail");
                     if (hasText(tail) && !isProjectFieldLabel(tail)) {
-                        current.add(new SourceLine(tail.strip(), sourceLine.lineId(), sourceLine.order()));
+                        current.add(new SourceLine(
+                                tail.strip(), sourceLine.lineId(), sourceLine.order(),
+                                sourceLine.sourceBlockIds(), sourceLine.metadata()));
                     }
                 } else {
                     current.add(sourceLine);
@@ -381,7 +480,9 @@ final class ProjectSourceTextExtractor {
 
     private static ResumeProjectDTO buildProject(ProjectSegment segment, int index, ResumeSourceRefDTO parentSourceRef) {
         ProjectFields fields = parseFields(segment.lines());
-        List<String> evidence = unique(segment.lines().stream().map(SourceLine::text).toList());
+        // Source rows, including identical text rows, are separate evidence occurrences. Do not
+        // collapse them before the canonical projection has a chance to retain their IDs.
+        List<String> evidence = new ArrayList<>(segment.lines().stream().map(SourceLine::text).toList());
         if (evidence.isEmpty()) {
             return null;
         }
@@ -587,6 +688,18 @@ final class ProjectSourceTextExtractor {
      * 带日期的项目标题是跨格式都相对可靠的条目边界：只接受日期前有短标题、且标题不像职责句的行。
      * 没有明确边界的连续文本不在这里猜测，交给后续未决内容处理。
      */
+    private static boolean isMetadataOnlyDatedHeader(String line) {
+        Matcher matcher = DATE_RANGE_PATTERN.matcher(line == null ? "" : line.strip());
+        if (!matcher.find()) {
+            return false;
+        }
+        String before = line.substring(0, matcher.start()).strip();
+        if (before.isEmpty()) {
+            return true;
+        }
+        return before.length() <= 24 && before.matches("(?i).*(?:工程师|开发|负责人|成员|组长|engineer|developer|lead|member).*" );
+    }
+
     private static String projectNameFromDatedHeader(String line) {
         if (!hasText(line)) {
             return null;
@@ -736,7 +849,7 @@ final class ProjectSourceTextExtractor {
                 result.add(item);
             }
         }
-        return unique(result);
+        return result;
     }
 
     private static List<String> extractResponsibilityLines(List<String> evidence) {
@@ -766,10 +879,16 @@ final class ProjectSourceTextExtractor {
         if (!hasText(cleaned)) {
             return true;
         }
-        if (cleaned.matches("^[A-Za-z0-9+#.\\s,，、/\\\\+\\-]+$") && cleaned.matches(".*[,，、/\\\\+\\s].*")) {
+        if (TECH_ALIASES.keySet().stream().anyMatch(skill -> sameText(skill, cleaned))) {
             return true;
         }
-        return TECH_ALIASES.keySet().stream().anyMatch(skill -> sameText(skill, cleaned));
+        if (!cleaned.matches("^[A-Za-z0-9+#.\\s,，、/\\-]+$")
+                || !cleaned.matches(".*[,，、/\\s].*")) {
+            return false;
+        }
+        String[] tokens = cleaned.split("[,，、/\\s]+");
+        return tokens.length > 1 && java.util.Arrays.stream(tokens)
+                .allMatch(token -> TECH_ALIASES.keySet().stream().anyMatch(skill -> sameText(skill, token)));
     }
 
     private static void addSkills(String line, Set<String> skills) {
@@ -810,11 +929,129 @@ final class ProjectSourceTextExtractor {
         }
         int start = ids.stream().min(Integer::compareTo).orElse(ids.get(0));
         int end = ids.stream().max(Integer::compareTo).orElse(ids.get(ids.size() - 1));
+        List<ResumeSourceRefDTO> metadata = segment.lines().stream()
+                .map(SourceLine::metadata)
+                .filter(value -> value != null)
+                .toList();
+        ResumeSourceRefDTO first = metadata.isEmpty() ? parentSourceRef : metadata.get(0);
         return ResumeSourceRefDTO.builder()
                 .startLine(start)
                 .endLine(end)
                 .text(segment.sourceText(fallbackText))
+                .sourceBlockIds(segment.lines().stream()
+                        .flatMap(line -> line.sourceBlockIds().stream())
+                        .filter(ProjectSourceTextExtractor::hasText)
+                        .distinct()
+                        .toList())
+                .sourceOccurrenceIds(segment.lines().stream()
+                        .flatMap(line -> occurrenceIds(line).stream())
+                        .filter(ProjectSourceTextExtractor::hasText)
+                        .distinct()
+                        .toList())
+                .page(commonPage(metadata))
+                .x(minCoordinate(metadata.stream().map(ResumeSourceRefDTO::getX).toList()))
+                .y(minCoordinate(metadata.stream().map(ResumeSourceRefDTO::getY).toList()))
+                .width(boundingWidth(metadata))
+                .height(boundingHeight(metadata))
+                .fontSize(first == null ? null : first.getFontSize())
+                .fontName(first == null ? null : first.getFontName())
+                .boldHint(metadata.stream().anyMatch(value -> Boolean.TRUE.equals(value.getBoldHint())))
+                .indent(first == null ? null : first.getIndent())
+                .bulletHint(metadata.stream().anyMatch(value -> Boolean.TRUE.equals(value.getBulletHint())))
+                .role(first == null ? null : first.getRole())
+                .sourceType(first == null ? null : first.getSourceType())
                 .build();
+    }
+
+    private static ResumeSourceRefDTO sourceRefMetadata(ResumeRawSectionBlockDTO block) {
+        if (block == null) {
+            return null;
+        }
+        return ResumeSourceRefDTO.builder()
+                .text(block.getText())
+                .sourceBlockIds(sourceBlockIds(block))
+                .sourceOccurrenceIds(occurrenceIds(block))
+                .page(block.getPage())
+                .x(block.getX())
+                .y(block.getY())
+                .width(block.getWidth())
+                .height(block.getHeight())
+                .fontSize(block.getFontSize())
+                .fontName(block.getFontName())
+                .boldHint(block.getBoldHint())
+                .indent(block.getIndent())
+                .bulletHint(block.getBulletHint())
+                .role(block.getRole())
+                .sourceType(block.getSourceType())
+                .build();
+    }
+
+    private static Integer commonPage(List<ResumeSourceRefDTO> refs) {
+        if (refs == null || refs.isEmpty()) {
+            return null;
+        }
+        Integer page = refs.get(0).getPage();
+        return page != null && refs.stream().allMatch(ref -> page.equals(ref.getPage())) ? page : null;
+    }
+
+    private static Double minCoordinate(List<Double> values) {
+        return values.stream().filter(value -> value != null).min(Double::compareTo).orElse(null);
+    }
+
+    private static Double boundingWidth(List<ResumeSourceRefDTO> refs) {
+        Double left = minCoordinate(refs.stream().map(ResumeSourceRefDTO::getX).toList());
+        double right = refs.stream()
+                .filter(ref -> ref.getX() != null && ref.getWidth() != null)
+                .mapToDouble(ref -> ref.getX() + ref.getWidth())
+                .max()
+                .orElse(Double.NaN);
+        return left == null || Double.isNaN(right) ? null : right - left;
+    }
+
+    private static Double boundingHeight(List<ResumeSourceRefDTO> refs) {
+        Double top = minCoordinate(refs.stream().map(ResumeSourceRefDTO::getY).toList());
+        double bottom = refs.stream()
+                .filter(ref -> ref.getY() != null && ref.getHeight() != null)
+                .mapToDouble(ref -> ref.getY() + ref.getHeight())
+                .max()
+                .orElse(Double.NaN);
+        return top == null || Double.isNaN(bottom) ? null : bottom - top;
+    }
+
+    private static List<String> sourceBlockIds(ResumeRawSectionBlockDTO block) {
+        if (block == null) {
+            return List.of();
+        }
+        if (block.getSourceBlockIds() != null && !block.getSourceBlockIds().isEmpty()) {
+            return block.getSourceBlockIds().stream().filter(ProjectSourceTextExtractor::hasText).distinct().toList();
+        }
+        return hasText(block.getId()) ? List.of(block.getId()) : List.of();
+    }
+
+    private static List<String> occurrenceIds(ResumeRawSectionBlockDTO block) {
+        if (block == null || block.getSourceOccurrenceIds() == null) {
+            return List.of();
+        }
+        return block.getSourceOccurrenceIds().stream()
+                .filter(ProjectSourceTextExtractor::hasUsableOccurrenceId)
+                .map(String::strip)
+                .toList();
+    }
+
+    private static List<String> occurrenceIds(SourceLine line) {
+        if (line == null) {
+            return List.of();
+        }
+        if (line.metadata() != null && line.metadata().getSourceOccurrenceIds() != null
+                && !line.metadata().getSourceOccurrenceIds().isEmpty()) {
+            return line.metadata().getSourceOccurrenceIds().stream()
+                    .filter(ProjectSourceTextExtractor::hasUsableOccurrenceId)
+                    .map(String::strip)
+                    .toList();
+        }
+        // A source block ID is not an occurrence identity. Historical/source-free lines remain
+        // occurrence-free until a real indexed/source occurrence is available.
+        return List.of();
     }
 
     private static String extractRole(String text) {
@@ -871,6 +1108,10 @@ final class ProjectSourceTextExtractor {
         return first != null && !first.isEmpty() ? first : second == null ? List.of() : second;
     }
 
+    private static Integer increment(Integer value) {
+        return value == null ? null : value + 1;
+    }
+
     private static Integer positiveOrFallback(Integer... values) {
         if (values == null) {
             return 1;
@@ -909,6 +1150,12 @@ final class ProjectSourceTextExtractor {
 
     private static boolean hasText(String value) {
         return value != null && !value.isBlank();
+    }
+
+    private static boolean hasUsableOccurrenceId(String value) {
+        return hasText(value)
+                && !"null".equalsIgnoreCase(value.strip())
+                && !"undefined".equalsIgnoreCase(value.strip());
     }
 
     private static String blankToNull(String value) {
@@ -973,7 +1220,15 @@ final class ProjectSourceTextExtractor {
             List<String> responsibilities) {
     }
 
-    private record SourceLine(String text, Integer lineId, Integer order) {
+    private record SourceLine(
+            String text,
+            Integer lineId,
+            Integer order,
+            List<String> sourceBlockIds,
+            ResumeSourceRefDTO metadata) {
+        private SourceLine {
+            sourceBlockIds = sourceBlockIds == null ? List.of() : List.copyOf(sourceBlockIds);
+        }
     }
 
     private static final class ProjectSegment {
@@ -1004,6 +1259,19 @@ final class ProjectSourceTextExtractor {
             return lines.stream().anyMatch(line -> hasText(line.text()) && !PROJECT_INDEX_PATTERN.matcher(line.text()).matches());
         }
 
+        private boolean canPairWithDatedHeader() {
+            if (lines.size() != 1) {
+                return false;
+            }
+            String value = lines.get(0).text();
+            return hasText(value)
+                    && value.length() <= 60
+                    && !isProjectFieldLabel(value)
+                    && !value.matches(".*[。！？!?；;，,].*")
+                    && !isResponsibilityLine(value)
+                    && !isSkillOnly(value);
+        }
+
         private boolean hasProjectFieldContent() {
             return lines.stream().anyMatch(line -> {
                 String text = line.text();
@@ -1018,7 +1286,9 @@ final class ProjectSourceTextExtractor {
                         || PROJECT_RESPONSIBILITY_LABEL_PATTERN.matcher(text).matches()
                         || PROJECT_TECH_LABEL_PATTERN.matcher(text).matches()
                         || PROJECT_ENV_LABEL_PATTERN.matcher(text).matches();
-            });
+            }) || lines.size() > 1
+                    && lines.stream().skip(1)
+                    .anyMatch(line -> isResponsibilityLine(line.text()));
         }
 
         private String sourceSectionId() {

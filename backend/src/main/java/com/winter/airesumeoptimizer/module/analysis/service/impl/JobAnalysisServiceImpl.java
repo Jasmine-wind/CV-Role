@@ -22,10 +22,12 @@ import com.winter.airesumeoptimizer.module.task.enums.AsyncTaskErrorCode;
 import com.winter.airesumeoptimizer.module.task.enums.AsyncTaskType;
 import com.winter.airesumeoptimizer.module.task.service.AsyncTaskFailureHandler;
 import com.winter.airesumeoptimizer.module.task.service.AsyncTaskService;
-import java.util.concurrent.RejectedExecutionException;
+import com.winter.airesumeoptimizer.module.task.service.CommittedTaskDispatcher;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.task.TaskExecutor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class JobAnalysisServiceImpl implements JobAnalysisService {
@@ -46,6 +48,7 @@ public class JobAnalysisServiceImpl implements JobAnalysisService {
     private final AsyncTaskFailureHandler asyncTaskFailureHandler;
     private final AiGateway aiGateway;
     private final TaskExecutor taskExecutor;
+    private final CommittedTaskDispatcher taskDispatcher;
 
     public JobAnalysisServiceImpl(
             ResumeService resumeService,
@@ -55,7 +58,23 @@ public class JobAnalysisServiceImpl implements JobAnalysisService {
             AsyncTaskService asyncTaskService,
             AsyncTaskFailureHandler asyncTaskFailureHandler,
             AiGateway aiGateway,
-            @Qualifier("applicationTaskExecutor") TaskExecutor taskExecutor) {
+            TaskExecutor taskExecutor) {
+        this(resumeService, jobDescriptionParseService, evidenceMatchService, optimizationTaskService,
+                asyncTaskService, asyncTaskFailureHandler, aiGateway, taskExecutor,
+                CommittedTaskDispatcher.nonTransactional());
+    }
+
+    @Autowired
+    public JobAnalysisServiceImpl(
+            ResumeService resumeService,
+            JobDescriptionParseService jobDescriptionParseService,
+            EvidenceMatchService evidenceMatchService,
+            OptimizationTaskService optimizationTaskService,
+            AsyncTaskService asyncTaskService,
+            AsyncTaskFailureHandler asyncTaskFailureHandler,
+            AiGateway aiGateway,
+            @Qualifier("applicationTaskExecutor") TaskExecutor taskExecutor,
+            CommittedTaskDispatcher taskDispatcher) {
         this.resumeService = resumeService;
         this.jobDescriptionParseService = jobDescriptionParseService;
         this.evidenceMatchService = evidenceMatchService;
@@ -64,9 +83,11 @@ public class JobAnalysisServiceImpl implements JobAnalysisService {
         this.asyncTaskFailureHandler = asyncTaskFailureHandler;
         this.aiGateway = aiGateway;
         this.taskExecutor = taskExecutor;
+        this.taskDispatcher = taskDispatcher;
     }
 
     @Override
+    @Transactional
     public JobAnalysisStartVO start(Long userId, JobAnalysisStartRequestDTO request) {
         if (request == null) {
             throw new BusinessException(400, "岗位分析请求不能为空");
@@ -102,11 +123,13 @@ public class JobAnalysisServiceImpl implements JobAnalysisService {
     }
 
     @Override
+    @Transactional
     public JobAnalysisStartVO retry(Long userId, Long optimizationTaskId) {
         return submitAnalysis(userId, optimizationTaskId);
     }
 
     @Override
+    @Transactional
     public JobAnalysisStartVO retryLegacy(Long userId, Long resumeId, Long jobDescriptionId) {
         validateResumeId(resumeId);
         if (jobDescriptionId == null || jobDescriptionId <= 0) {
@@ -148,6 +171,7 @@ public class JobAnalysisServiceImpl implements JobAnalysisService {
                 && (STATUS_PENDING.equals(formalTask.getStatus()) || STATUS_RUNNING.equals(formalTask.getStatus()))) {
             throw new BusinessException(409, "岗位分析正在进行中");
         }
+        optimizationTaskService.lockForAsyncSubmission(userId, optimizationTaskId);
         ExecutionContext context = optimizationTaskService.getExecutionContext(userId, optimizationTaskId);
         if (context.aiSelection() != null
                 && context.aiSelection().source() == com.winter.airesumeoptimizer.infra.ai.AiSource.SYSTEM_DEFAULT) {
@@ -166,19 +190,20 @@ public class JobAnalysisServiceImpl implements JobAnalysisService {
             asyncTaskService.markFailed(asyncTaskId, "DUPLICATE_SUBMISSION", "岗位分析已在进行中或已经完成");
             throw exception;
         }
-        try {
-            taskExecutor.execute(() -> runAnalysis(asyncTaskId, userId, context));
-        } catch (RejectedExecutionException exception) {
-            try {
-                optimizationTaskService.markFailed(
-                        userId,
-                        optimizationTaskId,
-                        AsyncTaskErrorCode.TASK_REJECTED.name(),
-                        AsyncTaskErrorCode.TASK_REJECTED.getUserMessage());
-            } finally {
-                asyncTaskFailureHandler.markFailed(asyncTaskId, AsyncTaskErrorCode.TASK_REJECTED, exception);
+        taskDispatcher.dispatch(taskExecutor, () -> runAnalysis(asyncTaskId, userId, context), exception -> {
+            if (isTaskActive(userId, asyncTaskId)) {
+                try {
+                    optimizationTaskService.markFailed(
+                            userId,
+                            optimizationTaskId,
+                            asyncTaskId,
+                            AsyncTaskErrorCode.TASK_REJECTED.name(),
+                            AsyncTaskErrorCode.TASK_REJECTED.getUserMessage());
+                } finally {
+                    asyncTaskFailureHandler.markFailed(asyncTaskId, AsyncTaskErrorCode.TASK_REJECTED, exception);
+                }
             }
-        }
+        });
 
         return JobAnalysisStartVO.builder()
                 .taskId(asyncTaskId)
@@ -194,13 +219,26 @@ public class JobAnalysisServiceImpl implements JobAnalysisService {
     private void runAnalysis(Long asyncTaskId, Long userId, ExecutionContext context) {
         boolean formalTaskCompleted = false;
         try {
-            optimizationTaskService.markRunning(userId, context.optimizationTaskId());
+            optimizationTaskService.markRunning(
+                    userId, context.optimizationTaskId(), asyncTaskId);
             asyncTaskService.markRunning(asyncTaskId, "正在读取岗位要求");
+            if (!isTaskActive(userId, asyncTaskId)) {
+                return;
+            }
             asyncTaskService.updateStage(asyncTaskId, "正在准备简历内容");
+            if (!isTaskActive(userId, asyncTaskId)) {
+                return;
+            }
             if (context.frozenResumeSnapshot() == null || context.frozenResumeSnapshot().isBlank()) {
+                if (!isTaskActive(userId, asyncTaskId)) {
+                    return;
+                }
                 ResumeParseResultVO resumeParseResult = context.aiSelection() == null
                         ? ensureResumeReadyLegacy(userId, context.resumeId())
                         : ensureResumeReady(userId, context.resumeId(), context.aiSelection());
+                if (!isTaskActive(userId, asyncTaskId)) {
+                    return;
+                }
                 if (!isConfirmedResume(resumeParseResult)) {
                     failTask(
                             asyncTaskId,
@@ -220,11 +258,17 @@ public class JobAnalysisServiceImpl implements JobAnalysisService {
             // Retry 使用任务既有冻结快照；即使当前 Resume 之后重新解析，也不回写历史 Task。
 
             asyncTaskService.updateStage(asyncTaskId, "正在理解岗位要求");
+            if (!isTaskActive(userId, asyncTaskId)) {
+                return;
+            }
             JobDescriptionVO parsedJob = jobDescriptionParseService.parse(
                     userId,
                     context.jobDescriptionId(),
                     context.aiSelection(),
                     context.optimizationTaskId());
+            if (!isTaskActive(userId, asyncTaskId)) {
+                return;
+            }
             if (!STATUS_SUCCESS.equals(parsedJob.getParseStatus())) {
                 if (context.aiSelection() != null && context.aiSelection().isUserByok()) {
                     failTask(
@@ -245,20 +289,28 @@ public class JobAnalysisServiceImpl implements JobAnalysisService {
             }
 
             asyncTaskService.updateStage(asyncTaskId, "正在核对岗位要求与简历内容");
+            if (!isTaskActive(userId, asyncTaskId)) {
+                return;
+            }
             try {
                 if (context.aiSelection() == null) {
                     evidenceMatchService.analyze(
                             userId,
                             context.optimizationTaskId(),
+                            asyncTaskId,
                             parsedJob);
                 } else {
                     evidenceMatchService.analyze(
                             userId,
                             context.optimizationTaskId(),
+                            asyncTaskId,
                             parsedJob,
                             context.aiSelection());
                 }
             } catch (BusinessException exception) {
+                if (!isTaskActive(userId, asyncTaskId)) {
+                    return;
+                }
                 if (context.aiSelection() != null && context.aiSelection().isUserByok()) {
                     failTask(
                             asyncTaskId,
@@ -277,6 +329,9 @@ public class JobAnalysisServiceImpl implements JobAnalysisService {
                 return;
             }
 
+            if (!isTaskActive(userId, asyncTaskId)) {
+                return;
+            }
             asyncTaskService.updateStage(asyncTaskId, "正在整理分析结果");
             formalTaskCompleted = true;
             asyncTaskService.markSuccess(
@@ -285,12 +340,16 @@ public class JobAnalysisServiceImpl implements JobAnalysisService {
                     context.optimizationTaskId(),
                     firstPresent(parsedJob.getTitle(), "岗位分析完成"));
         } catch (RuntimeException exception) {
+            if (!isTaskActive(userId, asyncTaskId)) {
+                return;
+            }
             if (exception instanceof AiGatewayException gatewayException) {
                 try {
                     if (!formalTaskCompleted) {
                         optimizationTaskService.markFailed(
                                 userId,
                                 context.optimizationTaskId(),
+                                asyncTaskId,
                                 gatewayException.getFailureCode().name(),
                                 gatewayException.getMessage());
                     }
@@ -307,6 +366,7 @@ public class JobAnalysisServiceImpl implements JobAnalysisService {
                     optimizationTaskService.markFailed(
                             userId,
                             context.optimizationTaskId(),
+                            asyncTaskId,
                             AsyncTaskErrorCode.UNKNOWN_ERROR.name(),
                             AsyncTaskErrorCode.UNKNOWN_ERROR.getUserMessage());
                 }
@@ -322,7 +382,11 @@ public class JobAnalysisServiceImpl implements JobAnalysisService {
             Long optimizationTaskId,
             String errorCode,
             String message) {
-        optimizationTaskService.markFailed(userId, optimizationTaskId, errorCode, message);
+        if (!isTaskActive(userId, asyncTaskId)) {
+            return;
+        }
+        optimizationTaskService.markFailed(
+                userId, optimizationTaskId, asyncTaskId, errorCode, message);
         asyncTaskService.markFailed(asyncTaskId, errorCode, message);
     }
 
@@ -332,7 +396,11 @@ public class JobAnalysisServiceImpl implements JobAnalysisService {
             Long optimizationTaskId,
             AsyncTaskErrorCode errorCode,
             String message) {
-        optimizationTaskService.markFailed(userId, optimizationTaskId, errorCode.name(), message);
+        if (!isTaskActive(userId, asyncTaskId)) {
+            return;
+        }
+        optimizationTaskService.markFailed(
+                userId, optimizationTaskId, asyncTaskId, errorCode.name(), message);
         asyncTaskService.markFailed(asyncTaskId, errorCode.name(), message);
     }
 
@@ -367,6 +435,10 @@ public class JobAnalysisServiceImpl implements JobAnalysisService {
             }
         }
         return resumeService.parseWithSelection(userId, resumeId, selection);
+    }
+
+    private boolean isTaskActive(Long userId, Long asyncTaskId) {
+        return asyncTaskService.isActive(userId, asyncTaskId);
     }
 
     private boolean isConfirmedResume(ResumeParseResultVO result) {

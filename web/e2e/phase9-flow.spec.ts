@@ -55,7 +55,14 @@ async function uploadAndStartAnalysis(
   fixture = mixedFixture,
 ) {
   await page.getByTestId('home-resume-upload').setInputFiles(fixture)
+  const uploadFinished = page.waitForResponse(
+    (response) => response.request().method() === 'POST' && response.url().endsWith('/api/resumes'),
+  )
   await page.getByRole('button', { name: '上传简历', exact: true }).click()
+  await uploadFinished
+  await expect(page.locator('.home-resume-option').filter({ hasText: '可用于分析' })).toBeVisible({
+    timeout: 30_000,
+  })
   await page.locator('#home-jd').fill(jobDescription)
   await expect(page.getByTestId('home-start-analysis')).toBeEnabled({ timeout: 30_000 })
   await page.getByTestId('home-start-analysis').click()
@@ -185,6 +192,42 @@ test('happy path: upload, analysis, workspace, deterministic suggestion, preview
   await expect(page.getByTitle('简历 PDF 预览')).toBeVisible({ timeout: 45_000 })
 
   await previewAndExportAll(page, testInfo, 'mixed')
+})
+
+test('delayed upload keeps the JD and blocks analysis until the selected resume is ready', async ({ page }) => {
+  await registerAndLogin(page)
+  await expect(page.locator('#home-jd')).toBeVisible({ timeout: 15_000 })
+
+  let releaseUpload!: () => void
+  const uploadRelease = new Promise<void>((resolve) => {
+    releaseUpload = resolve
+  })
+  await page.route('**/api/resumes', async (route) => {
+    if (route.request().method() !== 'POST') {
+      await route.continue()
+      return
+    }
+    // Hold the multipart request before it reaches the API. Using route.fetch()
+    // here would rebuild the multipart stream and can drop the uploaded file.
+    await uploadRelease
+    await route.continue()
+  })
+
+  await page.getByTestId('home-resume-upload').setInputFiles(mixedFixture)
+  const uploadClick = page.getByRole('button', { name: '上传简历', exact: true }).click()
+  await expect(page.getByTestId('home-start-analysis')).toBeDisabled({ timeout: 15_000 })
+  await page.locator('#home-jd').fill(englishPlatformJobDescription)
+  await expect(page.getByTestId('home-start-analysis')).toBeDisabled()
+  await expect(page.getByText('简历正在上传，请稍候。', { exact: true })).toBeVisible()
+
+  releaseUpload()
+  await uploadClick
+  await page.unroute('**/api/resumes')
+  await expect(page.locator('.home-resume-option.is-selected')).toContainText('可用于分析', {
+    timeout: 30_000,
+  })
+  await expect(page.locator('#home-jd')).toHaveValue(englishPlatformJobDescription)
+  await expect(page.getByTestId('home-start-analysis')).toBeEnabled({ timeout: 15_000 })
 })
 
 test('returning user can reopen the same optimization from recent tasks', async ({ page }) => {

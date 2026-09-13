@@ -1,0 +1,9 @@
+Synthetic Candidate D
+Summary
+Focused on service reliability, measurable delivery, and
+observability across small platform teams.
+Skills
+Java、PostgreSQL、Redis
+Projects
+Signal Trace 2023.03 - 2023.10
+Improved operational visibility without changing source facts.

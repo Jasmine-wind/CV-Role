@@ -15,6 +15,8 @@ export interface StartBlockReasonInput {
   preparationTaskId?: number | null
   analysisRunning?: boolean
   startingAnalysis?: boolean
+  uploading?: boolean
+  resumeListLoading?: boolean
   aiConfigurationState?: AiProviderConfigurationState | null
 }
 
@@ -109,6 +111,10 @@ export const getStartBlockMessage = (reason: string) => {
       return '当前岗位分析正在进行。'
     case '当前任务正在启动':
       return '当前任务正在启动。'
+    case '简历正在上传':
+      return '简历正在上传，请稍候。'
+    case '正在刷新简历列表':
+      return '正在刷新简历列表，请稍候。'
     case 'AI 尚未配置':
       return '开始优化前，请先配置并启用自己的 AI API。'
     case 'AI 配置尚未启用':
@@ -124,10 +130,14 @@ export const getStartBlockReason = ({
   preparationTaskId,
   analysisRunning = false,
   startingAnalysis = false,
+  uploading = false,
+  resumeListLoading = false,
   aiConfigurationState = null,
 }: StartBlockReasonInput) => {
   if (startingAnalysis) return '当前任务正在启动'
   if (analysisRunning) return '岗位分析正在进行'
+  if (uploading) return '简历正在上传'
+  if (resumeListLoading) return '正在刷新简历列表'
   if (!resume) return '请先选择一份简历'
 
   const status = getResumeStatus(resume, preparationTaskId)

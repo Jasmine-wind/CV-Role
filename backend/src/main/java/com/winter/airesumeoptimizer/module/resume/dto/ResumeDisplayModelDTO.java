@@ -62,6 +62,7 @@ public class ResumeDisplayModelDTO {
     public static class SkillSummary {
         private List<String> topSkills;
         private List<SkillGroup> groups;
+        private List<String> descriptions;
     }
 
     @Getter
@@ -72,6 +73,7 @@ public class ResumeDisplayModelDTO {
     public static class SkillGroup {
         private String name;
         private List<String> skills;
+        private List<String> descriptions;
     }
 
     @Getter

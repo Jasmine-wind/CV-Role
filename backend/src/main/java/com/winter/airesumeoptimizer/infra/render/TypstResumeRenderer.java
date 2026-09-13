@@ -8,17 +8,23 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
 import java.util.TimeZone;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
-import org.apache.pdfbox.Loader;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.cos.COSName;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDDocumentInformation;
+import org.apache.pdfbox.pdmodel.PDPage;
+import org.apache.pdfbox.pdmodel.PDResources;
+import org.apache.pdfbox.pdmodel.font.PDFont;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Component;
 
@@ -36,6 +42,13 @@ public class TypstResumeRenderer implements ResumePdfRenderer {
     private static final String DATA_FILENAME = "data.typ";
     private static final String ENTRY_FILENAME = "main.typ";
     private static final String OUTPUT_FILENAME = "output.pdf";
+    private static final List<String> AUDITED_FONT_FILES = List.of(
+            "NotoSansCJK-Regular.ttc", "NotoSansCJK-Bold.ttc");
+    private static final List<Path> DEFAULT_FONT_DIRECTORIES = List.of(
+            Path.of("/opt/resume-fonts"),
+            Path.of("/usr/share/fonts/google-noto-sans-cjk-fonts"),
+            Path.of("/usr/share/fonts/opentype/noto"),
+            Path.of("/usr/share/fonts/truetype/noto"));
 
     private final TypstRenderProperties properties;
     private final TypstResumeSourceMapper sourceMapper;
@@ -75,6 +88,7 @@ public class TypstResumeRenderer implements ResumePdfRenderer {
             }
             byte[] pdf = Files.readAllBytes(outputPath);
             pdf = applyStableDocumentMetadata(pdf, document);
+            verifyAuditedFontWeights(pdf);
             return new ResumePdfRenderResult(pdf, layoutInspector.inspect(pdf));
         } catch (IOException exception) {
             throw new ResumeRenderException("简历渲染失败，请稍后重试", exception);
@@ -132,22 +146,12 @@ public class TypstResumeRenderer implements ResumePdfRenderer {
                 "--package-path", workDir.resolve(".packages").toString(),
                 "--package-cache-path", workDir.resolve(".package-cache").toString(),
                 "--creation-timestamp", "0"));
-        String fontPath = properties.getFontPath();
-        if (fontPath != null && !fontPath.isBlank()) {
-            final Path configuredFontPath;
-            try {
-                configuredFontPath = Path.of(fontPath).toAbsolutePath().normalize();
-            } catch (InvalidPathException exception) {
-                throw new ResumeRenderException("简历字体环境不可用，请稍后重试", exception);
-            }
-            if (!Files.isDirectory(configuredFontPath)) {
-                throw new ResumeRenderException("简历字体环境不可用，请稍后重试");
-            }
-            // 生产目录只包含经过验证的静态字体，禁止 Typst 回退到宿主机 variable/Thin 字体。
-            command.add("--font-path");
-            command.add(configuredFontPath.toString());
-            command.add("--ignore-system-fonts");
-        }
+        Path fontPath = prepareAuditedFontDirectory(workDir);
+        // Always provide an isolated directory containing only the audited static Regular/Bold
+        // faces. An empty configuration must not silently re-enable host variable/Thin fonts.
+        command.add("--font-path");
+        command.add(fontPath.toString());
+        command.add("--ignore-system-fonts");
         ProcessBuilder builder = new ProcessBuilder(command);
         builder.directory(workDir.toFile());
         // 不使用 PIPE：先 wait 再读取可能因子进程输出填满缓冲区而死锁；同时避免诊断原文把简历内容写入日志。
@@ -158,6 +162,76 @@ public class TypstResumeRenderer implements ResumePdfRenderer {
         } catch (IOException exception) {
             log.error("Typst 编译器启动失败: binary={}", properties.getTypstBinary(), exception);
             throw new ResumeRenderException("简历渲染服务暂不可用，请稍后重试", exception);
+        }
+    }
+
+    private Path prepareAuditedFontDirectory(Path workDir) {
+        String configuredPath = properties.getFontPath();
+        Path sourceDirectory;
+        if (configuredPath == null || configuredPath.isBlank()) {
+            sourceDirectory = DEFAULT_FONT_DIRECTORIES.stream()
+                    .filter(this::hasAuditedFontFiles)
+                    .findFirst()
+                    .orElseThrow(() -> new ResumeRenderException(
+                            "简历字体环境不可用，请配置包含 NotoSansCJK Regular/Bold 的字体目录"));
+        } else {
+            try {
+                sourceDirectory = Path.of(configuredPath).toAbsolutePath().normalize();
+            } catch (InvalidPathException exception) {
+                throw new ResumeRenderException("简历字体环境不可用，请稍后重试", exception);
+            }
+            if (!hasAuditedFontFiles(sourceDirectory)) {
+                throw new ResumeRenderException("简历字体环境不可用，请稍后重试");
+            }
+        }
+
+        Path isolatedDirectory = workDir.resolve(".resume-fonts");
+        try {
+            Files.createDirectories(isolatedDirectory);
+            for (String fileName : AUDITED_FONT_FILES) {
+                Files.copy(sourceDirectory.resolve(fileName), isolatedDirectory.resolve(fileName),
+                        StandardCopyOption.REPLACE_EXISTING);
+            }
+        } catch (IOException exception) {
+            throw new ResumeRenderException("简历字体环境不可用，请稍后重试", exception);
+        }
+        return isolatedDirectory;
+    }
+
+    private boolean hasAuditedFontFiles(Path directory) {
+        if (directory == null || !Files.isDirectory(directory)) {
+            return false;
+        }
+        return AUDITED_FONT_FILES.stream()
+                .map(directory::resolve)
+                .allMatch(Files::isRegularFile);
+    }
+
+    /**
+     * Defensive post-condition for environments that accidentally bypass the isolated font path.
+     * A generated PDF containing a light/thin CJK face is rejected rather than delivered with a
+     * visually different weight.
+     */
+    private void verifyAuditedFontWeights(byte[] pdf) {
+        try (PDDocument document = Loader.loadPDF(pdf)) {
+            for (PDPage page : document.getPages()) {
+                PDResources resources = page.getResources();
+                if (resources == null) {
+                    continue;
+                }
+                for (COSName name : resources.getFontNames()) {
+                    PDFont font = resources.getFont(name);
+                    String fontName = font == null || font.getName() == null
+                            ? "" : font.getName().toLowerCase(Locale.ROOT);
+                    if (fontName.contains("thin") || fontName.contains("extralight")
+                            || fontName.contains("demilight") || fontName.contains("light")
+                            || fontName.contains("variable") || fontName.contains("-vf")) {
+                        throw new ResumeRenderException("简历字体环境不可用，请稍后重试");
+                    }
+                }
+            }
+        } catch (IOException exception) {
+            throw new ResumeRenderException("简历 PDF 字体无法检查", exception);
         }
     }
 

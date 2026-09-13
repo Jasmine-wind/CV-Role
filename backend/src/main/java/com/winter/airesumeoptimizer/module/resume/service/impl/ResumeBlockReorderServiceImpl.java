@@ -29,6 +29,7 @@ public class ResumeBlockReorderServiceImpl implements ResumeBlockReorderService 
         }
 
         List<ResumeBlockDTO> ordered = blocks.stream()
+                .filter(java.util.Objects::nonNull)
                 .map(this::copyWithStableOriginalIndex)
                 .sorted(Comparator
                         .comparingInt((ResumeBlockDTO block) -> sectionOrder(block.getSourceSection()))
@@ -42,20 +43,29 @@ public class ResumeBlockReorderServiceImpl implements ResumeBlockReorderService 
     }
 
     private ResumeBlockDTO copyWithStableOriginalIndex(ResumeBlockDTO block) {
-        if (block == null) {
-            return ResumeBlockDTO.builder()
-                    .originalIndex(Integer.MAX_VALUE)
-                    .displayOrder(Integer.MAX_VALUE)
-                    .build();
-        }
         int originalIndex = block.getOriginalIndex() == null
                 ? block.getIndex() == null ? Integer.MAX_VALUE : block.getIndex()
                 : block.getOriginalIndex();
         return ResumeBlockDTO.builder()
+                .id(block.getId())
                 .index(block.getIndex())
                 .originalIndex(originalIndex)
                 .displayOrder(block.getDisplayOrder())
                 .text(block.getText())
+                .iconType(block.getIconType())
+                .page(block.getPage())
+                .x(block.getX())
+                .y(block.getY())
+                .width(block.getWidth())
+                .height(block.getHeight())
+                .fontSize(block.getFontSize())
+                .fontName(block.getFontName())
+                .boldHint(block.getBoldHint())
+                .indent(block.getIndent())
+                .bulletHint(block.getBulletHint())
+                .role(block.getRole())
+                .sourceBlockIds(block.getSourceBlockIds())
+                .sourceOccurrenceIds(block.getSourceOccurrenceIds())
                 .prevText(block.getPrevText())
                 .nextText(block.getNextText())
                 .sourceType(block.getSourceType())

@@ -12,11 +12,33 @@ export type ResumeDocumentContactType =
   | 'LOCATION'
   | 'OTHER'
 
+export interface ResumeSourceRef {
+  startLine?: number | null
+  endLine?: number | null
+  text?: string | null
+  sourceBlockIds?: string[] | null
+  sourceOccurrenceIds?: string[] | null
+  page?: number | null
+  x?: number | null
+  y?: number | null
+  width?: number | null
+  height?: number | null
+  fontSize?: number | null
+  fontName?: string | null
+  boldHint?: boolean | null
+  indent?: number | null
+  bulletHint?: boolean | null
+  role?: string | null
+  sourceType?: string | null
+}
+
 export interface ResumeDocumentContact {
   id: string
   type: string
   label: string | null
   value: string
+  sourceRef?: ResumeSourceRef | null
+  sourceOccurrenceIds?: string[] | null
 }
 
 export interface ResumeDocumentBasics {
@@ -24,11 +46,16 @@ export interface ResumeDocumentBasics {
   jobIntention?: string | null
   highestEducation?: string | null
   contacts: ResumeDocumentContact[]
+  sourceRef?: ResumeSourceRef | null
+  sourceOccurrenceIds?: string[] | null
+  fieldSourceRefs?: Record<string, ResumeSourceRef> | null
 }
 
 export interface ResumeDocumentBullet {
   id: string
   text: string
+  sourceRef?: ResumeSourceRef | null
+  sourceOccurrenceIds?: string[] | null
 }
 
 /**
@@ -46,8 +73,23 @@ export interface ResumeDocumentEntry {
   startDate: string | null
   endDate: string | null
   location: string | null
+  environment?: string | null
+  mentor?: string | null
+  techStack?: string[] | null
+  techStackSourceRefs?: (ResumeSourceRef | null)[] | null
   group: string | null
+  awardTitle?: string | null
+  awardLevel?: string | null
+  awardCompetition?: string | null
+  awardRanking?: string | null
+  awardDate?: string | null
   skillItems: string[] | null
+  skillDescriptions?: string[] | null
+  sourceRef?: ResumeSourceRef | null
+  sourceOccurrenceIds?: string[] | null
+  fieldSourceRefs?: Record<string, ResumeSourceRef> | null
+  skillItemSourceRefs?: (ResumeSourceRef | null)[] | null
+  skillDescriptionSourceRefs?: (ResumeSourceRef | null)[] | null
   bullets: ResumeDocumentBullet[]
 }
 
@@ -56,10 +98,16 @@ export interface ResumeDocumentSection {
   kind: string
   title: string
   entries: ResumeDocumentEntry[]
+  sourceRef?: ResumeSourceRef | null
+  sourceOccurrenceIds?: string[] | null
 }
 
 export interface ResumeDocument {
   schemaVersion: string
   basics: ResumeDocumentBasics
   sections: ResumeDocumentSection[]
+  sourceRef?: ResumeSourceRef | null
+  sourceOccurrenceIds?: string[] | null
+  sourceOccurrenceTexts?: Record<string, string> | null
+  sourceOccurrencePrimaryIds?: Record<string, string> | null
 }

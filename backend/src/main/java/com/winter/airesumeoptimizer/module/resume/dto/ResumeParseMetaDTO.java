@@ -18,10 +18,18 @@ public class ResumeParseMetaDTO {
     @Schema(description = "解析模式", example = "BALANCED")
     private String parseMode;
 
+    /** Physical page count when the extractor can establish it; zero remains a valid known count. */
+    @Schema(description = "原始文件物理页数；0 可能是已确认的零页，也可能是未知，需结合 pageCountKnown")
+    private Integer pageCount;
+
+    /** Whether pageCount is known for the original file format and extraction path. */
+    @Schema(description = "是否已确认原始文件物理页数；DOC/DOCX 通常为 false")
+    private Boolean pageCountKnown;
+
     @Schema(description = "解析器版本", example = "resume-parser-v2.9.17")
     private String parserVersion;
 
-    @Schema(description = "AI 状态：USED/SKIPPED/FALLBACK/DISABLED")
+    @Schema(description = "AI 状态：USED/SKIPPED/FALLBACK/REFERENCE_ONLY/DISABLED")
     private String aiStatus;
 
     @Schema(description = "本次解析是否实际使用或采用了 AI 结果")

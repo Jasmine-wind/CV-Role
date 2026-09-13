@@ -44,8 +44,10 @@ public class ResumeStructureParseServiceImpl implements ResumeStructureParseServ
     private static final Pattern GPA_PATTERN = Pattern.compile("(?:GPA|绩点|学分绩点)[:：\\s]*(?<gpa>\\d(?:\\.\\d+)?\\s*/\\s*\\d(?:\\.\\d+)?)", Pattern.CASE_INSENSITIVE);
     private static final Pattern LANGUAGE_PATTERN = Pattern.compile("(?:语言能力|英语)[:：\\s]*(?<language>.*?(?:CET[-\\s]*\\d\\s*[:：]?\\s*\\d+分?).*)", Pattern.CASE_INSENSITIVE);
     private static final Pattern RANKING_PATTERN = Pattern.compile("(?<ranking>(?:排名|第)\\s*[\\u4e00-\\u9fa5A-Za-z0-9 /.-]*\\s*第?\\s*\\d+|专业第\\s*\\d+)");
-    private static final Pattern WORK_YEARS_LABEL_PATTERN = Pattern.compile("(?:工作年限|工作经验|工作经历|从业年限|从业经验)[:：\\s]*(?<years>\\d{1,2})\\s*(?:年)?");
-    private static final Pattern WORK_YEARS_PATTERN = Pattern.compile("(?<years>\\d{1,2})\\s*年(?:以上)?(?:工作|开发|从业|项目|后端|Java)?(?:经验|经历)?");
+    private static final Pattern WORK_YEARS_LABEL_PATTERN = Pattern.compile(
+            "(?:工作年限|工作经验|工作经历|从业年限|从业经验)[:：\\s]*(?<years>(?:[1-9]|[1-3]\\d|40))(?!\\d)\\s*(?:年)?");
+    private static final Pattern WORK_YEARS_PATTERN = Pattern.compile(
+            "(?<!\\d)(?<years>(?:[1-9]|[1-3]\\d|40))(?!\\d)\\s*年\\s*(?:以上\\s*)?(?:(?:工作|开发|从业|项目|后端|Java|研发)\\s*)*(?:经验|经历)");
     private static final Pattern DATE_RANGE_PATTERN = Pattern.compile(".*(?:\\d{4}[./年-]\\d{1,2}|\\d{4}\\s*[-~—至]\\s*\\d{4}|至今|Present).*",
             Pattern.CASE_INSENSITIVE);
     private static final Pattern DATE_YEAR_PATTERN = Pattern.compile("(?<!\\d)(?:19|20)\\d{2}(?!\\d)");
@@ -276,12 +278,11 @@ public class ResumeStructureParseServiceImpl implements ResumeStructureParseServ
             }
             List<String> expandedLines = expandTopMixedHeaderLine(line, beforeFirstHeading);
             for (String expandedLine : expandedLines) {
-                String normalized = normalizeForDedupe(expandedLine);
-                // 只折叠相邻重复抽取，保留合法的跨章节重复事实。
-                if (!normalized.equals(previousNormalizedLine)) {
-                    lines.add(expandedLine);
-                }
-                previousNormalizedLine = normalized;
+                // Text equality is not source identity. The extraction layer records adjacent
+                // duplicates as a quality signal; the deterministic parser must still retain
+                // every occurrence for downstream provenance and coverage accounting.
+                lines.add(expandedLine);
+                previousNormalizedLine = normalizeForDedupe(expandedLine);
             }
             if (matchHeading(line) != null) {
                 beforeFirstHeading = false;
@@ -492,6 +493,15 @@ public class ResumeStructureParseServiceImpl implements ResumeStructureParseServ
                     && residual.matches("[\\u4e00-\\u9fa5]{2,12}")) {
                 return residual;
             }
+            // The cleaning stage may project a mixed contact row into independent lines before
+            // the rule parser runs (for example: name / city / phone / email). In that shape the
+            // city no longer carries a separator or contact token, so retain the standalone
+            // Chinese header value as location while still excluding the candidate's name.
+            String candidate = line == null ? "" : line.strip();
+            if (lines != null && lines.size() > 1
+                    && !candidate.equals(name) && candidate.matches("[\\u4e00-\\u9fa5]{2,12}")) {
+                return candidate;
+            }
         }
         return null;
     }
@@ -595,13 +605,41 @@ public class ResumeStructureParseServiceImpl implements ResumeStructureParseServ
             Matcher matcher = MAJOR_PATTERN.matcher(line);
             if (matcher.find()) {
                 String major = matcher.group("major").replaceAll("^(在读|本科|硕士|博士|大专|专科)+", "").strip();
-                if (major.matches(".*(?:大学|学院|学校|毕业|预计).*") || hasAnySkill(major)) {
+                if (major.matches(".*(?:大学|学院|学校|毕业|预计).*") || hasAnySkill(major)
+                        || !sourceContains(line, major)) {
                     continue;
                 }
                 return major;
             }
         }
         return null;
+    }
+
+    private boolean sourceContains(String line, String value) {
+        if (line == null || value == null || line.isBlank() || value.isBlank()) {
+            return false;
+        }
+        String source = line.replaceAll("\\s+", "").toLowerCase(Locale.ROOT);
+        String target = value.replaceAll("\\s+", "").toLowerCase(Locale.ROOT);
+        int start = source.indexOf(target);
+        while (start >= 0) {
+            int end = start + target.length();
+            boolean leftContinuesAsciiToken = start > 0
+                    && isAsciiWord(source.charAt(start - 1))
+                    && isAsciiWord(target.charAt(0));
+            boolean rightContinuesAsciiToken = end < source.length()
+                    && isAsciiWord(source.charAt(end))
+                    && isAsciiWord(target.charAt(target.length() - 1));
+            if (!leftContinuesAsciiToken && !rightContinuesAsciiToken) {
+                return true;
+            }
+            start = source.indexOf(target, start + 1);
+        }
+        return false;
+    }
+
+    private boolean isAsciiWord(char value) {
+        return value < 128 && Character.isLetterOrDigit(value);
     }
 
     private String extractGraduationDate(List<String> lines) {
@@ -623,13 +661,17 @@ public class ResumeStructureParseServiceImpl implements ResumeStructureParseServ
     }
 
     private String extractWorkYears(String rawText) {
-        Matcher labelMatcher = WORK_YEARS_LABEL_PATTERN.matcher(rawText);
-        if (labelMatcher.find()) {
-            return labelMatcher.group("years") + "年";
+        for (String line : rawText == null ? new String[0] : rawText.split("\\R")) {
+            Matcher labelMatcher = WORK_YEARS_LABEL_PATTERN.matcher(line);
+            if (labelMatcher.find()) {
+                return labelMatcher.group("years") + "年";
+            }
         }
-        Matcher matcher = WORK_YEARS_PATTERN.matcher(rawText);
-        if (matcher.find()) {
-            return matcher.group("years") + "年";
+        for (String line : rawText == null ? new String[0] : rawText.split("\\R")) {
+            Matcher matcher = WORK_YEARS_PATTERN.matcher(line);
+            if (matcher.find()) {
+                return matcher.group("years") + "年";
+            }
         }
         return null;
     }
@@ -1030,7 +1072,6 @@ public class ResumeStructureParseServiceImpl implements ResumeStructureParseServ
         List<String> nonBlankLines = lines.stream()
                 .map(this::cleanSectionLine)
                 .filter(line -> !line.isBlank())
-                .distinct()
                 .toList();
         if (GENERAL_SECTION.equals(sectionType) && nonBlankLines.isEmpty() && !sections.isEmpty()) {
             return;
@@ -1126,9 +1167,9 @@ public class ResumeStructureParseServiceImpl implements ResumeStructureParseServ
                 }
                 String key = normalizeForDedupe(cleaned);
                 assignedLines.add(key);
-                if (result.stream().noneMatch(existing -> normalizeForDedupe(existing).equals(key))) {
-                    result.add(cleaned);
-                }
+                // Preserve repeated source rows. The key is only an assignment hint for
+                // compatibility fields; it is not an occurrence identity.
+                result.add(cleaned);
             }
         }
         return result;
@@ -1154,7 +1195,8 @@ public class ResumeStructureParseServiceImpl implements ResumeStructureParseServ
         String candidate = line == null ? "" : line.strip();
         return candidate.length() <= 40
                 && candidate.matches(".*(?:工程师|开发|经理|总监|专员|设计师|顾问|运营|产品|测试|架构师|研究员).*")
-                && !candidate.matches(".*[，,。；;].*");
+                && !candidate.matches(".*[，,。；;].*")
+                && !candidate.matches(".*(?:19|20)\\d{2}.*");
     }
 
     private boolean isPersonalInfoLine(String line) {
@@ -1178,6 +1220,13 @@ public class ResumeStructureParseServiceImpl implements ResumeStructureParseServ
         sections.stream()
                 .filter(section -> "SKILLS".equals(section.getSectionType()))
                 .flatMap(section -> section.getLines().stream())
+                .forEach(line -> addSkillsFromLine(line, skills));
+        // Header layouts may place a standalone skill beside the name/contact column before
+        // any section heading. Retain that source occurrence without classifying every job-title
+        // sentence as a skill-bearing row.
+        sections.stream()
+                .flatMap(section -> section.getLines().stream())
+                .filter(line -> HEADER_SIDE_SKILLS.stream().anyMatch(skill -> skill.equalsIgnoreCase(line.strip())))
                 .forEach(line -> addSkillsFromLine(line, skills));
         workExperiences.forEach(line -> addSkillsFromLine(line, skills));
         projects.forEach(line -> addSkillsFromLine(line, skills));
@@ -1272,8 +1321,7 @@ public class ResumeStructureParseServiceImpl implements ResumeStructureParseServ
                         || assignedLines.contains(key)
                         || isPersonalInfoLine(cleaned)
                         || isSectionHeading(cleaned)
-                        || isLowValueOtherLine(cleaned)
-                        || others.stream().anyMatch(existing -> normalizeForDedupe(existing).equals(key))) {
+                        || isLowValueOtherLine(cleaned)) {
                     continue;
                 }
                 others.add(cleaned);

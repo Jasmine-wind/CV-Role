@@ -140,6 +140,12 @@ public class ResumeStructuredContentDTO {
     @Schema(description = "AI 结构化补全缓存 key")
     private String aiStructuredParseCacheKey;
 
+    @Schema(description = "AI 结构恢复候选，仅供用户审阅，不是已确认事实")
+    private ResumeStructuredContentDTO aiStructuredParseReference;
+
+    @Schema(description = "AI 结构恢复候选置信度；候选默认保持低置信度")
+    private Double aiStructuredParseReferenceConfidence;
+
     @Schema(description = "文本提取耗时，毫秒")
     private Long textExtractDurationMs;
 

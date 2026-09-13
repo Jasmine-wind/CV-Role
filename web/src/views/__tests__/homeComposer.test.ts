@@ -134,6 +134,24 @@ describe('homeComposer', () => {
     })).toBe('当前任务正在启动')
   })
 
+  it('blocks while a resume upload is in flight', () => {
+    expect(getStartBlockReason({
+      resume: resume(),
+      jobDescription: '岗位要求',
+      uploading: true,
+      aiConfigurationState: 'ACTIVE',
+    })).toBe('简历正在上传')
+  })
+
+  it('blocks while the resume list is refreshing', () => {
+    expect(getStartBlockReason({
+      resume: resume(),
+      jobDescription: '岗位要求',
+      resumeListLoading: true,
+      aiConfigurationState: 'ACTIVE',
+    })).toBe('正在刷新简历列表')
+  })
+
   it('accepts PDF, DOC and DOCX files', () => {
     expect(getResumeFileValidationError(file('resume.PDF', 1024))).toBeNull()
     expect(getResumeFileValidationError(file('resume.docx', 1024))).toBeNull()

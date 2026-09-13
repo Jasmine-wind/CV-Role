@@ -176,7 +176,9 @@ class ContextAwareAiGatewayServiceTest {
 
         assertThat(result.text()).isEqualTo("byok ok");
         assertThat(result.usage().gatewayAttemptCount()).isEqualTo(2);
-        assertThat(result.usage().providerDispatchCount()).isEqualTo(2);
+        // The first failure was proven pre-dispatch by its zero dispatch count; only the
+        // successful second adapter call counts as a provider dispatch.
+        assertThat(result.usage().providerDispatchCount()).isEqualTo(1);
         ArgumentCaptor<AiProviderRequest> requests = ArgumentCaptor.forClass(AiProviderRequest.class);
         verify(adapter, org.mockito.Mockito.times(2)).complete(requests.capture());
         assertThat(requests.getAllValues()).extracting(AiProviderRequest::apiKey)
@@ -206,6 +208,31 @@ class ContextAwareAiGatewayServiceTest {
         verify(adapter, never()).complete(any());
         verify(credentialService, never()).resolveCurrentSelection(anyLong());
         verify(usageRecorder, never()).recordFailure(any(), any(), any(), anyLong(), anyInt(), anyInt());
+    }
+
+    @Test
+    void deterministicCredentialTestValidatesUrlStructureWithoutRunnerDns() {
+        AiCredentialService credentialService = mock(AiCredentialService.class);
+        AiUsageRecorder usageRecorder = mock(AiUsageRecorder.class);
+        ContextAwareAiGatewayService gateway = new ContextAwareAiGatewayService(
+                credentialService,
+                new DeterministicFakeAiProviderAdapter(new ObjectMapper()),
+                usageRecorder,
+                systemProperties(),
+                new ObjectMapper(),
+                new BaseUrlPolicy(host -> {
+                    throw new AssertionError("deterministic adapter must not resolve DNS");
+                }));
+
+        AiCredentialTestResult result = gateway.test(
+                42L,
+                "candidate-key",
+                "https://example.com/v1",
+                "candidate-model",
+                java.util.Map.of());
+
+        assertThat(result.success()).isTrue();
+        assertThat(result.model()).isEqualTo("candidate-model");
     }
 
     @Test
@@ -272,7 +299,7 @@ class ContextAwareAiGatewayServiceTest {
     }
 
     @Test
-    void outerGatewayRetryKeepsProviderDispatchCountAndPinnedCompatibilityProfile() {
+    void outerGatewayDoesNotRetryAfterProviderDispatch() {
         AiCredentialService credentialService = mock(AiCredentialService.class);
         AiProviderAdapter adapter = mock(AiProviderAdapter.class);
         AiUsageRecorder usageRecorder = mock(AiUsageRecorder.class);
@@ -294,15 +321,30 @@ class ContextAwareAiGatewayServiceTest {
                         .withRetryProfile(profile))
                 .thenReturn(new AiProviderResponse("retry ok", null, null, 2));
 
-        AiCompletionResult result = gateway.complete(
-                AiInvocationContext.task(42L, 77L, "TASK_OPERATION", selection), request());
+        assertThatThrownBy(() -> gateway.complete(
+                AiInvocationContext.task(42L, 77L, "TASK_OPERATION", selection), request()))
+                .isInstanceOf(AiGatewayException.class)
+                .extracting(exception -> ((AiGatewayException) exception).getFailureCode())
+                .isEqualTo(AiFailureCode.RATE_LIMITED);
+        // A retry profile is useful inside the adapter's own negotiation, but an outer gateway
+        // retry after three accepted dispatches could duplicate the logical generation.
+        verify(adapter, org.mockito.Mockito.times(1)).complete(any(AiProviderRequest.class));
+    }
 
-        assertThat(result.usage().gatewayAttemptCount()).isEqualTo(2);
-        assertThat(result.usage().providerDispatchCount()).isEqualTo(5);
-        ArgumentCaptor<AiProviderRequest> requests = ArgumentCaptor.forClass(AiProviderRequest.class);
-        verify(adapter, org.mockito.Mockito.times(2)).complete(requests.capture());
-        assertThat(requests.getAllValues().get(1).compatibilityProfilePinned()).isTrue();
-        assertThat(requests.getAllValues().get(1).compatibilityProfile()).isEqualTo(profile);
+    @Test
+    void deterministicNewTaskPrefersActiveByokSnapshot() {
+        AiCredentialService credentialService = mock(AiCredentialService.class);
+        AiSelectionSnapshot selection = byokSelection();
+        when(credentialService.resolveCurrentSelection(42L)).thenReturn(Optional.of(selection));
+        ContextAwareAiGatewayService gateway = new ContextAwareAiGatewayService(
+                credentialService,
+                new DeterministicFakeAiProviderAdapter(new ObjectMapper()),
+                mock(AiUsageRecorder.class),
+                systemProperties(),
+                new ObjectMapper(),
+                new BaseUrlPolicy(host -> new InetAddress[]{address("8.8.8.8")}));
+
+        assertThat(gateway.selectionForNewTask(42L)).isEqualTo(selection);
     }
 
     @Test

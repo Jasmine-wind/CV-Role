@@ -1,8 +1,10 @@
 package com.winter.airesumeoptimizer.module.workspace.dto;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
+import com.winter.airesumeoptimizer.module.resume.dto.ResumeSourceRefDTO;
 import io.swagger.v3.oas.annotations.media.Schema;
 import java.util.List;
+import java.util.Map;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;
@@ -23,6 +25,22 @@ import lombok.Setter;
 @AllArgsConstructor
 @Schema(description = "简历章节条目，如一段经历、一个教育条目或一个技能组")
 public class ResumeDocumentEntryDTO {
+
+    @Schema(description = "条目来源引用，仅用于追溯，不作为编辑后的事实证明")
+    private ResumeSourceRefDTO sourceRef;
+
+    @Schema(description = "条目覆盖的来源 occurrence ID；相同文本的不同 occurrence 不合并")
+    private List<String> sourceOccurrenceIds;
+
+    /** Scalar semantic field name → source reference. */
+    @Schema(description = "条目字段级来源引用")
+    private Map<String, ResumeSourceRefDTO> fieldSourceRefs;
+
+    @Schema(description = "技能项对应的来源引用，顺序与 skillItems 对齐")
+    private List<ResumeSourceRefDTO> skillItemSourceRefs;
+
+    @Schema(description = "技能描述对应的来源引用，顺序与 skillDescriptions 对齐")
+    private List<ResumeSourceRefDTO> skillDescriptionSourceRefs;
 
     @Schema(description = "条目稳定 ID", example = "e-1")
     private String id;
@@ -60,11 +78,41 @@ public class ResumeDocumentEntryDTO {
     @Schema(description = "地点", example = "上海")
     private String location;
 
+    @Schema(description = "项目开发环境，保留原文语义字段")
+    private String environment;
+
+    @Schema(description = "项目导师，保留原文语义字段")
+    private String mentor;
+
+    @Schema(description = "项目技术栈，保留原文顺序")
+    private List<String> techStack;
+
+    @Schema(description = "项目技术栈对应的来源引用，顺序与 techStack 对齐")
+    private List<ResumeSourceRefDTO> techStackSourceRefs;
+
     @Schema(description = "技能组名称", example = "后端技术")
     private String group;
 
+    @Schema(description = "获奖标题，保留原文语义字段")
+    private String awardTitle;
+
+    @Schema(description = "获奖级别，保留原文语义字段")
+    private String awardLevel;
+
+    @Schema(description = "竞赛或奖项名称，保留原文语义字段")
+    private String awardCompetition;
+
+    @Schema(description = "获奖名次，保留原文语义字段")
+    private String awardRanking;
+
+    @Schema(description = "获奖日期，原文字符串")
+    private String awardDate;
+
     @Schema(description = "技能组条目列表")
     private List<String> skillItems;
+
+    @Schema(description = "技能组原文描述，保留来源文本但不伪装为普通要点")
+    private List<String> skillDescriptions;
 
     @Schema(description = "条目要点列表，顺序即展示顺序")
     private List<ResumeDocumentBulletDTO> bullets;

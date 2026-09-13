@@ -22,6 +22,7 @@ import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.winter.airesumeoptimizer.common.exception.BusinessException;
 import com.winter.airesumeoptimizer.infra.ai.AiSelectionSnapshot;
+import com.winter.airesumeoptimizer.infra.storage.FileStorageException;
 import com.winter.airesumeoptimizer.infra.storage.FileStorageService;
 import com.winter.airesumeoptimizer.infra.storage.StoreFileCommand;
 import com.winter.airesumeoptimizer.infra.storage.StoredFile;
@@ -36,10 +37,12 @@ import com.winter.airesumeoptimizer.module.resume.config.ResumeParseProperties;
 import com.winter.airesumeoptimizer.module.resume.entity.Resume;
 import com.winter.airesumeoptimizer.module.resume.mapper.ResumeMapper;
 import com.winter.airesumeoptimizer.module.resume.mapper.ResumeParseResultMapper;
+import com.winter.airesumeoptimizer.module.optimization.entity.ResumeVersion;
 import com.winter.airesumeoptimizer.module.optimization.mapper.ResumeVersionMapper;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeBlockDTO;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeDisplayNameUpdateRequestDTO;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeParseOptionsDTO;
+import com.winter.airesumeoptimizer.module.resume.dto.ResumeStructureHealthEvaluation;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeParseQualityResultDTO;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeAiStructuredParseResultDTO;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeSectionClassificationDTO;
@@ -56,6 +59,7 @@ import com.winter.airesumeoptimizer.module.resume.service.ResumeDocumentQualityV
 import com.winter.airesumeoptimizer.module.resume.service.ResumeLineIndexer;
 import com.winter.airesumeoptimizer.module.resume.service.ResumeParseQualityCheckService;
 import com.winter.airesumeoptimizer.module.resume.service.ResumePointerPostProcessor;
+import com.winter.airesumeoptimizer.module.resume.service.ResumeStructureHealthEvaluator;
 import com.winter.airesumeoptimizer.module.resume.service.ResumeStructureParseService;
 import com.winter.airesumeoptimizer.module.resume.service.ResumeTextCleanService;
 import com.winter.airesumeoptimizer.module.resume.service.ResumeTextExtractionService;
@@ -63,11 +67,15 @@ import com.winter.airesumeoptimizer.module.resume.service.ResumeTextQualityCheck
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeTextSectionDTO;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeTextQualityResultDTO;
 import com.winter.airesumeoptimizer.module.resume.entity.ResumeParseResult;
+import com.winter.airesumeoptimizer.module.resume.enums.ResumeQualityStatus;
+import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentDTO;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.mock.web.MockMultipartFile;
@@ -141,6 +149,7 @@ class ResumeServiceImplTest {
             resumePointerPostProcessor,
             resumeCanonicalDocumentService,
             resumeDocumentQualityValidator,
+            new ResumeStructureHealthEvaluator(),
             resumeParseProperties,
             new ObjectMapper(),
             10 * 1024 * 1024,
@@ -169,6 +178,31 @@ class ResumeServiceImplTest {
                         invocation.getArgument(2),
                         invocation.getArgument(3),
                         invocation.getArgument(4)));
+    }
+
+    @BeforeEach
+    void stubParseClaimPersistence() {
+        // The production mapper performs the claim and CAS in PostgreSQL. These defaults keep
+        // existing pure unit tests focused on parsing rather than on the database adapter.
+        lenient().when(resumeParseResultMapper.ensureParseRow(anyLong(), any(LocalDateTime.class)))
+                .thenReturn(1);
+        lenient().when(resumeParseResultMapper.claimParseGeneration(
+                        anyLong(), anyString(), any(LocalDateTime.class)))
+                .thenReturn(1L);
+        lenient().when(resumeParseResultMapper.touchIfCurrent(
+                        anyLong(), anyLong(), anyString(), any(LocalDateTime.class)))
+                .thenReturn(1);
+        lenient().when(resumeParseResultMapper.updateIfCurrent(
+                        any(ResumeParseResult.class), anyLong(), anyLong(), anyString()))
+                .thenReturn(1);
+        lenient().when(resumeParseResultMapper.update(isNull(), any(Wrapper.class))).thenReturn(1);
+        lenient().when(resumeVersionMapper.insertIfCurrentParseClaim(
+                        any(ResumeVersion.class), anyLong(), anyLong(), anyString()))
+                .thenAnswer(invocation -> {
+                    ResumeVersion source = invocation.getArgument(0);
+                    source.setId(900L);
+                    return 1;
+                });
     }
 
     @Test
@@ -298,6 +332,7 @@ class ResumeServiceImplTest {
                 resumePointerPostProcessor,
                 resumeCanonicalDocumentService,
                 resumeDocumentQualityValidator,
+                new ResumeStructureHealthEvaluator(),
                 resumeParseProperties,
                 new ObjectMapper(),
                 5,
@@ -438,7 +473,7 @@ class ResumeServiceImplTest {
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("导出文件删除失败");
 
-        verify(resumeMapper, never()).deleteById(100L);
+        verify(resumeMapper, never()).delete(any(Wrapper.class));
         verify(fileStorageService, never()).delete(anyString());
     }
 
@@ -450,6 +485,7 @@ class ResumeServiceImplTest {
         resume.setObjectKey("resumes/1/demo.pdf");
 
         when(resumeMapper.selectOne(any(Wrapper.class))).thenReturn(resume);
+        when(resumeMapper.delete(any(Wrapper.class))).thenReturn(1);
 
         service.delete(1L, 100L);
 
@@ -461,8 +497,104 @@ class ResumeServiceImplTest {
         verify(jobMatchResultMapper).delete(any(Wrapper.class));
         verify(resumeAiAnalysisMapper).delete(any(Wrapper.class));
         verify(resumeParseResultMapper).delete(any(Wrapper.class));
-        verify(resumeMapper).deleteById(100L);
+        verify(resumeMapper).delete(any(Wrapper.class));
         verify(fileStorageService).delete("resumes/1/demo.pdf");
+    }
+
+    private ResumeServiceImpl serviceWithGates(
+            ResumeCanonicalDocumentService canonicalService,
+            ResumeDocumentQualityValidator qualityValidator,
+            ResumeStructureHealthEvaluator healthEvaluator) {
+        return new ResumeServiceImpl(
+                resumeMapper,
+                resumeParseResultMapper,
+                resumeVersionMapper,
+                resumeAiAnalysisMapper,
+                jobMatchResultMapper,
+                aiJobMatchResultMapper,
+                aiResumeSuggestionMapper,
+                aiRewriteSuggestionMapper,
+                resumeEmbeddingMapper,
+                fileStorageService,
+                exportArtifactCleanupService,
+                resumeTextExtractionService,
+                resumeTextQualityCheckService,
+                resumeTextCleanService,
+                resumeBlockBuilder,
+                resumeBlockReorderService,
+                resumeAiSectionClassifier,
+                resumeAiStructuredParser,
+                resumeStructureParseService,
+                resumeParseQualityCheckService,
+                resumeDisplayModelService,
+                resumeLineIndexer,
+                resumePointerPostProcessor,
+                canonicalService,
+                qualityValidator,
+                healthEvaluator,
+                resumeParseProperties,
+                new ObjectMapper(),
+                10 * 1024 * 1024,
+                false);
+    }
+
+    private void givenMinimalParsePipeline(ResumeStructuredContentDTO structuredContent) {
+        Resume resume = new Resume();
+        resume.setId(100L);
+        resume.setUserId(1L);
+        resume.setFileType("PDF");
+        resume.setObjectKey("resumes/1/demo.pdf");
+        when(resumeMapper.selectOne(any(Wrapper.class))).thenReturn(resume);
+        when(resumeTextExtractionService.extractText("resumes/1/demo.pdf", "PDF")).thenReturn("source");
+        when(resumeTextQualityCheckService.check("source", "PDF")).thenReturn(ResumeTextQualityResultDTO.builder()
+                .status("GOOD")
+                .issues(List.of())
+                .message("文本质量正常")
+                .build());
+        when(resumeTextCleanService.cleanAndSplitSections("source")).thenReturn(ResumeTextCleanResultDTO.builder()
+                .cleanedText("source")
+                .sections(List.of())
+                .build());
+        when(resumeStructureParseService.parse(anyString(), anyList())).thenReturn(structuredContent);
+        when(resumeParseQualityCheckService.check(any(), any(), any())).thenReturn(ResumeParseQualityResultDTO.builder()
+                .status("GOOD")
+                .warnings(List.of())
+                .message("解析结果质量正常")
+                .score(100)
+                .build());
+        when(resumeParseResultMapper.selectOne(any(Wrapper.class))).thenReturn(null);
+        when(resumeParseResultMapper.insert(any(ResumeParseResult.class))).thenAnswer(invocation -> {
+            ResumeParseResult parseResult = invocation.getArgument(0);
+            parseResult.setId(200L);
+            return 1;
+        });
+    }
+
+    private ResumeStructureHealthEvaluation health(boolean hardPass) {
+        return new ResumeStructureHealthEvaluation(
+                hardPass ? 100 : 0,
+                hardPass ? 100 : 0,
+                1,
+                hardPass ? 1 : 0,
+                hardPass ? 0 : 1,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                100,
+                0,
+                hardPass,
+                hardPass ? List.of() : List.of("NO_LOSS"),
+                "LEGACY");
+    }
+
+    private ResumeParseResult capturePersistedParseResult() {
+        ArgumentCaptor<ResumeParseResult> resultCaptor = ArgumentCaptor.forClass(ResumeParseResult.class);
+        verify(resumeParseResultMapper).updateIfCurrent(
+                resultCaptor.capture(), eq(100L), anyLong(), anyString());
+        return resultCaptor.getValue();
     }
 
     private byte[] pdfBytes() {
@@ -487,6 +619,24 @@ class ResumeServiceImplTest {
     }
 
     @Test
+    void deleteShouldFailAfterRawFileDeletionFailureSoTransactionCanRollBack() {
+        Resume resume = new Resume();
+        resume.setId(100L);
+        resume.setUserId(1L);
+        resume.setObjectKey("resumes/1/source.pdf");
+        when(resumeMapper.selectOne(any(Wrapper.class))).thenReturn(resume);
+        when(resumeMapper.delete(any(Wrapper.class))).thenReturn(1);
+        doThrow(new FileStorageException("storage unavailable"))
+                .when(fileStorageService).delete("resumes/1/source.pdf");
+
+        assertThatThrownBy(() -> service.delete(1L, 100L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("简历文件删除失败，简历未删除，请重试");
+
+        verify(resumeMapper).delete(any(Wrapper.class));
+    }
+
+    @Test
     void deleteShouldRejectUnownedResumeWithoutDeletingFile() {
         when(resumeMapper.selectOne(any(Wrapper.class))).thenReturn(null);
 
@@ -495,7 +645,7 @@ class ResumeServiceImplTest {
                 .hasMessage("简历不存在");
 
         verify(fileStorageService, never()).delete(anyString());
-        verify(resumeMapper, never()).deleteById(100L);
+        verify(resumeMapper, never()).delete(any(Wrapper.class));
     }
 
     @Test
@@ -507,6 +657,29 @@ class ResumeServiceImplTest {
                 .hasMessage("简历不存在");
 
         verify(resumeTextExtractionService, never()).extractText(anyString(), anyString());
+    }
+
+    @Test
+    void parseShouldFailClosedWhenDurableParseClaimCannotBeAcquired() {
+        Resume resume = new Resume();
+        resume.setId(100L);
+        resume.setUserId(1L);
+        resume.setFileType("PDF");
+        resume.setObjectKey("resumes/1/demo.pdf");
+
+        when(resumeMapper.selectOne(any(Wrapper.class))).thenReturn(resume);
+        when(resumeParseResultMapper.claimParseGeneration(
+                anyLong(), anyString(), any(LocalDateTime.class))).thenReturn(null);
+
+        assertThatThrownBy(() -> service.parse(1L, 100L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("简历解析状态已被更新，请重试");
+
+        verify(resumeTextExtractionService, never()).extractText(anyString(), anyString());
+        verify(resumeParseResultMapper, never()).insert(any(ResumeParseResult.class));
+        verify(resumeVersionMapper, never()).insert(any(ResumeVersion.class));
+        verify(resumeVersionMapper, never()).insertIfCurrentParseClaim(
+                any(ResumeVersion.class), anyLong(), anyLong(), anyString());
     }
 
     @Test
@@ -806,17 +979,17 @@ class ResumeServiceImplTest {
                 .aiStructuredParseEnabled(true)
                 .build());
 
-        verify(resumeAiSectionClassifier).classify(eq(100L), anyList(), eq(true));
-        verify(resumeAiStructuredParser).parse(anyList(), any(), anyList(), eq(false));
-        ArgumentCaptor<ResumeParseResult> resultCaptor = ArgumentCaptor.forClass(ResumeParseResult.class);
-        verify(resumeParseResultMapper).insert(resultCaptor.capture());
-        assertThat(resultCaptor.getValue().getStructuredJson())
+        verify(resumeAiSectionClassifier, never()).classify(
+                anyLong(), anyLong(), anyList(), nullable(Boolean.class), nullable(AiSelectionSnapshot.class));
+        verify(resumeAiStructuredParser, never()).parse(anyList(), any(), anyList(), eq(false));
+        ResumeParseResult persisted = capturePersistedParseResult();
+        assertThat(persisted.getStructuredJson())
                 .contains("\"parseMode\":\"BALANCED\"")
                 .contains("\"parserVersion\":\"" + ResumeParseVersions.PARSER_VERSION + "\"")
-                .contains("\"aiSectionClassifyEnabled\":true")
+                .contains("\"aiSectionClassifyEnabled\":false")
                 .contains("\"aiStructuredParseEnabled\":false")
-                .contains("AI 章节归类失败")
-                .contains("AI 结构化补全未开启");
+                .contains("AI_SECTION_CLASSIFY_RULES_CANONICAL")
+                .contains("AI_REFERENCE_REPAIR_SKIPPED");
     }
 
     @Test
@@ -896,13 +1069,12 @@ class ResumeServiceImplTest {
                 .parseMode("ACCURATE")
                 .build());
 
-        ArgumentCaptor<ResumeParseResult> resultCaptor = ArgumentCaptor.forClass(ResumeParseResult.class);
-        verify(resumeParseResultMapper).insert(resultCaptor.capture());
-        assertThat(resultCaptor.getValue().getStructuredJson())
+        ResumeParseResult persisted = capturePersistedParseResult();
+        assertThat(persisted.getStructuredJson())
                 .contains("\"parseMeta\"")
                 .contains("\"aiStatus\":\"SKIPPED\"")
                 .contains("\"aiUsed\":false")
-                .contains("\"aiSkippedReason\":\"ALL_BLOCKS_RULE_CONFIRMED\"")
+                .contains("\"aiSkippedReason\":\"AI_SECTION_CLASSIFY_RULES_CANONICAL\"")
                 .contains("\"aiFallbackOccurred\":false")
                 .doesNotContain("\"aiStatus\":\"FALLBACK\"");
     }
@@ -962,11 +1134,11 @@ class ResumeServiceImplTest {
                 .aiStructuredParseEnabled(true)
                 .build());
 
-        verify(resumeAiSectionClassifier).classify(eq(100L), anyList(), eq(false));
-        verify(resumeAiStructuredParser).parse(anyList(), any(), anyList(), eq(false));
-        ArgumentCaptor<ResumeParseResult> resultCaptor = ArgumentCaptor.forClass(ResumeParseResult.class);
-        verify(resumeParseResultMapper).insert(resultCaptor.capture());
-        assertThat(resultCaptor.getValue().getStructuredJson())
+        verify(resumeAiSectionClassifier, never()).classify(
+                anyLong(), anyLong(), anyList(), nullable(Boolean.class), nullable(AiSelectionSnapshot.class));
+        verify(resumeAiStructuredParser, never()).parse(anyList(), any(), anyList(), eq(false));
+        ResumeParseResult persisted = capturePersistedParseResult();
+        assertThat(persisted.getStructuredJson())
                 .contains("\"parseMode\":\"FAST\"")
                 .contains("\"aiStructuredParseEnabled\":false");
     }
@@ -1032,13 +1204,13 @@ class ResumeServiceImplTest {
 
         service.parse(1L, 100L);
 
-        verify(resumeAiSectionClassifier).classify(eq(100L), anyList(), eq(true));
-        verify(resumeAiStructuredParser).parse(anyList(), any(), anyList(), eq(true));
-        ArgumentCaptor<ResumeParseResult> resultCaptor = ArgumentCaptor.forClass(ResumeParseResult.class);
-        verify(resumeParseResultMapper).insert(resultCaptor.capture());
-        assertThat(resultCaptor.getValue().getStructuredJson())
+        verify(resumeAiSectionClassifier, never()).classify(
+                anyLong(), anyLong(), anyList(), nullable(Boolean.class), nullable(AiSelectionSnapshot.class));
+        verify(resumeAiStructuredParser, never()).parse(anyList(), any(), anyList(), eq(true));
+        ResumeParseResult persisted = capturePersistedParseResult();
+        assertThat(persisted.getStructuredJson())
                 .contains("\"parseMode\":\"ACCURATE\"")
-                .contains("\"aiStructuredParseEnabled\":true");
+                .contains("\"aiStructuredParseEnabled\":false");
     }
 
     @Test
@@ -1116,13 +1288,12 @@ class ResumeServiceImplTest {
                     assertThat(section.getSectionType()).isEqualTo("CAMPUS_EXPERIENCES");
                     assertThat(section.getLines()).containsExactly("组织校园技术分享活动，获得校级奖项");
                 });
-        assertThat(cleanResult.getSectionConflictWarnings())
-                .containsExactly("AI_SECTION_CONFLICT:RULE_SOURCE_SECTION:0:CAMPUS_EXPERIENCES>AWARDS");
-        assertThat(finalSections.get(0).getBlocks().get(0).getFinalSectionSource()).isEqualTo("RULE_SOURCE_SECTION");
+        // No classifier was invoked, so no AI conflict can rewrite or annotate the rule sections.
+        assertThat(cleanResult.getSectionConflictWarnings()).isNull();
     }
 
     @Test
-    void parseShouldAllowHighConfidenceAiToOverrideMediumSourceSection() {
+    void parseShouldKeepRuleSectionWhenAiWouldOverrideMediumSourceSection() {
         Resume resume = new Resume();
         resume.setId(100L);
         resume.setUserId(1L);
@@ -1194,13 +1365,209 @@ class ResumeServiceImplTest {
         List<ResumeTextSectionDTO> finalSections = sectionsCaptor.getValue();
         assertThat(finalSections).singleElement()
                 .satisfies(section -> {
-                    assertThat(section.getSectionType()).isEqualTo("AWARDS");
+                    assertThat(section.getSectionType()).isEqualTo("CAMPUS_EXPERIENCES");
                     assertThat(section.getLines()).containsExactly("国家励志奖学金");
-                    assertThat(section.getBlocks().get(0).getFinalSectionSource()).isEqualTo("AI_OVERRIDE");
-                    assertThat(section.getBlocks().get(0).getSectionLocked()).isFalse();
                 });
-        assertThat(cleanResult.getSectionConflictWarnings())
-                .containsExactly("AI_SECTION_CONFLICT:AI_OVERRIDE:0:CAMPUS_EXPERIENCES>AWARDS");
+        assertThat(cleanResult.getSectionConflictWarnings()).isNull();
+    }
+
+    @Test
+    void parseShouldExposeCanonicalDraftWhenStructureHardInvariantFails() {
+        ResumeCanonicalDocumentService canonicalService = mock(ResumeCanonicalDocumentService.class);
+        ResumeDocumentQualityValidator qualityValidator = mock(ResumeDocumentQualityValidator.class);
+        ResumeStructureHealthEvaluator healthEvaluator = mock(ResumeStructureHealthEvaluator.class);
+        when(healthEvaluator.evaluate(any(), anyList(), anyList(), anyString())).thenReturn(health(false));
+        ResumeDocumentDTO candidate = ResumeDocumentDTO.builder()
+                .schemaVersion(ResumeDocumentDTO.SCHEMA_VERSION)
+                .build();
+        when(canonicalService.build(any())).thenReturn(new ResumeCanonicalDocumentService.BuildResult(candidate, List.of()));
+        when(qualityValidator.validate(any(), anyList())).thenReturn(new ResumeDocumentQualityValidator.ValidationResult(
+                ResumeQualityStatus.QUALITY_READY, List.of()));
+        when(resumeVersionMapper.insertIfCurrentParseClaim(
+                any(ResumeVersion.class), anyLong(), anyLong(), anyString())).thenAnswer(invocation -> {
+            ResumeVersion source = invocation.getArgument(0);
+            source.setId(900L);
+            return 1;
+        });
+
+        ResumeServiceImpl gatedService = serviceWithGates(canonicalService, qualityValidator, healthEvaluator);
+        givenMinimalParsePipeline(ResumeStructuredContentDTO.builder().rawText("source").build());
+        ResumeVersion persistedSource = new ResumeVersion();
+        persistedSource.setId(900L);
+        persistedSource.setResumeId(100L);
+        persistedSource.setVersionType("SOURCE");
+        persistedSource.setStructuredContent("{\"schemaVersion\":\"RESUME_DOCUMENT_V1\"}");
+        when(resumeVersionMapper.selectOne(any(Wrapper.class))).thenReturn(persistedSource);
+
+        var result = gatedService.parse(1L, 100L);
+
+        assertThat(result.getQualityStatus()).isEqualTo(ResumeQualityStatus.QUALITY_NEEDS_REVIEW);
+        assertThat(result.getCanonicalDocument()).isNotBlank();
+        verify(canonicalService).build(any());
+        verify(qualityValidator).validate(any(), anyList());
+        ArgumentCaptor<ResumeVersion> sourceCaptor = ArgumentCaptor.forClass(ResumeVersion.class);
+        verify(resumeVersionMapper).insertIfCurrentParseClaim(
+                sourceCaptor.capture(), eq(100L), anyLong(), anyString());
+        assertThat(sourceCaptor.getValue().getContentStatus()).isEqualTo("PENDING");
+        ResumeParseResult persisted = capturePersistedParseResult();
+        assertThat(persisted.getCanonicalSourceVersionId()).isEqualTo(900L);
+        assertThat(persisted.getQualityIssues()).contains("STRUCTURE_HEALTH:NO_LOSS");
+    }
+
+    @Test
+    void parseShouldMaterializeCanonicalDraftWhenQualityNeedsReview() {
+        ResumeCanonicalDocumentService canonicalService = mock(ResumeCanonicalDocumentService.class);
+        ResumeDocumentQualityValidator qualityValidator = mock(ResumeDocumentQualityValidator.class);
+        ResumeStructureHealthEvaluator healthEvaluator = mock(ResumeStructureHealthEvaluator.class);
+        when(healthEvaluator.evaluate(any(), anyList(), anyList(), anyString())).thenReturn(health(true));
+        ResumeDocumentDTO candidate = ResumeDocumentDTO.builder()
+                .schemaVersion(ResumeDocumentDTO.SCHEMA_VERSION)
+                .build();
+        when(canonicalService.build(any())).thenReturn(new ResumeCanonicalDocumentService.BuildResult(candidate, List.of()));
+        when(qualityValidator.validate(any(), anyList())).thenReturn(new ResumeDocumentQualityValidator.ValidationResult(
+                ResumeQualityStatus.QUALITY_NEEDS_REVIEW, List.of()));
+        when(resumeVersionMapper.insertIfCurrentParseClaim(
+                any(ResumeVersion.class), anyLong(), anyLong(), anyString())).thenAnswer(invocation -> {
+            ResumeVersion source = invocation.getArgument(0);
+            source.setId(902L);
+            return 1;
+        });
+
+        ResumeServiceImpl gatedService = serviceWithGates(canonicalService, qualityValidator, healthEvaluator);
+        givenMinimalParsePipeline(ResumeStructuredContentDTO.builder().rawText("source").build());
+        ResumeVersion persistedSource = new ResumeVersion();
+        persistedSource.setId(902L);
+        persistedSource.setResumeId(100L);
+        persistedSource.setVersionType("SOURCE");
+        persistedSource.setStructuredContent("{\"schemaVersion\":\"RESUME_DOCUMENT_V1\"}");
+        when(resumeVersionMapper.selectOne(any(Wrapper.class))).thenReturn(persistedSource);
+
+        var result = gatedService.parse(1L, 100L);
+
+        assertThat(result.getQualityStatus()).isEqualTo(ResumeQualityStatus.QUALITY_NEEDS_REVIEW);
+        assertThat(result.getCanonicalDocument()).isNotBlank();
+        verify(canonicalService).build(any());
+        verify(qualityValidator).validate(any(), anyList());
+        ArgumentCaptor<ResumeVersion> sourceCaptor = ArgumentCaptor.forClass(ResumeVersion.class);
+        verify(resumeVersionMapper).insertIfCurrentParseClaim(
+                sourceCaptor.capture(), eq(100L), anyLong(), anyString());
+        assertThat(sourceCaptor.getValue().getContentStatus()).isEqualTo("PENDING");
+        ResumeParseResult persisted = capturePersistedParseResult();
+        assertThat(persisted.getCanonicalSourceVersionId()).isEqualTo(902L);
+    }
+
+    @Test
+    void parseShouldMaterializeSourceOnlyAfterBothGatesPass() {
+        ResumeCanonicalDocumentService canonicalService = mock(ResumeCanonicalDocumentService.class);
+        ResumeDocumentQualityValidator qualityValidator = mock(ResumeDocumentQualityValidator.class);
+        ResumeStructureHealthEvaluator healthEvaluator = mock(ResumeStructureHealthEvaluator.class);
+        when(healthEvaluator.evaluate(any(), anyList(), anyList(), anyString())).thenReturn(health(true));
+        ResumeDocumentDTO candidate = ResumeDocumentDTO.builder()
+                .schemaVersion(ResumeDocumentDTO.SCHEMA_VERSION)
+                .build();
+        when(canonicalService.build(any())).thenReturn(new ResumeCanonicalDocumentService.BuildResult(candidate, List.of()));
+        when(qualityValidator.validate(any(), anyList())).thenReturn(new ResumeDocumentQualityValidator.ValidationResult(
+                ResumeQualityStatus.QUALITY_READY, List.of()));
+        when(resumeVersionMapper.insertIfCurrentParseClaim(
+                any(ResumeVersion.class), anyLong(), anyLong(), anyString())).thenAnswer(invocation -> {
+            ResumeVersion source = invocation.getArgument(0);
+            source.setId(901L);
+            return 1;
+        });
+
+        ResumeServiceImpl gatedService = serviceWithGates(canonicalService, qualityValidator, healthEvaluator);
+        givenMinimalParsePipeline(ResumeStructuredContentDTO.builder().rawText("source").build());
+
+        var result = gatedService.parse(1L, 100L);
+
+        assertThat(result.getQualityStatus()).isEqualTo(ResumeQualityStatus.QUALITY_READY);
+        ArgumentCaptor<ResumeVersion> sourceCaptor = ArgumentCaptor.forClass(ResumeVersion.class);
+        verify(resumeVersionMapper).insertIfCurrentParseClaim(
+                sourceCaptor.capture(), eq(100L), anyLong(), anyString());
+        assertThat(sourceCaptor.getValue().getVersionType()).isEqualTo("SOURCE");
+        assertThat(sourceCaptor.getValue().getContentStatus()).isEqualTo("READY");
+        ResumeParseResult persisted = capturePersistedParseResult();
+        assertThat(persisted.getCanonicalSourceVersionId()).isEqualTo(901L);
+    }
+
+    @Test
+    void staleParseCannotInsertOrReferenceSourceAfterClaimLoss() {
+        ResumeCanonicalDocumentService canonicalService = mock(ResumeCanonicalDocumentService.class);
+        ResumeDocumentQualityValidator qualityValidator = mock(ResumeDocumentQualityValidator.class);
+        ResumeStructureHealthEvaluator healthEvaluator = mock(ResumeStructureHealthEvaluator.class);
+        when(healthEvaluator.evaluate(any(), anyList(), anyList(), anyString())).thenReturn(health(true));
+        ResumeDocumentDTO candidate = ResumeDocumentDTO.builder()
+                .schemaVersion(ResumeDocumentDTO.SCHEMA_VERSION)
+                .build();
+        when(canonicalService.build(any())).thenReturn(new ResumeCanonicalDocumentService.BuildResult(candidate, List.of()));
+        when(qualityValidator.validate(any(), anyList())).thenReturn(new ResumeDocumentQualityValidator.ValidationResult(
+                ResumeQualityStatus.QUALITY_READY, List.of()));
+
+        ResumeParseResult current = new ResumeParseResult();
+        current.setResumeId(100L);
+        current.setParseStatus("SUCCESS");
+        current.setQualityStatus(ResumeQualityStatus.QUALITY_READY);
+        when(resumeParseResultMapper.selectOne(any(Wrapper.class))).thenReturn(null, current);
+        when(resumeVersionMapper.insertIfCurrentParseClaim(
+                any(ResumeVersion.class), anyLong(), anyLong(), anyString())).thenReturn(0);
+
+        ResumeServiceImpl gatedService = serviceWithGates(canonicalService, qualityValidator, healthEvaluator);
+        givenMinimalParsePipeline(ResumeStructuredContentDTO.builder().rawText("source").build());
+        // givenMinimalParsePipeline supplies the parse-result lookup; restore the sequence after it.
+        when(resumeParseResultMapper.selectOne(any(Wrapper.class))).thenReturn(null, current);
+
+        var result = gatedService.parse(1L, 100L);
+
+        assertThat(result.getParseStatus()).isEqualTo("SUCCESS");
+        verify(resumeVersionMapper).insertIfCurrentParseClaim(
+                any(ResumeVersion.class), anyLong(), anyLong(), anyString());
+        verify(resumeVersionMapper, never()).insert(any(ResumeVersion.class));
+        verify(resumeVersionMapper, never()).deleteById(anyLong());
+        verify(resumeParseResultMapper, never()).updateIfCurrent(
+                any(ResumeParseResult.class), anyLong(), anyLong(), anyString());
+        assertThat(result.getCanonicalDocument()).isNull();
+    }
+
+    @Test
+    void staleFinalCasRollsBackInsertedSourceBeforeReturningCurrentResult() {
+        ResumeCanonicalDocumentService canonicalService = mock(ResumeCanonicalDocumentService.class);
+        ResumeDocumentQualityValidator qualityValidator = mock(ResumeDocumentQualityValidator.class);
+        ResumeStructureHealthEvaluator healthEvaluator = mock(ResumeStructureHealthEvaluator.class);
+        when(healthEvaluator.evaluate(any(), anyList(), anyList(), anyString())).thenReturn(health(true));
+        ResumeDocumentDTO candidate = ResumeDocumentDTO.builder()
+                .schemaVersion(ResumeDocumentDTO.SCHEMA_VERSION)
+                .build();
+        when(canonicalService.build(any())).thenReturn(new ResumeCanonicalDocumentService.BuildResult(candidate, List.of()));
+        when(qualityValidator.validate(any(), anyList())).thenReturn(new ResumeDocumentQualityValidator.ValidationResult(
+                ResumeQualityStatus.QUALITY_READY, List.of()));
+
+        ResumeParseResult current = new ResumeParseResult();
+        current.setResumeId(100L);
+        current.setParseStatus("SUCCESS");
+        current.setQualityStatus(ResumeQualityStatus.QUALITY_READY);
+        when(resumeParseResultMapper.selectOne(any(Wrapper.class))).thenReturn(null, current);
+        when(resumeVersionMapper.insertIfCurrentParseClaim(
+                any(ResumeVersion.class), anyLong(), anyLong(), anyString())).thenAnswer(invocation -> {
+            ResumeVersion source = invocation.getArgument(0);
+            source.setId(902L);
+            return 1;
+        });
+        when(resumeParseResultMapper.updateIfCurrent(
+                any(ResumeParseResult.class), anyLong(), anyLong(), anyString())).thenReturn(0);
+        when(resumeVersionMapper.deleteById(902L)).thenReturn(1);
+
+        ResumeServiceImpl gatedService = serviceWithGates(canonicalService, qualityValidator, healthEvaluator);
+        givenMinimalParsePipeline(ResumeStructuredContentDTO.builder().rawText("source").build());
+        when(resumeParseResultMapper.selectOne(any(Wrapper.class))).thenReturn(null, current);
+
+        var result = gatedService.parse(1L, 100L);
+
+        assertThat(result.getParseStatus()).isEqualTo("SUCCESS");
+        verify(resumeVersionMapper).insertIfCurrentParseClaim(
+                any(ResumeVersion.class), anyLong(), anyLong(), anyString());
+        verify(resumeVersionMapper).deleteById(902L);
+        verify(resumeVersionMapper, never()).insert(any(ResumeVersion.class));
+        assertThat(result.getCanonicalDocument()).isNull();
     }
 
     @Test

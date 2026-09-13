@@ -17,6 +17,19 @@ public class ResumeTextQualityCheckServiceImpl implements ResumeTextQualityCheck
 
     @Override
     public ResumeTextQualityResultDTO check(String extractedText, String fileType) {
+        // Without extraction metadata retain the historical conservative classification for
+        // callers that only provide text and file type.
+        return checkInternal(extractedText, fileType, null);
+    }
+
+    @Override
+    public ResumeTextQualityResultDTO check(
+            String extractedText, String fileType, Boolean imageContentPresent) {
+        return checkInternal(extractedText, fileType, imageContentPresent);
+    }
+
+    private ResumeTextQualityResultDTO checkInternal(
+            String extractedText, String fileType, Boolean imageContentPresent) {
         String text = extractedText == null ? "" : extractedText.strip();
         String normalizedFileType = fileType == null ? "" : fileType.strip().toUpperCase(Locale.ROOT);
         List<String> issues = new ArrayList<>();
@@ -24,8 +37,15 @@ public class ResumeTextQualityCheckServiceImpl implements ResumeTextQualityCheck
         if (text.isBlank()) {
             issues.add("EMPTY_TEXT");
             if ("PDF".equals(normalizedFileType)) {
-                issues.add("SCANNED_PDF");
-                return failed(issues, "未能从文件中提取到有效文本，请确认文件不是扫描版图片 PDF");
+                if (imageContentPresent == null || imageContentPresent) {
+                    // The old two-argument seam has no image fact and remains conservative.
+                    issues.add("SCANNED_PDF");
+                    return failed(issues, "未能从文件中提取到有效文本，请确认文件不是扫描版图片 PDF");
+                }
+                // A valid PDF with no image XObject is blank/no-glyph content, not a scanned
+                // document. There is no OCR here, so both cases fail closed without guessing.
+                issues.add("EMPTY_PDF");
+                return failed(issues, "PDF 不包含可提取文字或图像，请确认文件内容有效");
             }
             return failed(issues, "未能从文件中提取到有效文本，请重新上传可复制文字的 PDF 或 DOCX");
         }

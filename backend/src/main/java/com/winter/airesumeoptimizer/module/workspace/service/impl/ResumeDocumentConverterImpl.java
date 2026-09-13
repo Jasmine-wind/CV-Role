@@ -4,8 +4,10 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.MapperFeature;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.winter.airesumeoptimizer.common.exception.BusinessException;
+import com.winter.airesumeoptimizer.module.resume.dto.ResumeSourceRefDTO;
 import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentBasicsDTO;
 import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentBulletDTO;
 import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentContactDTO;
@@ -17,8 +19,10 @@ import com.winter.airesumeoptimizer.module.workspace.enums.ResumeDocumentSection
 import com.winter.airesumeoptimizer.module.workspace.service.ResumeDocumentConverter;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Matcher;
@@ -55,7 +59,9 @@ public class ResumeDocumentConverterImpl implements ResumeDocumentConverter {
     private static final Pattern DATE_RANGE = Pattern.compile(
             "((?:19|20)\\d{2}(?:\\s*[年./\\-]\\s*\\d{1,2}\\s*月?)?)"
                     + "\\s*(?:[-–—~～至到]+|[-–—~～])\\s*"
-                    + "((?:19|20)\\d{2}(?:\\s*[年./\\-]\\s*\\d{1,2}\\s*月?)?|至今|今|现在|今)");
+                    + "((?:19|20)\\d{2}(?:\\s*[年./\\-]\\s*\\d{1,2}\\s*月?)?|至今|今|现在|present)");
+    private static final Pattern STANDALONE_DATE = Pattern.compile(
+            "(?i)^(?:(?:19|20)\\d{2}(?:\\s*[年./\\-]\\s*\\d{1,2}\\s*月?)?|至今|今|现在|present)\\s*$");
 
     private final ObjectMapper objectMapper;
     private final ObjectMapper strictObjectMapper;
@@ -80,6 +86,10 @@ public class ResumeDocumentConverterImpl implements ResumeDocumentConverter {
         IdAllocator idAllocator = new IdAllocator();
         return ResumeDocumentDTO.builder()
                 .schemaVersion(schemaVersion)
+                .sourceRef(copySourceRef(document.getSourceRef()))
+                .sourceOccurrenceIds(copyStrings(document.getSourceOccurrenceIds()))
+                .sourceOccurrenceTexts(copySourceOccurrenceTexts(document.getSourceOccurrenceTexts()))
+                .sourceOccurrencePrimaryIds(copySourceOccurrenceTexts(document.getSourceOccurrencePrimaryIds()))
                 .basics(normalizeBasics(document.getBasics(), idAllocator))
                 .sections(normalizeSections(document.getSections(), idAllocator))
                 .build();
@@ -105,13 +115,12 @@ public class ResumeDocumentConverterImpl implements ResumeDocumentConverter {
         }
         if (looksLikeSemanticDocument(root)) {
             try {
-                ResumeDocumentDTO parsed = strictObjectMapper.readValue(legacyJson, ResumeDocumentDTO.class);
-                ResumeDocumentDTO normalized = normalize(parsed);
-                // 入库前已经归一化。若再次归一化会改变 ID/内容，说明持久化数据已损坏，必须 fail closed。
-                if (!serialize(parsed).equals(serialize(normalized))) {
-                    throw new BusinessException(500, "简历内容格式不正确，请重新解析");
-                }
-                return normalized;
+                // Historical semantic V1 snapshots may omit generated IDs or optional arrays.
+                // Materialize only those harmless structural defaults before strict binding;
+                // unknown fields and scalar type mismatches still fail closed.
+                ResumeDocumentDTO parsed = strictObjectMapper.treeToValue(
+                        withHistoricalOptionalArrayDefaults(root), ResumeDocumentDTO.class);
+                return normalize(parsed);
             } catch (JsonProcessingException exception) {
                 throw new BusinessException(500, "简历内容格式不正确，请重新解析");
             }
@@ -119,6 +128,11 @@ public class ResumeDocumentConverterImpl implements ResumeDocumentConverter {
         // 同一 V1 版本内的历史 generic shape：只读升级，不为它引入第二个 schema 版本。
         ResumeDocumentDTO upgraded = ResumeDocumentDTO.builder()
                 .schemaVersion(ResumeDocumentDTO.SCHEMA_VERSION)
+                .sourceRef(readSourceRef(root.path("sourceRef")))
+                .sourceOccurrenceIds(readStringList(root.path("sourceOccurrenceIds"),
+                        "简历来源 occurrence 格式不正确，请重新解析"))
+                .sourceOccurrenceTexts(readSourceOccurrenceTexts(root.path("sourceOccurrenceTexts")))
+                .sourceOccurrencePrimaryIds(readSourceOccurrenceTexts(root.path("sourceOccurrencePrimaryIds")))
                 .basics(upgradeBasics(root))
                 .sections(upgradeSections(root.path("sections")))
                 .build();
@@ -153,7 +167,10 @@ public class ResumeDocumentConverterImpl implements ResumeDocumentConverter {
                     contact.getValue(), CONTACT_FIELD_MAX_LENGTH, "基础信息字段值超出编辑上限");
             String normalizedId = idAllocator.allocate(contact.getId());
             String contactKey = type.name() + "\u0000" + (value == null ? "" : value.strip());
-            if (!seenContactValues.add(contactKey)) {
+            if (!seenContactValues.add(contactKey) && !hasContactProvenance(contact)) {
+                // Keep the historical cleanup for two unreferenced compatibility rows, but
+                // never collapse source-backed duplicate occurrences merely because their text
+                // and type are equal.
                 continue;
             }
             contacts.add(ResumeDocumentContactDTO.builder()
@@ -161,9 +178,14 @@ public class ResumeDocumentConverterImpl implements ResumeDocumentConverter {
                     .type(type.name())
                     .label(requireWithinLength(label, CONTACT_FIELD_MAX_LENGTH, "基础信息字段名超出编辑上限"))
                     .value(value)
+                    .sourceRef(copySourceRef(contact.getSourceRef()))
+                    .sourceOccurrenceIds(copyStrings(contact.getSourceOccurrenceIds()))
                     .build());
         }
         return ResumeDocumentBasicsDTO.builder()
+                .sourceRef(copySourceRef(basics.getSourceRef()))
+                .sourceOccurrenceIds(copyStrings(basics.getSourceOccurrenceIds()))
+                .fieldSourceRefs(copyFieldSourceRefs(basics.getFieldSourceRefs()))
                 .name(requireWithinLength(basics.getName(), NAME_MAX_LENGTH, "姓名超出编辑上限"))
                 .jobIntention(requireWithinLength(basics.getJobIntention(), BASICS_FIELD_MAX_LENGTH, "求职意向超出编辑上限"))
                 .highestEducation(requireWithinLength(basics.getHighestEducation(), BASICS_FIELD_MAX_LENGTH, "最高学历超出编辑上限"))
@@ -193,6 +215,8 @@ public class ResumeDocumentConverterImpl implements ResumeDocumentConverter {
                     .id(idAllocator.allocate(section.getId()))
                     .kind(kind.name())
                     .title(requireWithinLength(section.getTitle(), SECTION_TITLE_MAX_LENGTH, "章节标题超出编辑上限"))
+                    .sourceRef(copySourceRef(section.getSourceRef()))
+                    .sourceOccurrenceIds(copyStrings(section.getSourceOccurrenceIds()))
                     .entries(normalizeEntries(section.getEntries(), idAllocator))
                     .build());
         }
@@ -218,6 +242,11 @@ public class ResumeDocumentConverterImpl implements ResumeDocumentConverter {
             }
             normalized.add(ResumeDocumentEntryDTO.builder()
                     .id(idAllocator.allocate(entry.getId()))
+                    .sourceRef(copySourceRef(entry.getSourceRef()))
+                    .sourceOccurrenceIds(copyStrings(entry.getSourceOccurrenceIds()))
+                    .fieldSourceRefs(copyFieldSourceRefs(entry.getFieldSourceRefs()))
+                    .skillItemSourceRefs(copySourceRefs(entry.getSkillItemSourceRefs()))
+                    .skillDescriptionSourceRefs(copySourceRefs(entry.getSkillDescriptionSourceRefs()))
                     .organization(entryField(entry.getOrganization(), "条目标题超出编辑上限"))
                     .role(entryField(entry.getRole(), "条目职位超出编辑上限"))
                     .school(entryField(entry.getSchool(), "学校名超出编辑上限"))
@@ -226,12 +255,28 @@ public class ResumeDocumentConverterImpl implements ResumeDocumentConverter {
                     .startDate(entryField(entry.getStartDate(), "开始时间超出编辑上限"))
                     .endDate(entryField(entry.getEndDate(), "结束时间超出编辑上限"))
                     .location(entryField(entry.getLocation(), "地点超出编辑上限"))
+                    .environment(entryField(entry.getEnvironment(), "开发环境超出编辑上限"))
+                    .mentor(entryField(entry.getMentor(), "导师超出编辑上限"))
+                    .techStack(normalizeSkillItems(entry.getTechStack()))
+                    .techStackSourceRefs(copySourceRefs(entry.getTechStackSourceRefs()))
                     .group(entryField(entry.getGroup(), "技能组名超出编辑上限"))
+                    .awardTitle(entryField(entry.getAwardTitle(), "获奖标题超出编辑上限"))
+                    .awardLevel(entryField(entry.getAwardLevel(), "获奖级别超出编辑上限"))
+                    .awardCompetition(entryField(entry.getAwardCompetition(), "竞赛名称超出编辑上限"))
+                    .awardRanking(entryField(entry.getAwardRanking(), "获奖名次超出编辑上限"))
+                    .awardDate(entryField(entry.getAwardDate(), "获奖日期超出编辑上限"))
                     .skillItems(normalizeSkillItems(entry.getSkillItems()))
+                    .skillDescriptions(normalizeSkillDescriptions(entry.getSkillDescriptions()))
                     .bullets(normalizeBullets(entry.getBullets(), idAllocator))
                     .build());
         }
         return normalized;
+    }
+
+    private boolean hasContactProvenance(ResumeDocumentContactDTO contact) {
+        return contact != null
+                && (contact.getSourceRef() != null
+                || contact.getSourceOccurrenceIds() != null && !contact.getSourceOccurrenceIds().isEmpty());
     }
 
     private String entryField(String value, String message) {
@@ -271,39 +316,102 @@ public class ResumeDocumentConverterImpl implements ResumeDocumentConverter {
             normalized.add(ResumeDocumentBulletDTO.builder()
                     .id(idAllocator.allocate(bullet.getId()))
                     .text(requireWithinLength(bullet.getText(), BULLET_MAX_LENGTH, "要点内容超出编辑上限"))
+                    .sourceRef(copySourceRef(bullet.getSourceRef()))
+                    .sourceOccurrenceIds(copyStrings(bullet.getSourceOccurrenceIds()))
                     .build());
         }
         return normalized;
     }
 
+    /**
+     * Decide whether the payload is already semantic V1. Presence of a JSON property is not
+     * enough: old generic payloads commonly contain the same keys with null/blank values. A
+     * nonblank heading/meta anywhere deliberately selects the compatibility path, even when a
+     * different entry already contains semantic fields; the compatibility path is what can
+     * retain both shapes in one historical document.
+     */
     private boolean looksLikeSemanticDocument(JsonNode root) {
+        if (root == null || !root.isObject()) {
+            return false;
+        }
+
         JsonNode basicsNode = root.path("basics");
-        if (basicsNode.has("jobIntention") || basicsNode.has("highestEducation")) {
+        JsonNode contactsNode = basicsNode.path("contacts");
+        JsonNode sectionsNode = root.path("sections");
+        boolean hasLegacyEntryFields = false;
+        if (sectionsNode.isArray()) {
+            for (JsonNode section : sectionsNode) {
+                if (section == null || !section.isObject()) {
+                    continue;
+                }
+                JsonNode entriesNode = section.path("entries");
+                if (!entriesNode.isArray()) {
+                    continue;
+                }
+                for (JsonNode entry : entriesNode) {
+                    if (entry != null && entry.isObject()
+                            && (textOrNull(entry.path("heading")) != null
+                            || textOrNull(entry.path("meta")) != null)) {
+                        hasLegacyEntryFields = true;
+                    }
+                }
+            }
+        }
+        if (hasLegacyEntryFields) {
+            return false;
+        }
+        if (hasLegacyContactFields(contactsNode)) {
+            // A contact without a semantic type is a legacy label/value row. Route the whole
+            // mixed snapshot through the compatibility mapper so labels such as 学校、专业、日期
+            // and 时间 are retained as OTHER rather than silently discarded by normalization.
+            return false;
+        }
+
+        if (hasNonBlank(root, "sourceRef") || hasNonBlank(root, "sourceOccurrenceIds")) {
             return true;
         }
-        JsonNode contactsNode = basicsNode.path("contacts");
+        if (hasNonBlank(basicsNode, "jobIntention")
+                || hasNonBlank(basicsNode, "highestEducation")
+                || hasNonBlank(basicsNode, "sourceRef")
+                || hasNonBlank(basicsNode, "sourceOccurrenceIds")
+                || hasNonBlank(basicsNode, "fieldSourceRefs")) {
+            return true;
+        }
         if (contactsNode.isArray()) {
             for (JsonNode contact : contactsNode) {
-                if (contact != null && contact.has("type")) {
+                // A typed contact is semantic only when its type is actually usable. JSON null
+                // and whitespace must not make a generic contact look semantic.
+                if (hasNonBlank(contact, "type")) {
                     return true;
                 }
             }
         }
-        JsonNode sectionsNode = root.path("sections");
         if (!sectionsNode.isArray()) {
             return false;
         }
         for (JsonNode section : sectionsNode) {
+            if (section == null || !section.isObject()) {
+                continue;
+            }
+            if (hasNonBlank(section, "sourceRef") || hasNonBlank(section, "sourceOccurrenceIds")) {
+                return true;
+            }
             JsonNode entriesNode = section.path("entries");
             if (!entriesNode.isArray()) {
                 continue;
             }
+            boolean summarySection = isSummaryKind(textOrNull(section.path("kind")));
             for (JsonNode entry : entriesNode) {
-                if (textOrNull(entry.path("heading")) != null || textOrNull(entry.path("meta")) != null) {
-                    return false;
+                if (entry == null || !entry.isObject()) {
+                    continue;
                 }
-                if (entry.has("organization") || entry.has("school") || entry.has("skillItems")
-                        || entry.has("startDate") || entry.has("endDate")) {
+                if (hasNonBlankCanonicalEntryField(entry)
+                        || hasNonBlank(entry, "sourceRef")
+                        || hasNonBlank(entry, "sourceOccurrenceIds")
+                        || hasNonBlank(entry, "fieldSourceRefs")
+                        || hasNonBlank(entry, "skillItemSourceRefs")
+                        || hasNonBlank(entry, "skillDescriptionSourceRefs")
+                        || (summarySection && hasNonBlankBulletText(entry.path("bullets")))) {
                     return true;
                 }
             }
@@ -311,14 +419,97 @@ public class ResumeDocumentConverterImpl implements ResumeDocumentConverter {
         return false;
     }
 
-    /** V1 generic basics 升级：label/value 联系方式按值与标签确定性映射为类型化联系方式。 */
+    private boolean hasLegacyContactFields(JsonNode contactsNode) {
+        if (contactsNode == null || !contactsNode.isArray()) {
+            return false;
+        }
+        for (JsonNode contact : contactsNode) {
+            if (contact != null && contact.isObject()
+                    && hasNonBlank(contact, "value")
+                    && !hasNonBlank(contact, "type")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean hasNonBlankCanonicalEntryField(JsonNode entry) {
+        String[] scalarFields = {
+            "organization", "role", "school", "degree", "major", "startDate", "endDate", "location",
+            "environment", "mentor", "group", "awardTitle", "awardLevel", "awardCompetition",
+            "awardRanking", "awardDate"
+        };
+        for (String field : scalarFields) {
+            if (hasNonBlank(entry, field)) {
+                return true;
+            }
+        }
+        return hasNonBlank(entry, "techStack")
+                || hasNonBlank(entry, "skillItems")
+                || hasNonBlank(entry, "skillDescriptions");
+    }
+
+    private boolean hasNonBlankBulletText(JsonNode bulletsNode) {
+        if (bulletsNode == null || !bulletsNode.isArray()) {
+            return false;
+        }
+        for (JsonNode bullet : bulletsNode) {
+            if (bullet != null && bullet.isObject() && textOrNull(bullet.path("text")) != null) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean hasNonBlank(JsonNode parent, String field) {
+        return parent != null && !parent.isMissingNode() && hasNonBlankNode(parent.get(field));
+    }
+
+    private boolean hasNonBlankNode(JsonNode node) {
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return false;
+        }
+        if (node.isTextual()) {
+            return !node.asText().isBlank();
+        }
+        if (node.isArray() || node.isObject()) {
+            for (JsonNode child : node) {
+                if (hasNonBlankNode(child)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        return true;
+    }
+
+    private boolean isSummaryKind(String kind) {
+        if (kind == null) {
+            return false;
+        }
+        return "SUMMARY".equalsIgnoreCase(kind.strip());
+    }
+
+    /**
+     * V1 generic basics 升级。Known semantic basics are copied first, then legacy label/value
+     * rows are mapped. A row that cannot safely become a basic scalar remains an OTHER contact;
+     * it is never discarded merely because its label resembles education or a date.
+     */
     private ResumeDocumentBasicsDTO upgradeBasics(JsonNode root) {
         JsonNode basicsNode = root.path("basics");
+        if (!basicsNode.isMissingNode() && !basicsNode.isNull() && !basicsNode.isObject()) {
+            throw new BusinessException(500, "简历基础信息格式不正确，请重新解析");
+        }
+        ResumeDocumentBasicsDTO parsed = basicsNode.isObject()
+                ? readKnownValue(basicsNode, ResumeDocumentBasicsDTO.class, "简历基础信息格式不正确，请重新解析")
+                : new ResumeDocumentBasicsDTO();
         List<ResumeDocumentContactDTO> contacts = new ArrayList<>();
-        String jobIntention = null;
-        String highestEducation = null;
+        String jobIntention = textOrNull(basicsNode.path("jobIntention"));
+        String highestEducation = textOrNull(basicsNode.path("highestEducation"));
+        java.util.Map<String, ResumeSourceRefDTO> fieldSourceRefs =
+                copyFieldSourceRefs(parsed.getFieldSourceRefs());
         JsonNode contactsNode = basicsNode.path("contacts");
-        if (!contactsNode.isMissingNode() && !contactsNode.isArray()) {
+        if (!contactsNode.isMissingNode() && !contactsNode.isNull() && !contactsNode.isArray()) {
             throw new BusinessException(500, "简历联系方式格式不正确，请重新解析");
         }
         if (contactsNode.isArray()) {
@@ -326,44 +517,95 @@ public class ResumeDocumentConverterImpl implements ResumeDocumentConverter {
                 if (contactNode == null || !contactNode.isObject()) {
                     throw new BusinessException(500, "简历联系方式格式不正确，请重新解析");
                 }
+                ResumeDocumentContactDTO parsedContact = readKnownValue(
+                        contactNode, ResumeDocumentContactDTO.class, "简历联系方式格式不正确，请重新解析");
                 String label = textOrNull(contactNode.path("label"));
                 String value = textOrNull(contactNode.path("value"));
                 if (value == null) {
                     throw new BusinessException(500, "简历联系方式内容缺失，请重新解析");
                 }
-                if (label != null && label.contains("求职意向")) {
+                String explicitType = textOrNull(contactNode.path("type"));
+                ResumeDocumentContactType type = explicitType == null
+                        ? upgradeContactType(label, value)
+                        : parseContactType(explicitType);
+                ResumeSourceRefDTO contactSourceRef = sourceRefWithOccurrences(
+                        parsedContact.getSourceRef(), parsedContact.getSourceOccurrenceIds());
+
+                // A typed contact is already semantic. Only an untyped legacy row is allowed to
+                // promote a label into jobIntention/highestEducation.
+                boolean untypedLegacy = explicitType == null;
+                if (untypedLegacy && isJobIntentionLabel(label)) {
                     if (jobIntention == null) {
                         jobIntention = value;
+                        preserveFieldSourceRef(fieldSourceRefs, "jobIntention", contactSourceRef);
+                    } else if (sameText(jobIntention, value)) {
+                        preserveFieldSourceRef(fieldSourceRefs, "jobIntention", contactSourceRef);
+                    } else {
+                        addLegacyContact(contacts, parsedContact, type, label, value);
                     }
                     continue;
                 }
-                if (label != null && (label.contains("最高学历") || label.equals("学历")
-                        || label.equalsIgnoreCase("degree"))) {
-                    if (highestEducation == null && isDegreeValue(value)) {
+                if (untypedLegacy && isHighestEducationLabel(label) && isDegreeValue(value)) {
+                    if (highestEducation == null) {
                         highestEducation = value;
+                        preserveFieldSourceRef(fieldSourceRefs, "highestEducation", contactSourceRef);
+                    } else if (sameText(highestEducation, value)) {
+                        preserveFieldSourceRef(fieldSourceRefs, "highestEducation", contactSourceRef);
+                    } else {
+                        addLegacyContact(contacts, parsedContact, type, label, value);
                     }
                     continue;
                 }
-                if (label != null && (label.contains("学校") || label.contains("院校")
-                        || label.equalsIgnoreCase("university") || label.contains("专业")
-                        || label.contains("日期") || label.contains("时间"))) {
-                    // 旧 V1 的自由 label 可能把教育/日期塞进 contacts；不要按值猜成电话。
-                    continue;
-                }
-                contacts.add(ResumeDocumentContactDTO.builder()
-                        .id(textOrNull(contactNode.path("id")))
-                        .type(upgradeContactType(label, value).name())
-                        .label(label)
-                        .value(value)
-                        .build());
+
+                // School/major/date labels, conflicting scalar rows, and otherwise ambiguous
+                // values remain visible as typed OTHER contacts instead of being lost.
+                addLegacyContact(contacts, parsedContact, type, label, value);
             }
         }
         return ResumeDocumentBasicsDTO.builder()
+                .sourceRef(copySourceRef(parsed.getSourceRef()))
+                .sourceOccurrenceIds(copyStrings(parsed.getSourceOccurrenceIds()))
+                .fieldSourceRefs(fieldSourceRefs)
                 .name(textOrNull(basicsNode.path("name")))
                 .jobIntention(jobIntention)
                 .highestEducation(highestEducation)
                 .contacts(contacts)
                 .build();
+    }
+
+    private ResumeDocumentContactType parseContactType(String value) {
+        ResumeDocumentContactType type = ResumeDocumentContactType.fromValue(value);
+        if (type == ResumeDocumentContactType.OTHER
+                && !ResumeDocumentContactType.OTHER.name().equalsIgnoreCase(value.strip())) {
+            throw new BusinessException(500, "不支持的联系方式类型，请重新解析");
+        }
+        return type;
+    }
+
+    private boolean isJobIntentionLabel(String label) {
+        return label != null && label.contains("求职意向");
+    }
+
+    private boolean isHighestEducationLabel(String label) {
+        return label != null && (label.contains("最高学历") || label.equals("学历")
+                || label.equalsIgnoreCase("degree"));
+    }
+
+    private void addLegacyContact(
+            List<ResumeDocumentContactDTO> contacts,
+            ResumeDocumentContactDTO parsed,
+            ResumeDocumentContactType type,
+            String label,
+            String value) {
+        String effectiveLabel = label == null || label.isBlank() ? type.getDefaultLabel() : label;
+        contacts.add(ResumeDocumentContactDTO.builder()
+                .id(textOrNull(parsed.getId()))
+                .type(type.name())
+                .label(effectiveLabel)
+                .value(value)
+                .sourceRef(copySourceRef(parsed.getSourceRef()))
+                .sourceOccurrenceIds(copyStrings(parsed.getSourceOccurrenceIds()))
+                .build());
     }
 
     private boolean isDegreeValue(String value) {
@@ -425,9 +667,12 @@ public class ResumeDocumentConverterImpl implements ResumeDocumentConverter {
         return ResumeDocumentContactType.OTHER;
     }
 
-    /** V1 sections 升级：heading/meta 按章节语义迁移到结构化字段，内容不猜测不丢弃。 */
+    /** V1 sections 升级：保留 section/entry 的语义字段与全部来源元数据，再迁移 heading/meta。 */
     private List<ResumeDocumentSectionDTO> upgradeSections(JsonNode sectionsNode) {
         List<ResumeDocumentSectionDTO> sections = new ArrayList<>();
+        if (sectionsNode == null || sectionsNode.isMissingNode() || sectionsNode.isNull()) {
+            return sections;
+        }
         if (!sectionsNode.isArray()) {
             throw new BusinessException(500, "简历内容格式不正确，请重新解析");
         }
@@ -435,6 +680,15 @@ public class ResumeDocumentConverterImpl implements ResumeDocumentConverter {
             if (sectionNode == null || !sectionNode.isObject()) {
                 throw new BusinessException(500, "简历内容格式不正确，请重新解析");
             }
+            JsonNode entriesNode = sectionNode.path("entries");
+            if (entriesNode.isMissingNode() || entriesNode.isNull()) {
+                entriesNode = objectMapper.createArrayNode();
+            }
+            if (!entriesNode.isArray()) {
+                throw new BusinessException(500, "简历章节条目格式不正确，请重新解析");
+            }
+            ResumeDocumentSectionDTO parsed = readKnownValue(
+                    sectionNode, ResumeDocumentSectionDTO.class, "简历章节格式不正确，请重新解析");
             String rawKind = textOrNull(sectionNode.path("kind"));
             ResumeDocumentSectionKind kind = ResumeDocumentSectionKind.fromValue(rawKind);
             if (kind == ResumeDocumentSectionKind.CUSTOM
@@ -442,10 +696,6 @@ public class ResumeDocumentConverterImpl implements ResumeDocumentConverter {
                 throw new BusinessException(500, "不支持的简历章节类型，请重新解析");
             }
             List<ResumeDocumentEntryDTO> entries = new ArrayList<>();
-            JsonNode entriesNode = sectionNode.path("entries");
-            if (!entriesNode.isArray()) {
-                throw new BusinessException(500, "简历章节条目格式不正确，请重新解析");
-            }
             for (JsonNode entryNode : entriesNode) {
                 entries.add(upgradeEntry(kind, entryNode));
             }
@@ -453,6 +703,8 @@ public class ResumeDocumentConverterImpl implements ResumeDocumentConverter {
                     .id(textOrNull(sectionNode.path("id")))
                     .kind(kind.name())
                     .title(textOrNull(sectionNode.path("title")))
+                    .sourceRef(copySourceRef(parsed.getSourceRef()))
+                    .sourceOccurrenceIds(copyStrings(parsed.getSourceOccurrenceIds()))
                     .entries(entries)
                     .build());
         }
@@ -463,10 +715,264 @@ public class ResumeDocumentConverterImpl implements ResumeDocumentConverter {
         if (entryNode == null || !entryNode.isObject()) {
             throw new BusinessException(500, "简历条目格式不正确，请重新解析");
         }
+        ResumeDocumentEntryDTO parsed = readKnownValue(
+                entryNode, ResumeDocumentEntryDTO.class, "简历条目格式不正确，请重新解析");
         String heading = textOrNull(entryNode.path("heading"));
         String meta = textOrNull(entryNode.path("meta"));
+        List<ResumeDocumentBulletDTO> bullets = readLegacyBullets(entryNode.path("bullets"));
+        ResumeDocumentEntryDTO.ResumeDocumentEntryDTOBuilder builder = copyEntryFields(parsed);
+
+        switch (kind) {
+            case SKILL -> {
+                List<String> skillItems = copyStrings(parsed.getSkillItems());
+                if (skillItems == null) {
+                    skillItems = new ArrayList<>();
+                }
+                List<ResumeSourceRefDTO> itemRefs = copySourceRefs(parsed.getSkillItemSourceRefs());
+                if (itemRefs == null) {
+                    itemRefs = new ArrayList<>();
+                }
+                String group = firstNonBlank(parsed.getGroup(), heading);
+                boolean headingConsumed = heading == null || sameText(group, heading);
+                boolean hasSemanticSkillValues = hasNonBlank(parsed.getSkillItems())
+                        || hasNonBlank(parsed.getSkillDescriptions());
+                List<ResumeDocumentBulletDTO> retainedBullets = new ArrayList<>();
+                if (!hasSemanticSkillValues) {
+                    for (ResumeDocumentBulletDTO bullet : bullets) {
+                        String text = bullet.getText();
+                        int separator = indexOfGroupSeparator(text);
+                        String itemText = text;
+                        if ((group == null || group.isBlank()) && separator > 0 && separator < text.length() - 1) {
+                            group = text.substring(0, separator).strip();
+                            itemText = text.substring(separator + 1);
+                        } else if (separator > 0 && separator < text.length() - 1
+                                && sameText(group, text.substring(0, separator))) {
+                            itemText = text.substring(separator + 1);
+                        }
+                        List<String> splitItems = splitSkillItems(itemText);
+                        if (splitItems.isEmpty()) {
+                            splitItems = List.of(text);
+                        }
+                        for (String item : splitItems) {
+                            skillItems.add(item);
+                            itemRefs.add(sourceRefFor(bullet, parsed));
+                        }
+                    }
+                } else {
+                    // A mixed entry may contain canonical skill fields and old bullets. Keep the
+                    // bullets instead of treating them all as disposable legacy compression.
+                    retainedBullets.addAll(bullets);
+                }
+                List<String> descriptions = copyStrings(parsed.getSkillDescriptions());
+                if (descriptions == null) {
+                    descriptions = new ArrayList<>();
+                }
+                List<ResumeSourceRefDTO> descriptionRefs = copySourceRefs(parsed.getSkillDescriptionSourceRefs());
+                if (descriptionRefs == null) {
+                    descriptionRefs = new ArrayList<>();
+                }
+                if (meta != null) {
+                    descriptions.add(meta);
+                    descriptionRefs.add(sourceRefFor(parsed));
+                }
+                if (!headingConsumed) {
+                    appendLegacyBullet(retainedBullets, heading, parsed);
+                }
+                return builder.group(group)
+                        .skillItems(skillItems)
+                        .skillItemSourceRefs(itemRefs.isEmpty() ? null : itemRefs)
+                        .skillDescriptions(descriptions.isEmpty() ? null : descriptions)
+                        .skillDescriptionSourceRefs(descriptionRefs.isEmpty() ? null : descriptionRefs)
+                        .bullets(retainedBullets)
+                        .build();
+            }
+            case EDUCATION -> {
+                String school = firstNonBlank(parsed.getSchool(), heading);
+                boolean headingConsumed = heading == null || sameText(school, heading);
+                String startDate = parsed.getStartDate();
+                String endDate = parsed.getEndDate();
+                boolean metaConsumed = true;
+                if (meta != null) {
+                    Matcher range = DATE_RANGE.matcher(meta);
+                    if (range.find()) {
+                        String rangeStart = range.group(1).strip();
+                        String rangeEnd = range.group(2).strip();
+                        if (startDate == null) {
+                            startDate = rangeStart;
+                        } else if (!sameText(startDate, rangeStart)) {
+                            metaConsumed = false;
+                        }
+                        if (endDate == null) {
+                            endDate = rangeEnd;
+                        } else if (!sameText(endDate, rangeEnd)) {
+                            metaConsumed = false;
+                        }
+                        // Any text outside the date range remains part of the original meta
+                        // value. Preserve that value once below rather than splitting it into a
+                        // remainder and the full string (which would duplicate content).
+                        if (!removeDateRangeRemainder(meta, range).isEmpty()) {
+                            metaConsumed = false;
+                        }
+                    } else if (looksLikeDate(meta)) {
+                        if (startDate == null) {
+                            startDate = meta;
+                        } else if (!sameText(startDate, meta) && !sameText(endDate, meta)) {
+                            metaConsumed = false;
+                        }
+                    } else {
+                        metaConsumed = false;
+                    }
+                }
+                if (!headingConsumed) {
+                    appendLegacyBullet(bullets, heading, parsed);
+                }
+                // Keep an unprojectable metadata value once. In particular, a date range with
+                // a non-date remainder must not be appended both as the remainder and as the
+                // original meta string.
+                if (!metaConsumed && meta != null
+                        && bullets.stream().noneMatch(bullet -> sameText(bullet.getText(), meta))) {
+                    appendLegacyBullet(bullets, meta, parsed);
+                }
+                return builder.school(school)
+                        .startDate(startDate)
+                        .endDate(endDate)
+                        .bullets(bullets)
+                        .build();
+            }
+            case EXPERIENCE, PROJECT -> {
+                String organization = firstNonBlank(parsed.getOrganization(), heading);
+                boolean headingConsumed = heading == null || sameText(organization, heading);
+                String role = parsed.getRole();
+                String startDate = parsed.getStartDate();
+                String endDate = parsed.getEndDate();
+                boolean metaConsumed = true;
+                if (meta != null) {
+                    Matcher range = DATE_RANGE.matcher(meta);
+                    if (range.find()) {
+                        String rangeStart = range.group(1).strip();
+                        String rangeEnd = range.group(2).strip();
+                        if (startDate == null) {
+                            startDate = rangeStart;
+                        } else if (!sameText(startDate, rangeStart)) {
+                            metaConsumed = false;
+                        }
+                        if (endDate == null) {
+                            endDate = rangeEnd;
+                        } else if (!sameText(endDate, rangeEnd)) {
+                            metaConsumed = false;
+                        }
+                        String remainder = removeDateRangeRemainder(meta, range);
+                        if (!remainder.isEmpty()) {
+                            if (role == null) {
+                                role = remainder;
+                            } else if (!sameText(role, remainder)) {
+                                metaConsumed = false;
+                            }
+                        }
+                    } else if (role == null && !looksLikeDate(meta)) {
+                        // A legacy meta value containing only a role is still a role, not a
+                        // fabricated start date.
+                        role = meta;
+                    } else if (looksLikeDate(meta)) {
+                        if (startDate == null) {
+                            startDate = meta;
+                        } else if (!sameText(role, meta) && !sameText(startDate, meta)
+                                && !sameText(endDate, meta)) {
+                            metaConsumed = false;
+                        }
+                    } else if (!sameText(role, meta) && !sameText(startDate, meta)
+                            && !sameText(endDate, meta)) {
+                        metaConsumed = false;
+                    }
+                }
+                if (!headingConsumed) {
+                    appendLegacyBullet(bullets, heading, parsed);
+                }
+                if (!metaConsumed && meta != null) {
+                    appendLegacyBullet(bullets, meta, parsed);
+                }
+                return builder.organization(organization)
+                        .role(role)
+                        .startDate(startDate)
+                        .endDate(endDate)
+                        .bullets(bullets)
+                        .build();
+            }
+            case ACHIEVEMENT -> {
+                // Achievement has two safe semantic slots in V1: heading is the award title,
+                // while a metadata value that is only a date/range is the award date. Any
+                // ambiguous metadata remains a bullet instead of being guessed into level,
+                // competition, or ranking.
+                String awardTitle = firstNonBlank(parsed.getAwardTitle(), heading);
+                boolean headingConsumed = heading == null || sameText(awardTitle, heading);
+                String awardDate = parsed.getAwardDate();
+                boolean metaConsumed = meta == null;
+                if (meta != null) {
+                    if (awardDate == null && isStandaloneDate(meta)) {
+                        awardDate = meta;
+                        metaConsumed = true;
+                    } else if (sameText(awardDate, meta)) {
+                        metaConsumed = true;
+                    } else {
+                        metaConsumed = false;
+                    }
+                }
+                if (!headingConsumed) {
+                    appendLegacyBullet(bullets, heading, parsed);
+                }
+                if (!metaConsumed) {
+                    appendLegacyBullet(bullets, meta, parsed);
+                }
+                return builder.awardTitle(awardTitle)
+                        .awardDate(awardDate)
+                        .bullets(bullets)
+                        .build();
+            }
+            default -> {
+                // SUMMARY/CERTIFICATE/OTHER/CUSTOM have no generic heading/meta slots in
+                // canonical V1. Preserve both values even when bullets already exist.
+                appendLegacyBullet(bullets, heading, parsed);
+                appendLegacyBullet(bullets, meta, parsed);
+                return builder.bullets(bullets).build();
+            }
+        }
+    }
+
+    private ResumeDocumentEntryDTO.ResumeDocumentEntryDTOBuilder copyEntryFields(ResumeDocumentEntryDTO parsed) {
+        return ResumeDocumentEntryDTO.builder()
+                .id(parsed.getId())
+                .sourceRef(copySourceRef(parsed.getSourceRef()))
+                .sourceOccurrenceIds(copyStrings(parsed.getSourceOccurrenceIds()))
+                .fieldSourceRefs(copyFieldSourceRefs(parsed.getFieldSourceRefs()))
+                .skillItemSourceRefs(copySourceRefs(parsed.getSkillItemSourceRefs()))
+                .skillDescriptionSourceRefs(copySourceRefs(parsed.getSkillDescriptionSourceRefs()))
+                .organization(parsed.getOrganization())
+                .role(parsed.getRole())
+                .school(parsed.getSchool())
+                .degree(parsed.getDegree())
+                .major(parsed.getMajor())
+                .startDate(parsed.getStartDate())
+                .endDate(parsed.getEndDate())
+                .location(parsed.getLocation())
+                .environment(parsed.getEnvironment())
+                .mentor(parsed.getMentor())
+                .techStack(copyStrings(parsed.getTechStack()))
+                .techStackSourceRefs(copySourceRefs(parsed.getTechStackSourceRefs()))
+                .group(parsed.getGroup())
+                .awardTitle(parsed.getAwardTitle())
+                .awardLevel(parsed.getAwardLevel())
+                .awardCompetition(parsed.getAwardCompetition())
+                .awardRanking(parsed.getAwardRanking())
+                .awardDate(parsed.getAwardDate())
+                .skillItems(copyStrings(parsed.getSkillItems()))
+                .skillDescriptions(copyStrings(parsed.getSkillDescriptions()));
+    }
+
+    private List<ResumeDocumentBulletDTO> readLegacyBullets(JsonNode bulletsNode) {
         List<ResumeDocumentBulletDTO> bullets = new ArrayList<>();
-        JsonNode bulletsNode = entryNode.path("bullets");
+        if (bulletsNode == null || bulletsNode.isMissingNode() || bulletsNode.isNull()) {
+            return bullets;
+        }
         if (!bulletsNode.isArray()) {
             throw new BusinessException(500, "简历要点格式不正确，请重新解析");
         }
@@ -474,6 +980,8 @@ public class ResumeDocumentConverterImpl implements ResumeDocumentConverter {
             if (bulletNode == null || !bulletNode.isObject()) {
                 throw new BusinessException(500, "简历要点格式不正确，请重新解析");
             }
+            ResumeDocumentBulletDTO parsed = readKnownValue(
+                    bulletNode, ResumeDocumentBulletDTO.class, "简历要点格式不正确，请重新解析");
             String text = textOrNull(bulletNode.path("text"));
             if (text == null) {
                 throw new BusinessException(500, "简历要点内容缺失，请重新解析");
@@ -481,85 +989,92 @@ public class ResumeDocumentConverterImpl implements ResumeDocumentConverter {
             bullets.add(ResumeDocumentBulletDTO.builder()
                     .id(textOrNull(bulletNode.path("id")))
                     .text(text)
+                    .sourceRef(copySourceRef(parsed.getSourceRef()))
+                    .sourceOccurrenceIds(copyStrings(parsed.getSourceOccurrenceIds()))
                     .build());
         }
-
-        ResumeDocumentEntryDTO.ResumeDocumentEntryDTOBuilder builder = ResumeDocumentEntryDTO.builder()
-                .id(textOrNull(entryNode.path("id")));
-
-        switch (kind) {
-            case SKILL -> {
-                // V1 技能被压扁成「分组：技能、技能」字符串；升级时还原为技能组。
-                List<String> skillItems = new ArrayList<>();
-                String group = heading;
-                for (ResumeDocumentBulletDTO bullet : bullets) {
-                    String text = bullet.getText();
-                    int separator = indexOfGroupSeparator(text);
-                    if (group == null && separator > 0 && separator < text.length() - 1) {
-                        group = text.substring(0, separator).strip();
-                        skillItems.addAll(splitSkillItems(text.substring(separator + 1)));
-                    } else {
-                        skillItems.addAll(splitSkillItems(text));
-                    }
-                }
-                return builder.group(group).skillItems(skillItems).bullets(new ArrayList<>()).build();
-            }
-            case EDUCATION -> {
-                builder.school(heading);
-                applyDateRange(builder, meta);
-                return builder.bullets(bullets).build();
-            }
-            case EXPERIENCE, PROJECT -> {
-                builder.organization(heading);
-                applyDateRangeOrMeta(builder, meta);
-                return builder.bullets(bullets).build();
-            }
-            default -> {
-                // SUMMARY/ACHIEVEMENT/CERTIFICATE/OTHER/CUSTOM：heading-only 条目还原为要点。
-                if (bullets.isEmpty() && heading != null) {
-                    bullets.add(ResumeDocumentBulletDTO.builder().text(heading).build());
-                    heading = null;
-                }
-                if (meta != null) {
-                    bullets.add(ResumeDocumentBulletDTO.builder().text(meta).build());
-                }
-                return builder.bullets(bullets).build();
-            }
-        }
+        return bullets;
     }
 
-    private void applyDateRange(ResumeDocumentEntryDTO.ResumeDocumentEntryDTOBuilder builder, String meta) {
-        if (meta == null) {
+    private void appendLegacyBullet(
+            List<ResumeDocumentBulletDTO> bullets, String value, ResumeDocumentEntryDTO source) {
+        String text = textOrNull(value == null ? null : objectMapper.getNodeFactory().textNode(value));
+        if (text == null) {
             return;
         }
-        Matcher range = DATE_RANGE.matcher(meta);
-        if (range.find()) {
-            builder.startDate(range.group(1).strip()).endDate(range.group(2).strip());
-        } else {
-            builder.startDate(meta);
-        }
+        bullets.add(ResumeDocumentBulletDTO.builder()
+                .text(text)
+                .sourceRef(copySourceRef(source.getSourceRef()))
+                .sourceOccurrenceIds(copyStrings(source.getSourceOccurrenceIds()))
+                .build());
     }
 
-    /**
-     * V1 经历 meta 形如「2022.07 - 至今」或「2022.07 - 至今 · Java 后端」。
-     * 能确定拆出日期区间则拆分；剩余文本整体作为职位保留，不做进一步猜测。
-     */
-    private void applyDateRangeOrMeta(ResumeDocumentEntryDTO.ResumeDocumentEntryDTOBuilder builder, String meta) {
-        if (meta == null) {
-            return;
+    private boolean containsSameText(List<?> values, String value) {
+        if (values == null || value == null) {
+            return false;
         }
-        Matcher range = DATE_RANGE.matcher(meta);
-        if (range.find()) {
-            builder.startDate(range.group(1).strip()).endDate(range.group(2).strip());
-            String remainder = (meta.substring(0, range.start()) + " " + meta.substring(range.end()))
-                    .replaceAll("[\\s·•\\-–—~～]+", " ")
-                    .strip();
-            if (!remainder.isEmpty()) {
-                builder.role(remainder);
+        for (Object item : values) {
+            String text = item instanceof ResumeDocumentBulletDTO bullet
+                    ? bullet.getText() : item instanceof String string ? string : null;
+            if (sameText(text, value)) {
+                return true;
             }
-        } else {
-            builder.startDate(meta);
         }
+        return false;
+    }
+
+    private String removeDateRangeRemainder(String meta, Matcher range) {
+        return (meta.substring(0, range.start()) + " " + meta.substring(range.end()))
+                .replaceAll("[\\s·•\\-–—~～]+", " ")
+                .strip();
+    }
+
+    private boolean looksLikeDate(String value) {
+        return value != null && (value.matches(".*(?:19|20)\\d{2}.*")
+                || value.matches("(?i)^(?:至今|今|现在|present)$"));
+    }
+
+    private boolean isStandaloneDate(String value) {
+        if (value == null || value.isBlank()) {
+            return false;
+        }
+        String normalized = value.strip();
+        return STANDALONE_DATE.matcher(normalized).matches()
+                || DATE_RANGE.matcher(normalized).matches();
+    }
+
+    private boolean hasNonBlank(List<String> values) {
+        return values != null && values.stream().anyMatch(value -> value != null && !value.isBlank());
+    }
+
+    private String firstNonBlank(String first, String second) {
+        return first != null && !first.isBlank() ? first : second;
+    }
+
+    private boolean sameText(String left, String right) {
+        return left != null && right != null && left.strip().equals(right.strip());
+    }
+
+    private ResumeSourceRefDTO sourceRefFor(ResumeDocumentEntryDTO source) {
+        return copySourceRef(source.getSourceRef());
+    }
+
+    private ResumeSourceRefDTO sourceRefFor(
+            ResumeDocumentBulletDTO bullet, ResumeDocumentEntryDTO fallback) {
+        if (bullet.getSourceRef() != null) {
+            return copySourceRef(bullet.getSourceRef());
+        }
+        List<String> occurrenceIds = copyStrings(bullet.getSourceOccurrenceIds());
+        if (occurrenceIds != null && !occurrenceIds.isEmpty()) {
+            // A bullet can carry a precise occurrence anchor without the older, richer sourceRef
+            // object. Do not widen it to the parent entry: that would make a child claim appear
+            // supported by an unrelated parent span.
+            return ResumeSourceRefDTO.builder()
+                    .text(bullet.getText())
+                    .sourceOccurrenceIds(occurrenceIds)
+                    .build();
+        }
+        return sourceRefFor(fallback);
     }
 
     private int indexOfGroupSeparator(String text) {
@@ -585,20 +1100,306 @@ public class ResumeDocumentConverterImpl implements ResumeDocumentConverter {
         return items;
     }
 
-    private String textOrNull(JsonNode node) {
-        if (node == null || node.isNull() || !node.isValueNode()) {
+    private ResumeSourceRefDTO copySourceRef(ResumeSourceRefDTO sourceRef) {
+        if (sourceRef == null) {
             return null;
         }
-        String value = node.asText().strip();
-        return value.isEmpty() ? null : value;
+        return ResumeSourceRefDTO.builder()
+                .startLine(sourceRef.getStartLine())
+                .endLine(sourceRef.getEndLine())
+                .text(sourceRef.getText())
+                .sourceBlockIds(copyStrings(sourceRef.getSourceBlockIds()))
+                .sourceOccurrenceIds(copyStrings(sourceRef.getSourceOccurrenceIds()))
+                .page(sourceRef.getPage())
+                .x(sourceRef.getX())
+                .y(sourceRef.getY())
+                .width(sourceRef.getWidth())
+                .height(sourceRef.getHeight())
+                .fontSize(sourceRef.getFontSize())
+                .fontName(sourceRef.getFontName())
+                .boldHint(sourceRef.getBoldHint())
+                .indent(sourceRef.getIndent())
+                .bulletHint(sourceRef.getBulletHint())
+                .role(sourceRef.getRole())
+                .sourceType(sourceRef.getSourceType())
+                .build();
     }
 
-    private String serialize(ResumeDocumentDTO document) {
-        try {
-            return objectMapper.writeValueAsString(document);
-        } catch (JsonProcessingException exception) {
-            throw new BusinessException(500, "简历内容保存失败");
+    private List<String> copyStrings(List<String> values) {
+        return values == null ? null : new ArrayList<>(values);
+    }
+
+    private Map<String, String> copySourceOccurrenceTexts(Map<String, String> values) {
+        return values == null ? null : new LinkedHashMap<>(values);
+    }
+
+    private Map<String, String> readSourceOccurrenceTexts(JsonNode node) {
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return null;
         }
+        if (!node.isObject()) {
+            throw new BusinessException(500, "简历来源 occurrence 清单格式不正确，请重新解析");
+        }
+        Map<String, String> values = new LinkedHashMap<>();
+        node.fields().forEachRemaining(entry -> {
+            String key = entry.getKey();
+            JsonNode value = entry.getValue();
+            if (key == null || key.isBlank() || value == null || !value.isTextual()
+                    || value.textValue().isBlank()) {
+                throw new BusinessException(500, "简历来源 occurrence 清单格式不正确，请重新解析");
+            }
+            values.put(key, value.textValue());
+        });
+        return values;
+    }
+
+    private <T> T readKnownValue(JsonNode node, Class<T> type, String message) {
+        try {
+            return strictObjectMapper.treeToValue(node, type);
+        } catch (JsonProcessingException | IllegalArgumentException exception) {
+            throw new BusinessException(500, message);
+        }
+    }
+
+    /**
+     * Null/missing arrays were not meaningful in historical V1 snapshots. Convert only the
+     * optional container shape to an empty array before strict semantic binding; a scalar or
+     * object in any of these positions remains malformed and is rejected by the normal path.
+     */
+    private JsonNode withHistoricalOptionalArrayDefaults(JsonNode root) {
+        ObjectNode copy = (ObjectNode) root.deepCopy();
+        ObjectNode basics = objectOrNull(copy.get("basics"));
+        if (basics == null) {
+            if (copy.get("basics") == null || copy.get("basics").isNull()) {
+                basics = objectMapper.createObjectNode();
+                copy.set("basics", basics);
+            }
+        }
+        if (basics != null) {
+            defaultNullArray(basics, "contacts");
+        }
+
+        JsonNode sectionsNode = copy.get("sections");
+        if (sectionsNode == null || sectionsNode.isNull()) {
+            copy.set("sections", objectMapper.createArrayNode());
+            sectionsNode = copy.get("sections");
+        }
+        if (sectionsNode.isArray()) {
+            for (JsonNode sectionNode : sectionsNode) {
+                if (!(sectionNode instanceof ObjectNode section)) {
+                    continue;
+                }
+                defaultNullArray(section, "entries");
+                JsonNode entriesNode = section.get("entries");
+                if (entriesNode != null && entriesNode.isArray()) {
+                    for (JsonNode entryNode : entriesNode) {
+                        if (entryNode instanceof ObjectNode entry) {
+                            defaultNullArray(entry, "bullets");
+                        }
+                    }
+                }
+            }
+        }
+        return copy;
+    }
+
+    private ObjectNode objectOrNull(JsonNode node) {
+        return node instanceof ObjectNode object ? object : null;
+    }
+
+    private void defaultNullArray(ObjectNode parent, String field) {
+        JsonNode value = parent.get(field);
+        if (value == null || value.isNull()) {
+            parent.set(field, objectMapper.createArrayNode());
+        }
+    }
+
+    private ResumeSourceRefDTO readSourceRef(JsonNode node) {
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return null;
+        }
+        if (!node.isObject()) {
+            throw new BusinessException(500, "简历来源引用格式不正确，请重新解析");
+        }
+        return copySourceRef(readKnownValue(
+                node, ResumeSourceRefDTO.class, "简历来源引用格式不正确，请重新解析"));
+    }
+
+    private List<String> readStringList(JsonNode node, String message) {
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return null;
+        }
+        if (!node.isArray()) {
+            throw new BusinessException(500, message);
+        }
+        List<String> values = new ArrayList<>();
+        for (JsonNode value : node) {
+            if (value == null || value.isNull()) {
+                values.add(null);
+            } else if (!value.isTextual()) {
+                throw new BusinessException(500, message);
+            } else {
+                values.add(value.textValue());
+            }
+        }
+        return values;
+    }
+
+    private ResumeSourceRefDTO sourceRefWithOccurrences(
+            ResumeSourceRefDTO sourceRef, List<String> occurrenceIds) {
+        ResumeSourceRefDTO copied = copySourceRef(sourceRef);
+        List<String> copiedOccurrences = copyStrings(occurrenceIds);
+        if (copiedOccurrences == null || copiedOccurrences.isEmpty()) {
+            return copied;
+        }
+        if (copied == null) {
+            return ResumeSourceRefDTO.builder()
+                    .sourceOccurrenceIds(copiedOccurrences)
+                    .build();
+        }
+        List<String> merged = copied.getSourceOccurrenceIds() == null
+                ? new ArrayList<>() : copyStrings(copied.getSourceOccurrenceIds());
+        for (String occurrenceId : copiedOccurrences) {
+            if (occurrenceId != null && !merged.contains(occurrenceId)) {
+                merged.add(occurrenceId);
+            }
+        }
+        copied.setSourceOccurrenceIds(merged);
+        return copied;
+    }
+
+    private void preserveFieldSourceRef(
+            java.util.Map<String, ResumeSourceRefDTO> fieldSourceRefs,
+            String field,
+            ResumeSourceRefDTO sourceRef) {
+        if (fieldSourceRefs == null || field == null || sourceRef == null) {
+            return;
+        }
+        ResumeSourceRefDTO existing = fieldSourceRefs.get(field);
+        fieldSourceRefs.put(field, existing == null ? sourceRef : mergeSourceRefs(existing, sourceRef));
+    }
+
+    private ResumeSourceRefDTO mergeSourceRefs(ResumeSourceRefDTO first, ResumeSourceRefDTO second) {
+        if (first == null) {
+            return copySourceRef(second);
+        }
+        if (second == null) {
+            return copySourceRef(first);
+        }
+        List<String> blockIds = new ArrayList<>();
+        appendDistinct(blockIds, first.getSourceBlockIds());
+        appendDistinct(blockIds, second.getSourceBlockIds());
+        List<String> occurrenceIds = new ArrayList<>();
+        appendDistinct(occurrenceIds, first.getSourceOccurrenceIds());
+        appendDistinct(occurrenceIds, second.getSourceOccurrenceIds());
+        return ResumeSourceRefDTO.builder()
+                .startLine(min(first.getStartLine(), second.getStartLine()))
+                .endLine(max(first.getEndLine(), second.getEndLine()))
+                .text(joinSourceText(first.getText(), second.getText()))
+                .sourceBlockIds(blockIds.isEmpty() ? null : blockIds)
+                .sourceOccurrenceIds(occurrenceIds.isEmpty() ? null : occurrenceIds)
+                .page(first.getPage() != null && first.getPage().equals(second.getPage())
+                        ? first.getPage() : null)
+                .x(first.getX())
+                .y(first.getY())
+                .width(first.getWidth())
+                .height(first.getHeight())
+                .fontSize(first.getFontSize())
+                .fontName(first.getFontName())
+                .boldHint(first.getBoldHint())
+                .indent(first.getIndent())
+                .bulletHint(first.getBulletHint())
+                .role(first.getRole())
+                .sourceType(first.getSourceType())
+                .build();
+    }
+
+    private void appendDistinct(List<String> target, List<String> values) {
+        if (values == null) {
+            return;
+        }
+        for (String value : values) {
+            if (value != null && !target.contains(value)) {
+                target.add(value);
+            }
+        }
+    }
+
+    private Integer min(Integer first, Integer second) {
+        return first == null ? second : second == null ? first : Math.min(first, second);
+    }
+
+    private Integer max(Integer first, Integer second) {
+        return first == null ? second : second == null ? first : Math.max(first, second);
+    }
+
+    private String joinSourceText(String first, String second) {
+        if (first == null || first.isBlank()) {
+            return second;
+        }
+        if (second == null || second.isBlank() || first.equals(second)) {
+            return first;
+        }
+        return first + "\n" + second;
+    }
+
+    private List<ResumeSourceRefDTO> copySourceRefs(List<ResumeSourceRefDTO> references) {
+        if (references == null) {
+            return null;
+        }
+        List<ResumeSourceRefDTO> copied = new ArrayList<>();
+        for (ResumeSourceRefDTO reference : references) {
+            copied.add(copySourceRef(reference));
+        }
+        return copied;
+    }
+
+    private java.util.Map<String, ResumeSourceRefDTO> copyFieldSourceRefs(
+            java.util.Map<String, ResumeSourceRefDTO> references) {
+        if (references == null) {
+            return null;
+        }
+        java.util.Map<String, ResumeSourceRefDTO> copied = new java.util.LinkedHashMap<>();
+        for (java.util.Map.Entry<String, ResumeSourceRefDTO> entry : references.entrySet()) {
+            copied.put(entry.getKey(), copySourceRef(entry.getValue()));
+        }
+        return copied;
+    }
+
+    private List<String> normalizeSkillDescriptions(List<String> descriptions) {
+        if (descriptions == null) {
+            return null;
+        }
+        if (descriptions.size() > MAX_BULLETS_PER_ENTRY) {
+            throw new BusinessException(400, "单个技能组的描述数量超出编辑上限");
+        }
+        List<String> normalized = new ArrayList<>();
+        for (String description : descriptions) {
+            if (description == null) {
+                throw new BusinessException(400, "技能组描述格式不正确");
+            }
+            normalized.add(requireWithinLength(
+                    description, BULLET_MAX_LENGTH, "技能组描述超出编辑上限"));
+        }
+        return normalized;
+    }
+
+    private String textOrNull(JsonNode node) {
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return null;
+        }
+        if (!node.isTextual()) {
+            throw new BusinessException(500, "简历内容中的文本字段格式不正确，请重新解析");
+        }
+        return textOrNull(node.textValue());
+    }
+
+    private String textOrNull(String value) {
+        if (value == null) {
+            return null;
+        }
+        String normalized = value.strip();
+        return normalized.isEmpty() ? null : normalized;
     }
 
     private String requireWithinLength(String value, int maxLength, String message) {

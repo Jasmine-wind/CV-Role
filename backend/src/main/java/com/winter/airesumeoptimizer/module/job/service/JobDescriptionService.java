@@ -12,5 +12,8 @@ public interface JobDescriptionService {
 
     JobDescriptionVO getDetail(Long userId, Long jobDescriptionId);
 
+    /** Serializes task creation with deletion of the same job description. */
+    void lockForOptimizationTaskCreation(Long userId, Long jobDescriptionId);
+
     void delete(Long userId, Long jobDescriptionId);
 }

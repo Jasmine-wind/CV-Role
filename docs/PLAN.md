@@ -99,7 +99,7 @@ Gate 结论：Prompt v3、严格 JSON Schema、技术安全 fail-closed、事实
 
 完成状态：固定链路为 Editor CAS Save → TARGET `resume_versions.structured_content` 中的 `RESUME_DOCUMENT_V1` → Preview → PDF Export。Phase 4 仍允许 revision 0 的冻结 snapshot 投影初始化编辑器，但 Phase 6 严格读取 seam 会拒绝 revision 0；前端在首次 Preview 前显式执行一次原样 CAS Save，因此 SOURCE、任务快照与 Evidence 不进入渲染。Preview 返回短期服务端签名 receipt，完整绑定 user / task / TARGET / contentRevision / templateId+version / rendererVersion / PDF checksum；Export 必须提交并验证该 receipt，重新编译字节不一致、无 Preview、stale revision 或任一绑定变化均拒绝。
 
-三套内置只读模板（classic / modern / minimal 各 v1）共享同一 Typst Renderer、编译器和字体环境。最终 PDF 由 PDFBox 解析实际页数；联系方式检查只认可电话、邮箱、社交账号或 URL 等通信方式；overflow 的可执行边界冻结为“文字 glyph 边界框超出页面 CropBox 1pt 以上”，页面超过 2 页、缺少联系方式和越界均作为轻量告警展示，不自动改写内容。V22 建立带 task→TARGET 复合约束的 `export_artifacts`，保存 preflight 与 READY / DELETE_PENDING 状态。删除采用 DELETE_PENDING → 私有对象删除 → 元数据删除，失败保留可重试记录；Resume 与 JobDescription 两个真实父删除入口均先完成导出物清理再允许数据库级联。未引入 Template entity、HTML renderer、RenderJob、MQ 或后台清理系统。
+三套内置只读模板（classic / modern / minimal 各 v1）共享同一 Typst Renderer、编译器和字体环境。最终 PDF 由 PDFBox 解析实际页数；联系方式检查只认可电话、邮箱、社交账号或 URL 等通信方式；overflow 的可执行边界冻结为“文字 glyph 边界框超出页面 CropBox 1pt 以上”，页面超过 2 页、缺少联系方式和越界均作为轻量告警展示，不自动改写内容。V22 建立带 task→TARGET 复合约束的 `export_artifacts`，保存 preflight 与 READY / DELETE_PENDING 状态。单个导出物删除采用 DELETE_PENDING → 私有对象删除 → 元数据删除；父级删除的 async task `CANCELLED` fence 参与父事务，失败时一并回滚；DELETE_PENDING 仍独立提交后再删除对象，元数据留到数据库父事务成功级联，失败回滚仍保留可重试记录。Resume、OptimizationTask 与 JobDescription 删除入口均先调用正式清理 seam。未引入 Template entity、HTML renderer、RenderJob、MQ 或后台清理系统。
 
 Final Gate 结论：真实 Typst、Fresh PostgreSQL/Flyway、HTTP、跨用户、stale receipt、存储失败重试和父级联 E2E 均通过；Phase 6 冻结 Contract 的 Blocker / Major 已关闭，**Final Gate PASS**。
 
@@ -148,9 +148,11 @@ Phase 1–9 完成后进入 Product Polish，不新建 Phase、不扩展产品�
 - 导出分两层质量门：Document Gate（质量状态 / 系统兜底章节 / 重复章节 / 可用联系方式）与 PDF Gate（编译 / 越界 / 孤立末页 / 不可读字号阻断，页数告警）；两页合法、孤立末页不合法。预览在待确认时仍可用作审查，正式导出阻断。
 - 渲染消费 V1 语义模型并按章节类型分支，模板升为 v2、渲染器升为 `typst-resume-renderer/2`；v1 模板保留供历史导出物解释。本 Slice 不做模板视觉重设计。
 - 修复解析层具体缺陷：头部混合联系行不再丢弃姓名 / 电话、邮箱按 `find()` 抽取、组织名扫描整行、技能标题别名、指针回退不再整章节兜底、抽取去重保留跨章节合法重复。
+- Resume Structure Recovery v1 增加 20 个 PII-free synthetic regression case；PDFBox `LAYOUT_LITE` 只在 deterministic health score 比既有候选高至少 8 分时采用。raw block 保留 source ID / 坐标 / 页码 / 字体 / 粗体 / 缩进 / bullet provenance；行恢复与 generic entry boundary detector 不依赖章节顺序。健康门检查 `NO_LOSS`、`NO_HALLUCINATION`、`NO_DUPLICATION`、`ENTRY_BOUNDARY`，CI 生成只含聚合指标的 effect report。
+- 可选 AI repair 仅作为一次 reference-only、低置信度、source-backed 调用；规则结果和 canonical 不自动替换，失败回退，显式用户 Apply 之前不写入事实链。
 - 明确不做：Analysis IA 重构、Workspace 视觉重构、多模板视觉设计、ATS、新 Resume Builder、AI Chat、Career Profile / Fact Vault、Markdown / JSON 导出、编辑内容回流分析链。
 
-门禁：真实风格中文简历夹具联系方式不丢失 / 不错配、经历 / 项目 / 技能 / 教育边界正确、无系统兜底章节且正常简历 `READY`；歧义夹具进入 `NEEDS_REVIEW` 且不补造事实；未确认 / 越界 / 孤立末页阻断正式导出而合法单页与两页可通过；SOURCE / TARGET SoT、Evidence / Rewrite / CAS / Preview receipt / BYOK 与历史数据不回退，后端全量测试、前端构建 / 类型 / 单测与三条浏览器恢复型 E2E 通过。
+门禁：真实风格中文简历夹具联系方式不丢失 / 不错配、经历 / 项目 / 技能 / 教育边界正确、无系统兜底章节且正常简历 `READY`；歧义夹具进入 `NEEDS_REVIEW` 且不补造事实；未确认 / 越界 / 孤立末页阻断正式导出而合法单页与两页可通过；SOURCE / TARGET SoT、Evidence / Rewrite / CAS / Preview receipt / BYOK 与历史数据不回退；结构恢复 corpus / health gate、后端全量测试、前端构建 / 类型 / 单测与三条浏览器恢复型 E2E 通过。
 
 ### Product Polish — Slice B UX（已完成，Final Gate PASS）
 
@@ -164,7 +166,7 @@ Phase 1–9 完成后进入 Product Polish，不新建 Phase、不扩展产品�
 - 三套 current template 升为 v3；Summary、Education、Achievement、Certificate、Other 使用无 marker 文本，Experience / Project 使用真实 Bullet；长字段通过 gutter 和安全分页处理，中英正文左对齐。
 - 三模板共用 A4 排版边界与字号目标，生产镜像固定静态 Noto CJK Regular/Bold 字体；PDF 写入稳定 title/metadata，保留浏览器原生 viewer，不引入 PDF.js。
 - PDFBox 新增末页 glyph 占用比例；低于 20% 与既有末页行数共同阻断稀疏尾页。补充标准中文、合法两页、中英混排、长字段和两个真实风格 JD fixtures，并扩展 Typst/PDF/Playwright 回归。
-- 未新增业务 API、DB model、Schema、Phase 10 或其它产品能力。
+- 未新增业务 API、用户可见 Schema、Phase 10 或其它产品能力；V32–V36 仅补充 SOURCE、canonical pointer、正式 Task / Version / Evidence ownership 约束、历史坏数据校验和父级删除清理。
 - 独立 Final Gate 已复核真实三模板 PDF、固定字体、长字段与通用章节自然分页、Preview / Export、1440×900 与 390×844 浏览器体验、Fresh PostgreSQL/Flyway、Docker/Compose 与完整回归；Contract 内问题已最小修复并补测，**Final Gate PASS**。
 
 Implementation status：**Product Polish Slice C 已完成，Final Gate PASS**。

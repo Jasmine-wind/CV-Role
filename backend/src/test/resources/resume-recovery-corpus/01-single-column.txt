@@ -1,0 +1,13 @@
+Synthetic Candidate A
+Education
+Orchid University | Software Engineering | 2020.09 - 2024.06
+Skills
+Languages: Java, Python
+Experience
+Northstar Labs 2023.01 - Present Backend Engineer
+Built a reliable event service and documented its operational runbook.
+Projects
+Signal Board 2024.01 - 2024.03
+Implemented a searchable status board for internal service checks.
+Awards
+2024年创新实践奖

@@ -36,6 +36,16 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.core.task.SyncTaskExecutor;
+import com.winter.airesumeoptimizer.module.task.service.CommittedTaskDispatcher;
+import java.sql.Connection;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.RejectedExecutionException;
+import javax.sql.DataSource;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
+import org.springframework.jdbc.datasource.ConnectionHolder;
+import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionSynchronizationUtils;
 
 class JobAnalysisServiceImplTest {
 
@@ -54,7 +64,7 @@ class JobAnalysisServiceImplTest {
             asyncTaskService,
             asyncTaskFailureHandler,
             aiClientService,
-            new SyncTaskExecutor());
+            worker -> CompletableFuture.runAsync(worker).join());
 
     @BeforeEach
     void setUp() {
@@ -66,6 +76,88 @@ class JobAnalysisServiceImplTest {
         when(optimizationTaskService.getExecutionContext(1L, 50L)).thenReturn(context());
         when(asyncTaskService.createTask(1L, AsyncTaskType.MATCH_ANALYSIS, "OPTIMIZATION_TASK", 50L))
                 .thenReturn(100L);
+        when(asyncTaskService.isActive(1L, 100L)).thenReturn(true);
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"start", "retry", "legacy"})
+    void submissionMustWaitForCommit(String entry) {
+        prepareSuccessfulAnalysis();
+        when(optimizationTaskService.findByLegacyInputs(1L, 10L, 20L)).thenReturn(taskVO());
+        org.springframework.transaction.support.TransactionSynchronizationManager.initSynchronization();
+        org.springframework.transaction.support.TransactionSynchronizationManager.setActualTransactionActive(true);
+        try {
+            switch (entry) {
+                case "start" -> service.start(1L, request("Java backend"));
+                case "retry" -> service.retry(1L, 50L);
+                default -> service.retryLegacy(1L, 10L, 20L);
+            }
+            verify(optimizationTaskService).attachAsyncTask(1L, 50L, 100L);
+            verify(asyncTaskService, never()).markRunning(any(), any());
+            org.springframework.transaction.support.TransactionSynchronizationUtils.triggerAfterCommit();
+            verify(asyncTaskService, never()).markRunning(any(), any());
+            org.springframework.transaction.support.TransactionSynchronizationUtils.triggerAfterCompletion(0);
+            verify(asyncTaskService).markSuccess(100L, "OPTIMIZATION_TASK", 50L, "Java 后端工程师");
+        } finally {
+            org.springframework.transaction.support.TransactionSynchronizationManager.clear();
+        }
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(ints = {1, 2})
+    void rolledBackOrUnknownSubmissionNeverDispatches(int completionStatus) {
+        TransactionSynchronizationManager.initSynchronization();
+        TransactionSynchronizationManager.setActualTransactionActive(true);
+        try {
+            service.retry(1L, 50L);
+            TransactionSynchronizationUtils.triggerAfterCompletion(completionStatus);
+            verify(asyncTaskService, never()).markRunning(any(), any());
+            verify(jobDescriptionParseService, never()).parse(any(), any(), any(), any());
+        } finally {
+            TransactionSynchronizationManager.clear();
+        }
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void rejectionAfterCommitUsesFreshTransactionAndRespectsCancellation(boolean canceled) throws Exception {
+        DataSource dataSource = mock(DataSource.class);
+        Connection submission = mock(Connection.class);
+        Connection failure = mock(Connection.class);
+        when(dataSource.getConnection()).thenReturn(submission, failure);
+        when(submission.getAutoCommit()).thenReturn(true);
+        when(failure.getAutoCommit()).thenReturn(true);
+        DataSourceTransactionManager manager = new DataSourceTransactionManager(dataSource);
+        RejectedExecutionException rejection = new RejectedExecutionException("full");
+        when(asyncTaskService.isActive(1L, 100L)).thenAnswer(invocation -> {
+            verify(submission).commit();
+            assertThat(((ConnectionHolder) TransactionSynchronizationManager.getResource(dataSource))
+                    .getConnection()).isSameAs(failure);
+            return !canceled;
+        });
+        JobAnalysisServiceImpl transactionalService = new JobAnalysisServiceImpl(
+                resumeService, jobDescriptionParseService, evidenceMatchService, optimizationTaskService,
+                asyncTaskService, asyncTaskFailureHandler, aiClientService,
+                worker -> { throw rejection; }, new CommittedTaskDispatcher(manager));
+
+        new TransactionTemplate(manager).executeWithoutResult(status -> {
+            transactionalService.retry(1L, 50L);
+            verify(optimizationTaskService).attachAsyncTask(1L, 50L, 100L);
+            verify(asyncTaskFailureHandler, never()).markFailed(any(), any(), any());
+            verify(asyncTaskService, never()).isActive(1L, 100L);
+        });
+
+        verify(failure).commit();
+        verify(asyncTaskService, never()).markRunning(any(), any());
+        if (canceled) {
+            verify(optimizationTaskService, never()).markFailed(any(), any(), any(), any(), any());
+            verify(asyncTaskFailureHandler, never()).markFailed(any(), any(), any());
+        } else {
+            verify(optimizationTaskService).markFailed(1L, 50L, 100L,
+                    AsyncTaskErrorCode.TASK_REJECTED.name(), AsyncTaskErrorCode.TASK_REJECTED.getUserMessage());
+            verify(asyncTaskFailureHandler).markFailed(100L, AsyncTaskErrorCode.TASK_REJECTED, rejection);
+        }
+        assertThat(TransactionSynchronizationManager.hasResource(dataSource)).isFalse();
     }
 
     @Test
@@ -111,6 +203,7 @@ class JobAnalysisServiceImplTest {
         assertThat(result.getTargetResumeVersionId()).isEqualTo(41L);
         assertThat(result.getJobTargetId()).isEqualTo(30L);
         verify(optimizationTaskService).attachAsyncTask(1L, 50L, 100L);
+        verify(optimizationTaskService).markRunning(1L, 50L, 100L);
         verify(optimizationTaskService).captureResumeSnapshot(1L, 50L, canonicalResumeDocument());
         verify(asyncTaskService).markSuccess(100L, "OPTIMIZATION_TASK", 50L, "Java 后端工程师");
 
@@ -196,6 +289,31 @@ class JobAnalysisServiceImplTest {
     }
 
     @Test
+    void canceledAsyncTaskShouldNotDispatchAnalysisProviders() {
+        when(asyncTaskService.isActive(1L, 100L)).thenReturn(false);
+
+        JobAnalysisStartVO result = service.retry(1L, 50L);
+
+        assertThat(result.getTaskId()).isEqualTo(100L);
+        verify(jobDescriptionParseService, never()).parse(any(), any(), any(), any());
+        verify(evidenceMatchService, never()).analyze(any(), any(), any());
+        verify(asyncTaskService, never()).markSuccess(any(), any(), any(), any());
+    }
+
+    @Test
+    void cancellationAfterJobParsingPreventsLateEvidenceAndSuccess() {
+        when(resumeService.getParseResult(1L, 10L)).thenReturn(successfulResumeParse());
+        when(jobDescriptionParseService.parse(1L, 20L, null, 50L)).thenReturn(successfulJob());
+        when(asyncTaskService.isActive(1L, 100L)).thenReturn(true, true, true, true, true, false);
+
+        service.retry(1L, 50L);
+
+        verify(jobDescriptionParseService).parse(1L, 20L, null, 50L);
+        verify(evidenceMatchService, never()).analyze(any(), any(), any());
+        verify(asyncTaskService, never()).markSuccess(any(), any(), any(), any());
+    }
+
+    @Test
     void retryShouldNotStartSecondExecutionWhileTaskIsActive() {
         when(optimizationTaskService.get(1L, 50L)).thenReturn(OptimizationTaskVO.builder()
                 .optimizationTaskId(50L)
@@ -230,6 +348,7 @@ class JobAnalysisServiceImplTest {
         when(jobDescriptionParseService.parse(1L, 20L, null, 50L)).thenReturn(successfulJob());
         when(evidenceMatchService.analyze(org.mockito.ArgumentMatchers.eq(1L),
                 org.mockito.ArgumentMatchers.eq(50L),
+                org.mockito.ArgumentMatchers.eq(100L),
                 any(JobDescriptionVO.class))).thenReturn(successfulEvidenceAnalysis());
 
         service.start(1L, request("目标岗位 JD"));
@@ -239,6 +358,7 @@ class JobAnalysisServiceImplTest {
         verify(optimizationTaskService).captureResumeSnapshot(1L, 50L, canonicalResumeDocument());
         verify(evidenceMatchService).analyze(org.mockito.ArgumentMatchers.eq(1L),
                 org.mockito.ArgumentMatchers.eq(50L),
+                org.mockito.ArgumentMatchers.eq(100L),
                 any(JobDescriptionVO.class));
     }
 
@@ -260,6 +380,7 @@ class JobAnalysisServiceImplTest {
         verify(optimizationTaskService).markFailed(
                 1L,
                 50L,
+                100L,
                 AsyncTaskErrorCode.FILE_PARSE_FAILED.name(),
                 "无法读取简历");
         verify(asyncTaskService).markFailed(
@@ -292,13 +413,14 @@ class JobAnalysisServiceImplTest {
         verify(optimizationTaskService).markFailed(
                 1L,
                 50L,
+                100L,
                 AiFailureCode.CREDENTIAL_CHANGED.name(),
                 "AI Credential 已变更或不可用");
         verify(asyncTaskService).markFailed(
                 100L,
                 AiFailureCode.CREDENTIAL_CHANGED.name(),
                 "AI Credential 已变更或不可用");
-        verify(evidenceMatchService, never()).analyze(any(), any(), any(), any());
+        verify(evidenceMatchService, never()).analyze(any(), any(), any(), any(), any());
     }
 
     @Test
@@ -307,6 +429,7 @@ class JobAnalysisServiceImplTest {
         when(jobDescriptionParseService.parse(1L, 20L, null, 50L)).thenReturn(successfulJob());
         when(evidenceMatchService.analyze(org.mockito.ArgumentMatchers.eq(1L),
                 org.mockito.ArgumentMatchers.eq(50L),
+                org.mockito.ArgumentMatchers.eq(100L),
                 any(JobDescriptionVO.class)))
                 .thenThrow(new BusinessException(502, "岗位证据分析结果不是合法 JSON"));
 
@@ -315,13 +438,14 @@ class JobAnalysisServiceImplTest {
         verify(optimizationTaskService).markFailed(
                 1L,
                 50L,
+                100L,
                 AsyncTaskErrorCode.AI_RESPONSE_INVALID.name(),
                 "岗位证据分析结果不是合法 JSON");
         verify(asyncTaskService).markFailed(
                 100L,
                 AsyncTaskErrorCode.AI_RESPONSE_INVALID.name(),
                 "岗位证据分析结果不是合法 JSON");
-        verify(optimizationTaskService, never()).markSuccess(any(), any(), any(), any());
+        verify(optimizationTaskService, never()).markSuccess(any(), any(), any(), any(), any());
     }
 
     private void prepareSuccessfulAnalysis() {
@@ -329,6 +453,7 @@ class JobAnalysisServiceImplTest {
         when(jobDescriptionParseService.parse(1L, 20L, null, 50L)).thenReturn(successfulJob());
         when(evidenceMatchService.analyze(org.mockito.ArgumentMatchers.eq(1L),
                 org.mockito.ArgumentMatchers.eq(50L),
+                org.mockito.ArgumentMatchers.eq(100L),
                 any(JobDescriptionVO.class))).thenReturn(successfulEvidenceAnalysis());
     }
 

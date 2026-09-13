@@ -17,6 +17,15 @@ public class ResumeParseResult {
 
     private Long resumeId;
 
+    /** Denormalized owner used by composite foreign keys to keep parse pointers tenant-safe. */
+    private Long userId;
+
+    /** Monotonically increasing parse attempt number used for durable finalization CAS. */
+    private Long parseGeneration;
+
+    /** Opaque token owned by the currently claimed parse attempt. */
+    private String parseToken;
+
     private String parseStatus;
 
     private String extractedText;
@@ -34,6 +43,13 @@ public class ResumeParseResult {
     private String textQualityIssues;
 
     private String textQualityMessage;
+
+    /** Extraction metadata is stored independently so quality failures do not erase it. */
+    private Integer extractionPageCount;
+
+    private Boolean extractionPageCountKnown;
+
+    private Boolean extractionImageContentPresent;
 
     private String parseQualityStatus;
 

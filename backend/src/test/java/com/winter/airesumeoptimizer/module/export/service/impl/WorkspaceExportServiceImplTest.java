@@ -120,6 +120,7 @@ class WorkspaceExportServiceImplTest {
         task.setUserId(USER_ID);
         task.setTargetResumeVersionId(TARGET_VERSION_ID);
         when(optimizationTaskMapper.selectOne(any())).thenReturn(task);
+        lenient().when(optimizationTaskMapper.selectOwnedForUpdate(USER_ID, TASK_ID)).thenReturn(task);
     }
 
     private ResumePdfRenderResult renderResult() {

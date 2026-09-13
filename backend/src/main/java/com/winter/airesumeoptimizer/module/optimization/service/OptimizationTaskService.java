@@ -52,6 +52,12 @@ public interface OptimizationTaskService {
 
     ExecutionContext getExecutionContext(Long userId, Long optimizationTaskId);
 
+    /**
+     * Locks the task's source Resume and then the task row for async submission. The caller
+     * must keep its transaction open until async_tasks insertion and attachment commit.
+     */
+    void lockForAsyncSubmission(Long userId, Long optimizationTaskId);
+
     void attachAsyncTask(Long userId, Long optimizationTaskId, Long asyncTaskId);
 
     /**
@@ -62,13 +68,41 @@ public interface OptimizationTaskService {
 
     void markRunning(Long userId, Long optimizationTaskId);
 
+    /**
+     * Execution-fenced callback used by the asynchronous analysis worker. The callback may
+     * mutate the formal task only while this exact async execution is still attached and active.
+     */
+    default void markRunning(Long userId, Long optimizationTaskId, Long asyncTaskId) {
+        markRunning(userId, optimizationTaskId);
+    }
+
     void markSuccess(
             Long userId,
             Long optimizationTaskId,
             JobDescriptionVO parsedJob,
             EvidenceAnalysis evidenceAnalysis);
 
+    /** Execution-fenced variant for asynchronous analysis callbacks. */
+    default void markSuccess(
+            Long userId,
+            Long optimizationTaskId,
+            Long asyncTaskId,
+            JobDescriptionVO parsedJob,
+            EvidenceAnalysis evidenceAnalysis) {
+        markSuccess(userId, optimizationTaskId, parsedJob, evidenceAnalysis);
+    }
+
     void markFailed(Long userId, Long optimizationTaskId, String errorCode, String errorMessage);
+
+    /** Execution-fenced variant for asynchronous analysis callbacks. */
+    default void markFailed(
+            Long userId,
+            Long optimizationTaskId,
+            Long asyncTaskId,
+            String errorCode,
+            String errorMessage) {
+        markFailed(userId, optimizationTaskId, errorCode, errorMessage);
+    }
 
     /**
      * 兼容读取：返回任务关联的 V1 匹配结果。Phase 3 起新任务不再生成该结果，
