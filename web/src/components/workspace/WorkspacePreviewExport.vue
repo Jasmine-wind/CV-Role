@@ -91,7 +91,7 @@ const blockingPreflightMessages = computed(() => {
   if (result.overflowDetected) messages.push('检测到文字超出页面边界，需要调整内容或编辑器字段')
   if (result.orphanFinalPage) messages.push('末页内容过少，需要调整内容分页')
   if (result.readabilityTooSmall) messages.push('部分字号低于可读下限，需要调整内容')
-  if (result.needsReview) messages.push('简历内容仍需确认，完成确认后才能导出')
+  if (result.needsReview) messages.push('原文结构仍需确认；当前 PDF 仅供检查，处理完成后才能导出')
   return messages
 })
 

@@ -173,7 +173,7 @@ public class WorkspaceSourceReferenceAssemblerImpl implements WorkspaceSourceRef
         }
 
         addStructuralIssues(
-                source, target, sourceOwnership, manifest, nodes, authenticatedNodes, issues);
+                source, target, sourceOwnership, manifest, blocks, nodes, authenticatedNodes, issues);
         EnumMap<WorkspaceSourceMappingStatus, Integer> counts = new EnumMap<>(WorkspaceSourceMappingStatus.class);
         for (WorkspaceSourceMappingStatus status : WorkspaceSourceMappingStatus.values()) counts.put(status, 0);
         for (TargetMapping mapping : mappings) counts.compute(mapping.status(), (key, value) -> value == null ? 1 : value + 1);
@@ -774,6 +774,7 @@ public class WorkspaceSourceReferenceAssemblerImpl implements WorkspaceSourceRef
             ResumeDocumentDTO target,
             FrozenOwnership sourceOwnership,
             Manifest manifest,
+            List<SourceBlock> blocks,
             List<Node> targetNodes,
             Map<String, Node> authenticatedNodes,
             List<FidelityIssue> issues) {
@@ -786,7 +787,6 @@ public class WorkspaceSourceReferenceAssemblerImpl implements WorkspaceSourceRef
         Set<String> targetProjectEntries = authenticatedProjectEntries(
                 target, targetNodes, manifest, authenticatedNodes, sourceOwnership.owners());
         List<String> missingProjectOccurrences = new ArrayList<>();
-        boolean missingProject = false;
         for (ResumeDocumentSectionDTO section : safe(source == null ? null : source.getSections())) {
             if (section == null || !"PROJECT".equals(section.getKind())) {
                 continue;
@@ -795,14 +795,32 @@ public class WorkspaceSourceReferenceAssemblerImpl implements WorkspaceSourceRef
                 if (entry == null || targetProjectEntries.contains(boundaryKey(section.getId(), entry.getId()))) {
                     continue;
                 }
-                missingProject = true;
-                missingProjectOccurrences.addAll(projectEntryOccurrenceIds(
-                        section.getId(), entry.getId(), sourceOwnership, manifest));
+                Set<String> occurrences = projectEntryOccurrenceIds(
+                        section.getId(), entry.getId(), sourceOwnership, manifest);
+                if (occurrences.isEmpty()) {
+                    continue;
+                }
+                // A frozen PROJECT entry that disappears from TARGET is only a legitimate
+                // job-targeted deletion when every server-validated source block owned by
+                // that entry is already a confirmed omission. Partial confirmation,
+                // accidental loss, wrong-ownership merges and forged confirmations all
+                // keep the boundary blocker in force.
+                List<SourceBlock> projectBlocks = blocks.stream()
+                        .filter(block -> "PROJECT".equals(block.sourceSectionKind())
+                                && Objects.equals(section.getId(), block.sourceSectionId())
+                                && Objects.equals(entry.getId(), block.sourceEntryId()))
+                        .toList();
+                boolean fullyConfirmedOmitted = !projectBlocks.isEmpty()
+                        && projectBlocks.stream().allMatch(SourceBlock::omissionConfirmed);
+                if (fullyConfirmedOmitted) {
+                    continue;
+                }
+                missingProjectOccurrences.addAll(occurrences);
             }
         }
-        if (missingProject) {
+        if (!missingProjectOccurrences.isEmpty()) {
             issues.add(issue("PROJECT_BOUNDARY_LOST", BLOCKER,
-                    "冻结项目条目缺失，省略确认不能解除项目边界阻断。",
+                    "冻结项目条目在当前简历中缺失，且未被完整确认省略。",
                     missingProjectOccurrences.stream().distinct().toList(), List.of()));
         }
         Map<String, Long> contacts = safe(target == null || target.getBasics() == null ? null : target.getBasics().getContacts())

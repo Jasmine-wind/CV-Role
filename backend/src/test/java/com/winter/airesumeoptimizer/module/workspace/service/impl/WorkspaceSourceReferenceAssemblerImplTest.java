@@ -293,7 +293,7 @@ class WorkspaceSourceReferenceAssemblerImplTest {
     }
 
     @Test
-    void projectBoundaryRemainsBlockedEvenWhenEveryMissingOccurrenceIsConfirmed() {
+    void projectBoundaryBlockerFollowsConfirmedOmissionCoverage() {
         ResumeDocumentDTO source = document(List.of(
                         "occ-heading", "occ-p1", "occ-p2", "occ-p2-field", "occ-p2-bullet"),
                 Map.of("occ-heading", "项目经历", "occ-p1", "项目一", "occ-p2", "项目二",
@@ -314,26 +314,31 @@ class WorkspaceSourceReferenceAssemblerImplTest {
                 1L, 2L, 3L, 1L, "resume.pdf", true, source, target);
         assertThat(unconfirmed.fidelityIssues()).extracting(WorkspaceSourceReferenceVO.FidelityIssue::code)
                 .contains("PROJECT_BOUNDARY_LOST", "SOURCE_CONTENT_UNMAPPED");
+        assertThat(unconfirmed.exportBlocked()).isTrue();
 
         target.setConfirmedSourceOmissionIds(List.of("occ-p2"));
         WorkspaceSourceReferenceVO partiallyConfirmed = assembler.assemble(
                 1L, 2L, 3L, 1L, "resume.pdf", true, source, target);
         assertThat(partiallyConfirmed.fidelityIssues()).extracting(WorkspaceSourceReferenceVO.FidelityIssue::code)
                 .contains("PROJECT_BOUNDARY_LOST", "SOURCE_CONTENT_UNMAPPED");
+        assertThat(partiallyConfirmed.exportBlocked()).isTrue();
 
         target.setConfirmedSourceOmissionIds(List.of("occ-p2", "occ-p2-bullet"));
         WorkspaceSourceReferenceVO fieldUnconfirmed = assembler.assemble(
                 1L, 2L, 3L, 1L, "resume.pdf", true, source, target);
         assertThat(fieldUnconfirmed.fidelityIssues()).extracting(WorkspaceSourceReferenceVO.FidelityIssue::code)
                 .contains("PROJECT_BOUNDARY_LOST", "SOURCE_CONTENT_UNMAPPED");
+        assertThat(fieldUnconfirmed.exportBlocked()).isTrue();
 
+        // Whole-Project intentional omission: every frozen occurrence of the deleted
+        // entry is server-confirmed, so the boundary blocker is released and the
+        // document becomes exportable when no other blocker remains.
         target.setConfirmedSourceOmissionIds(List.of("occ-p2", "occ-p2-field", "occ-p2-bullet"));
         WorkspaceSourceReferenceVO confirmed = assembler.assemble(
                 1L, 2L, 3L, 1L, "resume.pdf", true, source, target);
         assertThat(confirmed.fidelityIssues()).extracting(WorkspaceSourceReferenceVO.FidelityIssue::code)
-                .contains("PROJECT_BOUNDARY_LOST")
-                .doesNotContain("SOURCE_CONTENT_UNMAPPED");
-        assertThat(confirmed.exportBlocked()).isTrue();
+                .doesNotContain("PROJECT_BOUNDARY_LOST", "SOURCE_CONTENT_UNMAPPED");
+        assertThat(confirmed.exportBlocked()).isFalse();
     }
 
     @Test
@@ -780,7 +785,7 @@ class WorkspaceSourceReferenceAssemblerImplTest {
     }
 
     @Test
-    void projectOmissionCoversEveryFrozenChildReferenceButCannotWaiveBoundaryLoss() {
+    void fullyConfirmedProjectOmissionWithEveryChildReferenceReleasesBoundaryBlocker() {
         ResumeDocumentDTO source = document(List.of(
                         "occ-heading", "occ-p1", "occ-p2", "occ-field", "occ-tech",
                         "occ-skill", "occ-description", "occ-bullet"),
@@ -812,8 +817,65 @@ class WorkspaceSourceReferenceAssemblerImplTest {
                 1L, 2L, 3L, 1L, "resume.pdf", true, source, target);
 
         assertThat(result.fidelityIssues()).extracting(WorkspaceSourceReferenceVO.FidelityIssue::code)
-                .contains("PROJECT_BOUNDARY_LOST")
-                .doesNotContain("SOURCE_CONTENT_UNMAPPED", "SOURCE_MANIFEST_INVALID");
+                .doesNotContain("PROJECT_BOUNDARY_LOST", "SOURCE_CONTENT_UNMAPPED", "SOURCE_MANIFEST_INVALID");
+        assertThat(result.exportBlocked()).isFalse();
+    }
+
+    @Test
+    void forgedConfirmationCannotReleaseProjectBoundaryBlocker() {
+        ResumeDocumentDTO source = document(List.of("occ-heading", "occ-p1", "occ-p2"),
+                Map.of("occ-heading", "项目经历", "occ-p1", "项目一", "occ-p2", "项目二"), List.of());
+        ResumeDocumentEntryDTO first = entry("e-1", "项目一", List.of());
+        first.setSourceOccurrenceIds(List.of("occ-p1"));
+        ResumeDocumentEntryDTO second = entry("e-2", "项目二", List.of());
+        second.setSourceOccurrenceIds(List.of("occ-p2"));
+        source.getSections().get(0).setEntries(List.of(first, second));
+
+        ResumeDocumentDTO target = document(List.of(), Map.of(), List.of());
+        target.getSections().get(0).setEntries(List.of(first));
+        // A forged occurrence ID that is not part of the frozen manifest invalidates the
+        // whole ConfirmationState; the boundary blocker must stay in force.
+        target.setConfirmedSourceOmissionIds(List.of("occ-p2", "forged-occurrence"));
+
+        WorkspaceSourceReferenceVO result = assembler.assemble(
+                1L, 2L, 3L, 1L, "resume.pdf", true, source, target);
+
+        assertThat(result.fidelityIssues()).extracting(WorkspaceSourceReferenceVO.FidelityIssue::code)
+                .contains("CONFIRMED_OMISSION_INVALID", "PROJECT_BOUNDARY_LOST");
+        assertThat(result.exportBlocked()).isTrue();
+    }
+
+    @Test
+    void onlyGenuinelyMissingProjectsContributeToBoundaryBlocker() {
+        ResumeDocumentDTO source = document(List.of(
+                        "occ-heading", "occ-a", "occ-b", "occ-c", "occ-d"),
+                Map.of("occ-heading", "项目经历", "occ-a", "项目 A", "occ-b", "项目 B",
+                        "occ-c", "项目 C", "occ-d", "项目 D"), List.of());
+        ResumeDocumentEntryDTO entryA = entry("e-a", "项目 A", List.of());
+        entryA.setSourceOccurrenceIds(List.of("occ-a"));
+        ResumeDocumentEntryDTO entryB = entry("e-b", "项目 B", List.of());
+        entryB.setSourceOccurrenceIds(List.of("occ-b"));
+        ResumeDocumentEntryDTO entryC = entry("e-c", "项目 C", List.of());
+        entryC.setSourceOccurrenceIds(List.of("occ-c"));
+        ResumeDocumentEntryDTO entryD = entry("e-d", "项目 D", List.of());
+        entryD.setSourceOccurrenceIds(List.of("occ-d"));
+        source.getSections().get(0).setEntries(List.of(entryA, entryB, entryC, entryD));
+
+        // TARGET keeps A and C; B is fully confirmed omitted; D is accidentally missing.
+        ResumeDocumentDTO target = document(List.of(), Map.of(), List.of());
+        target.getSections().get(0).setEntries(List.of(entryA, entryC));
+        target.setConfirmedSourceOmissionIds(List.of("occ-b"));
+
+        WorkspaceSourceReferenceVO result = assembler.assemble(
+                1L, 2L, 3L, 1L, "resume.pdf", true, source, target);
+
+        assertThat(result.fidelityIssues()).extracting(WorkspaceSourceReferenceVO.FidelityIssue::code)
+                .contains("PROJECT_BOUNDARY_LOST");
+        WorkspaceSourceReferenceVO.FidelityIssue boundaryIssue = result.fidelityIssues().stream()
+                .filter(issue -> "PROJECT_BOUNDARY_LOST".equals(issue.code()))
+                .findFirst().orElseThrow();
+        // Only D's occurrences are reported; B is a legitimate confirmed omission.
+        assertThat(boundaryIssue.sourceOccurrenceIds()).containsExactly("occ-d");
         assertThat(result.exportBlocked()).isTrue();
     }
 

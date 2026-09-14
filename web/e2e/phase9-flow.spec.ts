@@ -483,16 +483,25 @@ test('intentional omission: a deleted source bullet blocks delivery until confir
   const fidelityResponse = await freshFidelityVerdict
   expect(fidelityResponse.ok()).toBe(true)
   const fidelityPayload = (await fidelityResponse.json()) as {
-    data: { sourceBlocks: Array<{ id: string; occurrenceIds: string[] }> }
+    data: { sourceBlocks: Array<{ id: string; occurrenceIds: string[] }>; exportBlocked: boolean }
   }
   const expectedOrdinaryOccurrenceIds = fidelityPayload.data.sourceBlocks.find(
     (block) => block.id === sourceBlockId,
   )?.occurrenceIds
   expect(expectedOrdinaryOccurrenceIds).toBeTruthy()
-  await expect(page.getByText('请先处理冻结原文中的结构保真问题，再预览或导出')).toBeVisible()
-  expect(previewRequestCount).toBe(0)
-  await expect(page.getByRole('button', { name: '导出 PDF', exact: true })).toHaveCount(0)
+  expect(fidelityPayload.data.exportBlocked).toBe(true)
+  // Structure Fidelity blocker no longer prevents Preview; it only prevents Export.
+  await expect(
+    page.getByText('当前存在原文结构保真问题，仍可预览检查，但处理完成前不能导出。'),
+  ).toBeVisible()
+  await expect(page.getByTitle('简历 PDF 预览')).toBeVisible({ timeout: 45_000 })
+  expect(previewRequestCount).toBeGreaterThan(0)
+  await expect(page.getByText('原文结构仍需确认')).toBeVisible()
+  await expect(page.getByRole('button', { name: '导出 PDF', exact: true })).toBeDisabled()
   page.off('request', countPreviewRequest)
+  // Return to edit mode so the omission confirmation flow can continue.
+  await page.getByRole('button', { name: '返回编辑', exact: true }).click()
+  await expect(page.locator('textarea').first()).toBeVisible({ timeout: 15_000 })
 
   const confirmAction = sourceCard.getByRole('button', { name: /^确认省略/ })
   await expect(confirmAction).toBeEnabled()
@@ -698,7 +707,7 @@ test('intentional omission: a deleted source bullet blocks delivery until confir
   await stalePage.close()
 })
 
-test('intentional omission: a whole Project entry remains blocked after authoritative confirmation', async ({
+test('intentional omission: a whole Project entry is released after authoritative confirmation', async ({
   page,
 }) => {
   await registerAndLogin(page)
@@ -760,10 +769,42 @@ test('intentional omission: a whole Project entry remains blocked after authorit
     .click()
   expect((await deletedSave).ok()).toBe(true)
   await expect(page.getByText('✓ 已保存', { exact: true })).toBeVisible({ timeout: 15_000 })
+  // Deleting a whole Project without confirmation produces boundary + source-gap blockers.
+  await expect(page.getByText(/结构保真：\d+ 项阻断/)).toBeVisible({ timeout: 15_000 })
 
   const projectSourceCard = page.locator(
     `.source-block[data-source-block-id="${projectBlocks[0]!.id}"]`,
   )
+
+  // Preview is a diagnostic tool: it is allowed even while blockers exist, but Export stays disabled.
+  let projectPreviewRequests = 0
+  const countProjectPreview = (request: { url: () => string }) => {
+    if (request.url().includes('/preview.pdf')) projectPreviewRequests += 1
+  }
+  page.on('request', countProjectPreview)
+  const blockedFidelityVerdict = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'GET' &&
+      /\/api\/workspace\/\d+\/source-reference$/.test(new URL(response.url()).pathname),
+  )
+  await page.getByRole('button', { name: '预览 →', exact: true }).click()
+  const blockedFidelityResponse = await blockedFidelityVerdict
+  expect(blockedFidelityResponse.ok()).toBe(true)
+  const blockedPayload = (await blockedFidelityResponse.json()) as {
+    data: { exportBlocked: boolean }
+  }
+  expect(blockedPayload.data.exportBlocked).toBe(true)
+  await expect(
+    page.getByText('当前存在原文结构保真问题，仍可预览检查，但处理完成前不能导出。'),
+  ).toBeVisible()
+  await expect(page.getByTitle('简历 PDF 预览')).toBeVisible({ timeout: 45_000 })
+  expect(projectPreviewRequests).toBeGreaterThan(0)
+  await expect(page.getByRole('button', { name: '导出 PDF', exact: true })).toBeDisabled()
+  page.off('request', countProjectPreview)
+  await page.getByRole('button', { name: '返回编辑', exact: true }).click()
+  await expect(page.locator('textarea').first()).toBeVisible({ timeout: 15_000 })
+
+  // Confirm every eligible frozen occurrence of the deleted Project entry.
   const projectConfirm = projectSourceCard.getByRole('button', {
     name: /^确认省略此项目对应的/,
   })
@@ -781,14 +822,13 @@ test('intentional omission: a whole Project entry remains blocked after authorit
     sourceOccurrenceIds: string[]
   }
   expect(confirmBody.sourceOccurrenceIds).toEqual(expectedProjectOccurrenceIds)
-  await expect(page.getByText(/冻结项目条目缺失，省略确认不能解除项目边界阻断/)).toBeVisible({
+  // Whole-Project confirmed omission releases PROJECT_BOUNDARY_LOST; fidelity passes.
+  await expect(page.getByText('结构保真检查通过', { exact: true })).toBeVisible({
     timeout: 15_000,
   })
-  await expect(page.getByText(/结构保真：\d+ 项阻断/)).toBeVisible()
-  let projectPreviewRequests = 0
-  const countProjectPreview = (request: { url: () => string }) => {
-    if (request.url().includes('/preview.pdf')) projectPreviewRequests += 1
-  }
+
+  // Preview again with a clean verdict: Export becomes enabled.
+  projectPreviewRequests = 0
   page.on('request', countProjectPreview)
   const freshProjectFidelityVerdict = page.waitForResponse(
     (response) =>
@@ -801,10 +841,15 @@ test('intentional omission: a whole Project entry remains blocked after authorit
   const projectFidelityPayload = (await projectFidelityResponse.json()) as {
     data: { exportBlocked: boolean }
   }
-  expect(projectFidelityPayload.data.exportBlocked).toBe(true)
-  await expect(page.getByText('请先处理冻结原文中的结构保真问题，再预览或导出')).toBeVisible()
-  expect(projectPreviewRequests).toBe(0)
+  expect(projectFidelityPayload.data.exportBlocked).toBe(false)
+  await expect(page.getByTitle('简历 PDF 预览')).toBeVisible({ timeout: 45_000 })
+  await expect(
+    page.locator('.preflight-section').getByText('可以导出', { exact: true }),
+  ).toBeVisible({ timeout: 45_000 })
+  await expect(page.getByRole('button', { name: '导出 PDF', exact: true })).toBeEnabled()
   page.off('request', countProjectPreview)
+  await page.getByRole('button', { name: '返回编辑', exact: true }).click()
+  await expect(page.locator('textarea').first()).toBeVisible({ timeout: 15_000 })
 
   const projectUnconfirm = projectSourceCard.getByRole('button', {
     name: /^取消省略此项目对应的/,

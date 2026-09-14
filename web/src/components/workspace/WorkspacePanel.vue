@@ -400,9 +400,10 @@ const openPreviewMode = async () => {
       return
     }
     if (sourceReference.value.exportBlocked) {
-      ElMessage.warning('请先处理冻结原文中的结构保真问题，再预览或导出')
-      if (isNarrowScreen.value) mobilePanel.value = 'source'
-      return
+      // Structure Fidelity blocker 只阻止正式 Export，不阻止诊断性 Preview。
+      // 服务端 preview.pdf 的 Document Gate 才是能否渲染的最终权威；
+      // 客户端不得伪造安全 verdict，也不得把用户从 Preview 流程踢回 Source。
+      ElMessage.warning('当前存在原文结构保真问题，仍可预览检查，但处理完成前不能导出。')
     }
 
     previewComponentMounted.value = true

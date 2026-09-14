@@ -222,6 +222,45 @@ class WorkspaceExportServiceImplTest {
     }
 
     @Test
+    void previewAllowsStructureFidelityBlockerAsDiagnosticAndExportStillRejects() {
+        // Structure Fidelity 是 reviewable blocker：Preview 仍然渲染 PDF 并携带 needsReview，
+        // 但正式 Export 必须被 Document Gate 拒绝，且不能产生渲染/存储副作用。
+        when(workspaceContentService.getPersistedContentForRender(USER_ID, TASK_ID)).thenReturn(savedContent());
+        when(resumePdfRenderer.render(any(ResumeDocumentDTO.class), any(ResumeTemplateId.class)))
+                .thenReturn(renderResult());
+        givenTaskWithTargetVersion();
+        when(exportDocumentGate.check(any(), any(), any()))
+                .thenReturn(new ExportDocumentGate.GateResult(
+                        ExportDocumentGate.STATUS_BLOCK,
+                        ExportDocumentGate.CODE_STRUCTURE_FIDELITY_FAILED,
+                        "READY",
+                        true));
+        ExportPreflight reviewPreflight = new ExportPreflight(2, false, false, false, false, true, List.of());
+        when(preflightChecker.check(any(), any(), anyBoolean())).thenReturn(reviewPreflight);
+        when(previewReceiptService.issue(any())).thenReturn(PREVIEW_RECEIPT);
+
+        RenderedPdf rendered = service.preview(USER_ID, TASK_ID, "classic", REVISION);
+
+        verify(resumePdfRenderer).render(any(ResumeDocumentDTO.class), any(ResumeTemplateId.class));
+        assertThat(rendered.pdf()).isEqualTo(PDF);
+        assertThat(rendered.preflight().needsReview()).isTrue();
+        assertThat(rendered.previewReceipt()).isEqualTo(PREVIEW_RECEIPT);
+
+        // The receipt issued during a blocked preview must never bypass the Export Gate.
+        WorkspaceExportRequestDTO request = new WorkspaceExportRequestDTO();
+        request.setTemplateId("classic");
+        request.setExpectedRevision(REVISION);
+        request.setPreviewReceipt(PREVIEW_RECEIPT);
+        assertThatThrownBy(() -> service.export(USER_ID, TASK_ID, request))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        exception -> {
+                            assertThat(exception.getCode()).isEqualTo(409);
+                            assertThat(exception.getMessage()).contains("STRUCTURE_FIDELITY_FAILED");
+                        });
+        verify(fileStorageService, never()).store(any());
+    }
+
+    @Test
     void previewRejectsUnrenderableQualityBeforeRender() {
         when(workspaceContentService.getPersistedContentForRender(USER_ID, TASK_ID)).thenReturn(savedContent());
         givenTaskWithTargetVersion();

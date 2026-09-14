@@ -251,6 +251,30 @@ describe('WorkspacePreviewExport', () => {
     expect(button(wrapper, '导出 PDF').attributes('disabled')).toBeDefined()
   })
 
+  it('keeps the PDF visible but disables export when preflight needs review', async () => {
+    previewMock.mockResolvedValue({
+      ...previewResult(),
+      preflight: {
+        pageCount: 2,
+        missingContact: false,
+        pageLimitExceeded: false,
+        overflowDetected: false,
+        orphanFinalPage: false,
+        readabilityTooSmall: false,
+        needsReview: true,
+      },
+    })
+    const wrapper = mountComponent()
+    await flushPromises()
+
+    // Preview is a diagnostic tool: the PDF stays visible even when the
+    // structure fidelity gate blocks formal export.
+    expect(wrapper.find('.preview-frame').exists()).toBe(true)
+    expect(wrapper.text()).toContain('原文结构仍需确认')
+    expect(wrapper.text()).toContain('当前 PDF 仅供检查')
+    expect(button(wrapper, '导出 PDF').attributes('disabled')).toBeDefined()
+  })
+
   it('drops a late preview response after revision changes', async () => {
     const pending = deferred<ReturnType<typeof previewResult>>()
     previewMock.mockReturnValue(pending.promise)

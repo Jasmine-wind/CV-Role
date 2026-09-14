@@ -632,10 +632,11 @@ class WorkspaceContentServiceImplTest {
                 .containsExactly("occ-entry", "occ-field", "occ-tech",
                         "occ-skill", "occ-description", "occ-bullet");
         WorkspaceSourceReferenceVO confirmedFidelity = service.getSourceReference(USER_ID, TASK_ID);
+        // Whole-Project confirmed omission releases the boundary blocker; the document
+        // becomes exportable when no other blocker remains.
         assertThat(confirmedFidelity.fidelityIssues()).extracting(issue -> issue.code())
-                .contains("PROJECT_BOUNDARY_LOST")
-                .doesNotContain("SOURCE_CONTENT_UNMAPPED");
-        assertThat(confirmedFidelity.exportBlocked()).isTrue();
+                .doesNotContain("PROJECT_BOUNDARY_LOST", "SOURCE_CONTENT_UNMAPPED");
+        assertThat(confirmedFidelity.exportBlocked()).isFalse();
 
         WorkspaceContentSaveResultVO unconfirmed = service.unconfirmSourceOmissions(
                 USER_ID, TASK_ID, new WorkspaceSourceOmissionRequestDTO(2L, List.of("occ-entry")));
