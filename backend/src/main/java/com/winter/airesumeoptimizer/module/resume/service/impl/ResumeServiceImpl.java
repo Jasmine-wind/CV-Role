@@ -1247,8 +1247,11 @@ public class ResumeServiceImpl implements ResumeService {
                 .uploadStatus(resume.getUploadStatus())
                 .parseStatus(parseResult == null ? "PENDING" : parseResult.getParseStatus())
                 .qualityStatus(parseResult == null ? null : parseResult.getQualityStatus())
+                // canonicalReady 只回答“当前是否已有结构化 canonical 文档”，与质量审核状态相互独立。
+                // NEEDS_REVIEW 的 canonical SOURCE 依然是 canonical；若在这里要求 QUALITY_READY，
+                // 重新准备完成的简历会一直被列表要求“重新准备”，形成死循环。
                 .canonicalReady(parseResult != null
-                        && ResumeQualityStatus.QUALITY_READY.equals(parseResult.getQualityStatus())
+                        && PARSE_STATUS_SUCCESS.equals(parseResult.getParseStatus())
                         && parseResult.getCanonicalSourceVersionId() != null)
                 .parseErrorMessage(parseResult == null ? null : parseResult.getErrorMessage())
                 .createdAt(resume.getCreatedAt())

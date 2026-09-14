@@ -22,6 +22,12 @@ export interface ResumeLibraryStatus {
 
 const DEFAULT_PREPARING_DESCRIPTION = '系统正在读取并整理内容。'
 
+/**
+ * Resume 列表状态只回答两个相互独立的问题：
+ * - canonicalReady：当前是否已有结构化 canonical 文档（无 → 需要重新准备）
+ * - qualityStatus：这份 canonical 文档是否还需要人工确认（NEEDS_REVIEW → 需要确认）
+ * 不得再把 NEEDS_REVIEW 当作“需要重新准备”。
+ */
 export const getResumeLibraryStatus = (
   resume: ResumeListItem,
   task?: AsyncTaskVO | null,
@@ -38,6 +44,17 @@ export const getResumeLibraryStatus = (
     }
   }
 
+  if (resume.parseStatus === 'FAILED') {
+    return {
+      kind: 'failed',
+      label: '准备失败',
+      description: resume.parseErrorMessage || '未能读取这份简历，请重试。',
+      tone: 'danger',
+      primaryAction: 'retry',
+      canDelete: true,
+    }
+  }
+
   if (resume.parseStatus === 'SUCCESS') {
     if (resume.qualityStatus === 'PENDING') {
       return {
@@ -49,6 +66,16 @@ export const getResumeLibraryStatus = (
         canDelete: false,
       }
     }
+    if (resume.qualityStatus === 'NEEDS_REVIEW' && resume.canonicalReady !== false) {
+      return {
+        kind: 'needs-review',
+        label: '需要确认',
+        description: '部分内容无法自动确定，确认后才能用于岗位分析与导出。',
+        tone: 'warning',
+        primaryAction: 'review',
+        canDelete: true,
+      }
+    }
     if (resume.canonicalReady === false) {
       return {
         kind: 'reprepare',
@@ -56,16 +83,6 @@ export const getResumeLibraryStatus = (
         description: '这份简历来自旧版解析，需要重新读取后才能使用。',
         tone: 'warning',
         primaryAction: 'prepare',
-        canDelete: true,
-      }
-    }
-    if (resume.qualityStatus === 'NEEDS_REVIEW') {
-      return {
-        kind: 'needs-review',
-        label: '需要确认',
-        description: '部分内容无法自动确定，确认后才能用于岗位分析与导出。',
-        tone: 'warning',
-        primaryAction: 'review',
         canDelete: true,
       }
     }
@@ -85,17 +102,6 @@ export const getResumeLibraryStatus = (
       description: '内容准备已完成。',
       tone: 'success',
       primaryAction: null,
-      canDelete: true,
-    }
-  }
-
-  if (resume.parseStatus === 'FAILED') {
-    return {
-      kind: 'failed',
-      label: '准备失败',
-      description: resume.parseErrorMessage || '未能读取这份简历，请重试。',
-      tone: 'danger',
-      primaryAction: 'retry',
       canDelete: true,
     }
   }

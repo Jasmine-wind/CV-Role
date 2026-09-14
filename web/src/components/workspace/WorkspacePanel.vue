@@ -3,17 +3,26 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
 import { getOptimizationAnalysisResult } from '@/api/job-analysis'
-import { getWorkspaceSourceReference } from '@/api/workspace'
+import {
+  confirmWorkspaceSourceOmissions,
+  getWorkspaceSourceReference,
+  restoreWorkspaceSourceContent,
+  unconfirmWorkspaceSourceOmissions,
+} from '@/api/workspace'
 import ErrorState from '@/components/common/ErrorState.vue'
 import SkeletonBlock from '@/components/common/SkeletonBlock.vue'
 import ResumeEditor from '@/components/workspace/ResumeEditor.vue'
+import {
+  buildOmissionPlansByBlockId,
+  buildRestorePlansByBlockId,
+} from '@/components/workspace/sourceMutationPlans'
 import WorkspacePreviewExport from '@/components/workspace/WorkspacePreviewExport.vue'
 import WorkspaceRequirements from '@/components/workspace/WorkspaceRequirements.vue'
 import WorkspaceSourcePane from '@/components/workspace/WorkspaceSourcePane.vue'
 import WorkspaceSuggestions from '@/components/workspace/WorkspaceSuggestions.vue'
 import TaskHeader from '@/components/task/TaskHeader.vue'
 import type { OptimizationAnalysisResult } from '@/types/job-analysis'
-import type { WorkspaceSaveResult, WorkspaceSourceReference } from '@/types/workspace'
+import type { WorkspaceSourceReference } from '@/types/workspace'
 import { useBulletSuggest } from '@/utils/useBulletSuggest'
 import { useWorkspaceEditor } from '@/utils/useWorkspaceEditor'
 import type { WorkspaceEvidenceAnchor } from '@/views/workspaceEvidenceAnchor'
@@ -54,6 +63,7 @@ const sourceReference = ref<WorkspaceSourceReference | null>(null)
 const sourceLoading = ref(false)
 const sourceError = ref<string | null>(null)
 const sourceMutationBusy = ref(false)
+const sourceMutationError = ref<{ blockId: string; message: string } | null>(null)
 const selectedTargetNodeId = ref<string | null>(null)
 const selectedSourceOccurrenceIds = ref<string[]>([])
 const reviewRequestKey = ref(0)
@@ -165,32 +175,28 @@ const saveStatusText = computed(() => {
 
 const saveStatusClass = computed(() => `save-status is-${editor.status.value}`)
 
-const omissionDisabledReason = computed(() => {
-  if (editor.status.value !== 'saved' || editor.hasUnsavedChanges.value) {
-    return '请先完成当前简历保存，再确认省略。'
-  }
-  if (
-    editor.revision.value === null ||
-    sourceReference.value?.targetRevision !== editor.revision.value
-  ) {
-    return '原文状态正在同步，请稍候。'
-  }
+// dirty 不再阻止 SOURCE mutation：点击时由 runner 自动 flush 保存，
+// 只有保存失败、编辑冲突或在途操作才真正阻止。
+const sourceMutationDisabledReason = computed(() => {
+  if (sourceMutationBusy.value) return '正在处理上一项操作，请稍候。'
+  if (editor.status.value === 'failed') return '保存失败，请先重试保存。'
+  if (editor.status.value === 'conflict') return '存在编辑冲突，请先选择保留哪个版本。'
   return null
 })
 
-/** Restore 与 omission 同样不能用服务端结果覆盖尚未持久化的本地编辑。 */
-const restoreDisabledReason = computed(() => {
-  if (editor.status.value !== 'saved' || editor.hasUnsavedChanges.value) {
-    return '请先完成当前简历保存，再恢复原文。'
-  }
-  if (
-    editor.revision.value === null ||
-    sourceReference.value?.targetRevision !== editor.revision.value
-  ) {
-    return '原文状态正在同步，请稍候。'
-  }
-  return null
-})
+/** Preview 顶部提示用：服务端权威 verdict 里还需要确认的项数。 */
+const fidelityBlockerCount = computed(
+  () =>
+    sourceReference.value?.fidelityIssues.filter((issue) => issue.severity === 'BLOCKER').length ??
+    0,
+)
+
+watch(
+  () => props.optimizationTaskId,
+  () => {
+    sourceMutationError.value = null
+  },
+)
 
 // 未保存 / saving / failed / conflict 或 SOURCE mutation 期间不允许发起 Suggest，
 // 避免候选绑定到未落库内容或与另一条写路径竞争同一 revision。
@@ -255,39 +261,15 @@ const viewSourceForTarget = (targetNodeId: string) => {
   if (isNarrowScreen.value) mobilePanel.value = 'source'
 }
 
-const handleOmissionSaved = (
-  expectedRevision: number,
-  result: WorkspaceSaveResult,
-  confirmed: boolean,
-) => {
-  const accepted = editor.acceptExternalSaveResult(expectedRevision, result)
-  if (!accepted) {
-    ElMessage.warning('省略状态已更新，但本地版本也发生了变化。正在重新同步，请勿重复操作。')
-  } else {
-    ElMessage.success(confirmed ? '已确认省略，结构保真状态已更新' : '已取消省略')
-  }
-  void loadSourceReference()
-}
+type SourceMutationIntent =
+  | { kind: 'restore'; blockId: string }
+  | { kind: 'omission'; blockId: string; confirm: boolean }
 
-/** Restore 的保存结果同样直接接回 editor；Preview 由 revision 变化自动失效。 */
-const handleRestoreSaved = (
-  expectedRevision: number,
-  result: WorkspaceSaveResult,
-  wholeProject: boolean,
-) => {
-  const accepted = editor.acceptExternalSaveResult(expectedRevision, result)
-  if (!accepted) {
-    ElMessage.warning('原文已恢复，但本地版本也发生了变化。正在重新同步，请勿重复操作。')
-  } else {
-    ElMessage.success(
-      wholeProject ? '已恢复整个项目，结构保真状态已更新' : '已恢复原文，结构保真状态已更新',
-    )
-  }
-  void loadSourceReference()
-}
+const SOURCE_CONFLICT_MESSAGE = '存在编辑冲突，请核对后重试。'
 
-const handleSourceMutationConcurrent = async (subject: '省略' | '恢复') => {
-  ElMessage.warning(`当前简历已有更新，本次${subject}操作未生效。`)
+/** CAS 冲突后重新同步：本地无未保存修改时直接采纳线上版本，然后刷新服务端判决。 */
+const resyncAfterSourceConflict = async (message: string) => {
+  ElMessage.warning(message)
   if (!editor.hasUnsavedChanges.value && editor.status.value === 'saved') {
     try {
       await editor.adoptServerVersion()
@@ -298,8 +280,114 @@ const handleSourceMutationConcurrent = async (subject: '省略' | '恢复') => {
   await loadSourceReference()
 }
 
-const handleOmissionConcurrent = () => handleSourceMutationConcurrent('省略')
-const handleRestoreConcurrent = () => handleSourceMutationConcurrent('恢复')
+/**
+ * Workspace 唯一的 SOURCE mutation runner：
+ * 点击 → 确保草稿已 CAS 保存 → 刷新权威 source-reference → 用最新 revision 执行 restore / omission。
+ * 用户不需要理解 revision，也不需要先手动保存。
+ */
+const runSourceMutation = async (intent: SourceMutationIntent) => {
+  if (sourceMutationBusy.value || sourceMutationDisabledReason.value) return
+  sourceMutationBusy.value = true
+  sourceMutationError.value = null
+  const taskAtRequest = props.optimizationTaskId
+  try {
+    const persisted = await editor.ensurePersisted()
+    if (!persisted) {
+      ElMessage.warning(
+        editor.status.value === 'conflict'
+          ? '存在编辑冲突，请先选择保留哪个版本。'
+          : '保存失败，请先重试保存。',
+      )
+      return
+    }
+    if (taskAtRequest !== props.optimizationTaskId) return
+
+    await loadSourceReference()
+    if (taskAtRequest !== props.optimizationTaskId) return
+    let reference = sourceReference.value
+    if (!reference) {
+      ElMessage.warning('原文状态正在同步，请稍后重试。')
+      return
+    }
+    // 本客户端落后于服务端（例如另一个页面刚保存过）：本地没有未保存修改，
+    // 先无损同步线上版本，再继续本次操作；用户不需要理解 revision。
+    if (reference.targetRevision !== editor.revision.value) {
+      try {
+        await editor.adoptServerVersion()
+      } catch {
+        ElMessage.error('同步线上版本失败，请刷新页面后重试')
+        return
+      }
+      await loadSourceReference()
+      if (taskAtRequest !== props.optimizationTaskId) return
+      reference = sourceReference.value
+    }
+    if (!reference || reference.targetRevision !== editor.revision.value) {
+      ElMessage.warning('原文状态正在同步，请稍后重试。')
+      return
+    }
+
+    // 根据 fresh authoritative source-reference 重新解析点击的 block：
+    // 只提交服务端给出的 occurrence 边界，客户端不拼 provenance。
+    const expectedRevision = reference.targetRevision
+    let request: { expectedRevision: number; sourceOccurrenceIds: string[] }
+    if (intent.kind === 'restore') {
+      const plan = buildRestorePlansByBlockId(reference).get(intent.blockId)
+      if (!plan) {
+        ElMessage.warning('该内容已更新，请重新确认后再试。')
+        return
+      }
+      request = { expectedRevision, sourceOccurrenceIds: plan.occurrenceIds }
+    } else {
+      const plan = buildOmissionPlansByBlockId(reference).get(intent.blockId)
+      if (!plan || plan.confirmed === intent.confirm) {
+        ElMessage.warning('该内容已更新，请重新确认后再试。')
+        return
+      }
+      request = { expectedRevision, sourceOccurrenceIds: plan.sourceOccurrenceIds }
+    }
+
+    const result =
+      intent.kind === 'restore'
+        ? await restoreWorkspaceSourceContent(taskAtRequest, request)
+        : intent.kind === 'omission' && intent.confirm
+          ? await confirmWorkspaceSourceOmissions(taskAtRequest, request)
+          : await unconfirmWorkspaceSourceOmissions(taskAtRequest, request)
+    if (taskAtRequest !== props.optimizationTaskId) return
+
+    if (!result.saved || result.conflict) {
+      sourceMutationError.value = { blockId: intent.blockId, message: SOURCE_CONFLICT_MESSAGE }
+      await resyncAfterSourceConflict(SOURCE_CONFLICT_MESSAGE)
+      return
+    }
+
+    if (!editor.acceptExternalSaveResult(expectedRevision, result)) {
+      ElMessage.warning('操作已生效，但本地版本也发生了变化。正在重新同步，请勿重复操作。')
+    } else if (intent.kind === 'restore') {
+      ElMessage.success('已恢复原文')
+    } else {
+      ElMessage.success(intent.confirm ? '已确认省略' : '已取消省略')
+    }
+    await loadSourceReference()
+  } catch (error) {
+    if (taskAtRequest !== props.optimizationTaskId) return
+    if ((error as { code?: number } | null)?.code === 409) {
+      sourceMutationError.value = { blockId: intent.blockId, message: SOURCE_CONFLICT_MESSAGE }
+      await resyncAfterSourceConflict(SOURCE_CONFLICT_MESSAGE)
+      return
+    }
+    const message = intent.kind === 'restore' ? '恢复失败，请稍后重试。' : '省略状态更新失败，请稍后重试。'
+    sourceMutationError.value = { blockId: intent.blockId, message }
+    ElMessage.error(message)
+  } finally {
+    if (taskAtRequest === props.optimizationTaskId) sourceMutationBusy.value = false
+  }
+}
+
+const handleRestoreRequested = (blockId: string) =>
+  void runSourceMutation({ kind: 'restore', blockId })
+const handleOmissionRequested = (blockId: string, confirm: boolean) =>
+  void runSourceMutation({ kind: 'omission', blockId, confirm })
 
 /**
  * Preview → “查看并处理”：只做导航，不修改任何数据。
@@ -450,9 +538,13 @@ const openPreviewMode = async () => {
   if (previewPreparing.value || sourceMutationBusy.value || workspaceMode.value === 'preview') return
   previewPreparing.value = true
   try {
-    const ready = await editor.ensurePersistedForRender()
+    const ready = await editor.ensurePersisted()
     if (!ready) {
-      ElMessage.warning('请先完成当前简历保存或冲突处理')
+      ElMessage.warning(
+        editor.status.value === 'conflict'
+          ? '存在编辑冲突，请先选择保留哪个版本。'
+          : '保存失败，请先重试保存。',
+      )
       return
     }
 
@@ -467,13 +559,9 @@ const openPreviewMode = async () => {
       ElMessage.warning('冻结原文检查尚未完成，请稍后重试')
       return
     }
-    if (sourceReference.value.exportBlocked) {
-      // Structure Fidelity blocker 只阻止正式 Export，不阻止诊断性 Preview。
-      // 服务端 preview.pdf 的 Document Gate 才是能否渲染的最终权威；
-      // 客户端不得伪造安全 verdict，也不得把用户从 Preview 流程踢回 Source。
-      ElMessage.warning('当前存在原文结构保真问题，仍可预览检查，但处理完成前不能导出。')
-    }
 
+    // Structure Fidelity blocker 只阻止正式 Export，不阻止诊断性 Preview；
+    // Preview 顶部会以人话提示还剩多少项需要确认。
     previewComponentMounted.value = true
     workspaceMode.value = 'preview'
   } finally {
@@ -709,16 +797,14 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
             role="tabpanel"
             aria-labelledby="workspace-tab-source"
             :selected-occurrence-ids="selectedSourceOccurrenceIds"
-            :omission-disabled-reason="omissionDisabledReason"
-            :restore-disabled-reason="restoreDisabledReason"
+            :source-mutation-disabled-reason="sourceMutationDisabledReason"
+            :mutation-busy="sourceMutationBusy"
+            :mutation-error="sourceMutationError"
             :review-request-key="reviewRequestKey"
             @retry="loadSourceReference"
             @focus-target="focusTargetFromSource"
-            @omission-saved="handleOmissionSaved"
-            @omission-concurrent="handleOmissionConcurrent"
-            @restore-saved="handleRestoreSaved"
-            @restore-concurrent="handleRestoreConcurrent"
-            @source-mutation-busy="sourceMutationBusy = $event"
+            @restore-requested="handleRestoreRequested"
+            @omission-requested="handleOmissionRequested"
             @locate-issue-target="locateIssueTarget"
             @restart-upload="handleRestartUpload"
           />
@@ -858,6 +944,7 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
           :revision="editor.revision.value"
           :status="editor.status.value"
           :active="workspaceMode === 'preview'"
+          :fidelity-issue-count="fidelityBlockerCount"
           @stale="handlePreviewStale"
           @resolve-fidelity="openFidelityResolver"
         />

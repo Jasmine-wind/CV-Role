@@ -50,7 +50,7 @@ describe('homeComposer', () => {
   })
 
   it('describes a ready resume as usable for analysis', () => {
-    expect(getResumeStatus(resume())).toMatchObject({ kind: 'ready', label: '可用于分析' })
+    expect(getResumeStatus(resume())).toMatchObject({ kind: 'ready', label: '可用于岗位分析' })
   })
 
   it('describes a resume preparation task with its live message', () => {
@@ -68,8 +68,21 @@ describe('homeComposer', () => {
     expect(getResumeStatus(resume({ qualityStatus: 'NEEDS_REVIEW' })).kind).toBe('needs-review')
   })
 
+  it('keeps NEEDS_REVIEW with a canonical source as confirmation instead of reprepare', () => {
+    // 与简历库一致：只剩确认时不能引导用户重新准备。
+    expect(
+      getResumeStatus(resume({ qualityStatus: 'NEEDS_REVIEW', canonicalReady: true })).kind,
+    ).toBe('needs-review')
+  })
+
   it('describes a stale canonical version as requiring reparse', () => {
     expect(getResumeStatus(resume({ canonicalReady: false })).kind).toBe('reparse')
+  })
+
+  it('still requires reprepare when NEEDS_REVIEW has no canonical source', () => {
+    expect(
+      getResumeStatus(resume({ qualityStatus: 'NEEDS_REVIEW', canonicalReady: false })).kind,
+    ).toBe('reparse')
   })
 
   it('describes parse failure without relying on a color alone', () => {

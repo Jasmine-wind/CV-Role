@@ -81,6 +81,20 @@ describe('resumeLibraryPresentation', () => {
     )
   })
 
+  it('keeps a NEEDS_REVIEW resume with a canonical source as needing confirmation, not reprepare', () => {
+    // P0 回归：重新准备完成后 quality 为 NEEDS_REVIEW 且 canonical SOURCE 已生成；
+    // 列表必须显示“需要确认”，不能再次要求“重新准备”形成死循环。
+    expect(
+      getResumeLibraryStatus(resume({ qualityStatus: 'NEEDS_REVIEW', canonicalReady: true })),
+    ).toMatchObject({ kind: 'needs-review', label: '需要确认', primaryAction: 'review' })
+  })
+
+  it('requires reprepare when NEEDS_REVIEW has no canonical source yet', () => {
+    expect(
+      getResumeLibraryStatus(resume({ qualityStatus: 'NEEDS_REVIEW', canonicalReady: false })),
+    ).toMatchObject({ kind: 'reprepare', label: '需要重新准备', primaryAction: 'prepare' })
+  })
+
   it('presents a stale canonical version with reprepare action', () => {
     expect(getResumeLibraryStatus(resume({ canonicalReady: false }))).toMatchObject({
       kind: 'reprepare',

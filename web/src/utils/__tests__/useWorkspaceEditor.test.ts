@@ -81,7 +81,7 @@ describe('useWorkspaceEditor', () => {
     const editor = useWorkspaceEditor(10)
     await editor.load()
 
-    await expect(editor.ensurePersistedForRender()).resolves.toBe(true)
+    await expect(editor.ensurePersisted()).resolves.toBe(true)
 
     expect(saveContentMock).toHaveBeenCalledWith(10, {
       expectedRevision: 0,
@@ -101,10 +101,43 @@ describe('useWorkspaceEditor', () => {
     const editor = useWorkspaceEditor(10)
     await editor.load()
 
-    await expect(editor.ensurePersistedForRender()).resolves.toBe(false)
+    await expect(editor.ensurePersisted()).resolves.toBe(false)
 
     expect(editor.status.value).toBe('conflict')
     expect(editor.revision.value).toBe(0)
+  })
+
+  it('waits for an in-flight autosave instead of failing the click-time flush', async () => {
+    const first = deferred<Awaited<ReturnType<typeof saveWorkspaceContent>>>()
+    saveContentMock.mockReturnValueOnce(first.promise)
+    const editor = useWorkspaceEditor(10)
+    await editor.load()
+
+    editor.applyDocument(document('点击前编辑'))
+    await vi.advanceTimersByTimeAsync(800)
+
+    // Autosave is still in flight when the user clicks a SOURCE action.
+    const persisted = editor.ensurePersisted()
+    first.resolve({ saved: true, conflict: false, revision: 1, document: document('点击前编辑') })
+
+    await expect(persisted).resolves.toBe(true)
+    expect(saveContentMock).toHaveBeenCalledTimes(1)
+    expect(editor.revision.value).toBe(1)
+  })
+
+  it('does not auto-retry a failed save from ensurePersisted', async () => {
+    saveContentMock.mockRejectedValueOnce(new Error('network'))
+    const editor = useWorkspaceEditor(10)
+    await editor.load()
+
+    editor.applyDocument(document('失败草稿'))
+    await vi.advanceTimersByTimeAsync(800)
+    await settle()
+    expect(editor.status.value).toBe('failed')
+
+    await expect(editor.ensurePersisted()).resolves.toBe(false)
+    expect(saveContentMock).toHaveBeenCalledTimes(1)
+    expect(editor.status.value).toBe('failed')
   })
 
   it('synchronizes the revision and canonical document from a successful external CAS operation', async () => {

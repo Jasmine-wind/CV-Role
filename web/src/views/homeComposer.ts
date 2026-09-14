@@ -65,24 +65,24 @@ export const getResumeStatus = (
       description: preparationMessage || '系统正在读取并整理这份简历。',
     }
   }
-  if (resume.canonicalReady === false) {
-    return {
-      kind: 'reparse',
-      label: '需要重新解析',
-      description: '这份简历需要重新准备后才能开始岗位分析。',
-    }
-  }
-  if (resume.qualityStatus === 'NEEDS_REVIEW') {
+  if (resume.qualityStatus === 'NEEDS_REVIEW' && resume.canonicalReady !== false) {
     return {
       kind: 'needs-review',
       label: '需要确认',
       description: '这份简历有内容需要确认，确认后才能用于岗位分析。',
     }
   }
+  if (resume.canonicalReady === false) {
+    return {
+      kind: 'reparse',
+      label: '需要重新准备',
+      description: '这份简历需要重新准备后才能开始岗位分析。',
+    }
+  }
   if (resume.parseStatus === 'SUCCESS' && resume.qualityStatus === 'READY') {
     return {
       kind: 'ready',
-      label: '可用于分析',
+      label: '可用于岗位分析',
       description: '这份简历已准备好，可以开始核对岗位要求。',
     }
   }
@@ -103,8 +103,8 @@ export const getStartBlockMessage = (reason: string) => {
       return '这份简历有内容需要确认。'
     case '当前简历准备失败':
       return '这份简历准备失败，请先前往我的简历处理。'
-    case '当前简历需要重新解析':
-      return '这份简历需要重新解析，请先前往我的简历处理。'
+    case '当前简历需要重新准备':
+      return '这份简历需要重新准备，请先前往我的简历处理。'
     case '请粘贴目标岗位 JD':
       return '请粘贴完整的目标岗位描述。'
     case '岗位分析正在进行':
@@ -144,7 +144,7 @@ export const getStartBlockReason = ({
   if (status.kind === 'preparing' || status.kind === 'pending') return '当前简历仍在准备'
   if (status.kind === 'needs-review') return '当前简历需要确认'
   if (status.kind === 'failed') return '当前简历准备失败'
-  if (status.kind === 'reparse') return '当前简历需要重新解析'
+  if (status.kind === 'reparse') return '当前简历需要重新准备'
   if (!jobDescription.trim()) return '请粘贴目标岗位 JD'
   if (aiConfigurationState === 'UNCONFIGURED') return 'AI 尚未配置'
   if (aiConfigurationState === 'SAVED_DISABLED') return 'AI 配置尚未启用'

@@ -81,6 +81,7 @@ export function useWorkspaceEditor(
   let maxWaitTimer: ReturnType<typeof setTimeout> | null = null
   let pendingSince: number | null = null
   let saving = false
+  let savingPromise: Promise<void> | null = null
   let disposed = false
   let draftSequence = 0
 
@@ -163,37 +164,41 @@ export function useWorkspaceEditor(
     saving = true
     status.value = 'saving'
 
-    try {
-      const result = await api.saveContent(optimizationTaskId, {
-        expectedRevision,
-        document: snapshot,
-      })
-      if (disposed) return
-      if (!result.saved) {
-        conflictRevision.value = result.revision
-        status.value = 'conflict'
-        return
-      }
+    savingPromise = (async () => {
+      try {
+        const result = await api.saveContent(optimizationTaskId, {
+          expectedRevision,
+          document: snapshot,
+        })
+        if (disposed) return
+        if (!result.saved) {
+          conflictRevision.value = result.revision
+          status.value = 'conflict'
+          return
+        }
 
-      revision.value = result.revision
-      conflictRevision.value = null
-      saveError.value = null
-      if (draftSequence === snapshotSequence) {
-        draft.value = clone(result.document ?? snapshot)
-        status.value = 'saved'
-      } else {
-        status.value = 'dirty'
-        pendingSince = Date.now()
+        revision.value = result.revision
+        conflictRevision.value = null
+        saveError.value = null
+        if (draftSequence === snapshotSequence) {
+          draft.value = clone(result.document ?? snapshot)
+          status.value = 'saved'
+        } else {
+          status.value = 'dirty'
+          pendingSince = Date.now()
+        }
+      } catch (error) {
+        if (!disposed) {
+          saveError.value = error instanceof Error ? error.message : '保存失败，请稍后重试'
+          status.value = 'failed'
+        }
+      } finally {
+        saving = false
+        if (!disposed && status.value === 'dirty') scheduleSave()
       }
-    } catch (error) {
-      if (!disposed) {
-        saveError.value = error instanceof Error ? error.message : '保存失败，请稍后重试'
-        status.value = 'failed'
-      }
-    } finally {
-      saving = false
-      if (!disposed && status.value === 'dirty') scheduleSave()
-    }
+    })()
+    await savingPromise
+    savingPromise = null
   }
 
   const markDirty = () => {
@@ -369,17 +374,26 @@ export function useWorkspaceEditor(
   }
 
   /**
-   * Phase 6 只渲染已 CAS 保存的 TARGET RESUME_DOCUMENT_V1。
-   * revision 0 仍保留 Phase 4 的冻结快照初始化语义，但在打开 Preview 前显式保存当前投影。
+   * 确保当前草稿已经成功 CAS 保存；Preview 与 SOURCE mutation 共用同一入口。
+   * 自动保存在途时先等待它落地，而不是直接失败；failed / conflict 返回 false，
+   * 由调用方用用户语言解释（保存失败请重试 / 存在编辑冲突）。
+   * revision 0 仍保留 Phase 4 的冻结快照初始化语义：首次操作前显式保存当前投影。
    */
-  const ensurePersistedForRender = async (): Promise<boolean> => {
-    if (disposed || saving || !draft.value || revision.value === null) return false
-    if (revision.value > 0 && status.value === 'saved') return true
+  const ensurePersisted = async (): Promise<boolean> => {
+    if (disposed || !draft.value || revision.value === null) return false
     if (conflictRevision.value !== null) return false
+    if (savingPromise) {
+      await savingPromise
+      if (disposed || conflictRevision.value !== null || status.value === 'failed') return false
+    }
+    // 保存失败不自动重试：由用户点击“重新保存”后再继续操作。
+    if (status.value === 'failed') return false
+    if (revision.value > 0 && status.value === 'saved') return true
 
     status.value = 'dirty'
     if (pendingSince === null) pendingSince = Date.now()
     await flush()
+    // flush 会推进 status，但 TS 控制流仍按赋值收窄；显式读取最新值。
     const statusAfterFlush = status.value as WorkspaceSaveStatus
     return !disposed && statusAfterFlush === 'saved' && revision.value > 0
   }
@@ -410,7 +424,7 @@ export function useWorkspaceEditor(
     adoptServerVersion,
     restorePreOptimization,
     acceptExternalSaveResult,
-    ensurePersistedForRender,
+    ensurePersisted,
     flushNow: flush,
     dispose,
   }

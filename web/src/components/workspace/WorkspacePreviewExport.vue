@@ -23,6 +23,8 @@ const props = defineProps<{
   status: WorkspaceSaveStatus
   /** 是否处于 Preview mode；只有 active 时才允许自动生成预览，杜绝编辑态后台渲染。 */
   active: boolean
+  /** 服务端 verdict 中还需要确认的项数；用于 Preview 顶部人话提示。 */
+  fidelityIssueCount?: number
 }>()
 
 /** revision 过期（其它端修改了内容）时通知工作区同步服务端版本；resolveFidelity 只做导航。 */
@@ -93,8 +95,33 @@ const blockingPreflightMessages = computed(() => {
   if (result.overflowDetected) messages.push('检测到文字超出页面边界，需要调整内容或编辑器字段')
   if (result.orphanFinalPage) messages.push('末页内容过少，需要调整内容分页')
   if (result.readabilityTooSmall) messages.push('部分字号低于可读下限，需要调整内容')
-  if (result.needsReview) messages.push('原文结构仍需确认；当前 PDF 仅供检查，处理完成后才能导出')
   return messages
+})
+
+const fidelityIssueCount = computed(() => props.fidelityIssueCount ?? 0)
+const showFidelityBanner = computed(() => Boolean(previewPreflight.value?.needsReview))
+const fidelityBannerText = computed(() =>
+  fidelityIssueCount.value > 0
+    ? `还有 ${fidelityIssueCount.value} 项内容需要确认，处理后才能导出。`
+    : '还有内容需要确认，处理后才能导出。',
+)
+/** 导出按钮下一两行人话，不展示内部 code。 */
+const exportIssueMessages = computed(() => {
+  const messages = [...blockingPreflightMessages.value]
+  if (previewPreflight.value?.needsReview) {
+    messages.push(
+      fidelityIssueCount.value > 0
+        ? `还有 ${fidelityIssueCount.value} 项内容需要确认`
+        : '还有内容需要确认',
+    )
+  }
+  return messages
+})
+const exportButtonLabel = computed(() => {
+  if (canExport.value) return '导出 PDF'
+  return exportIssueMessages.value.length > 0
+    ? `导出 PDF（需要先处理 ${exportIssueMessages.value.length} 项问题）`
+    : '导出 PDF'
 })
 
 const advisoryPreflightMessages = computed(() => {
@@ -111,6 +138,7 @@ const allPreflightMessages = computed(() => [
 const preflightStatusLabel = computed(() => {
   if (!previewPreflight.value) return '尚未检查'
   if (blockingPreflightMessages.value.length) return '需要处理后才能导出'
+  if (previewPreflight.value.needsReview) return '还有内容需要确认'
   if (advisoryPreflightMessages.value.length) return '可以导出，建议检查页数'
   return '可以导出'
 })
@@ -481,6 +509,7 @@ onBeforeUnmount(() => {
     <div class="preview-layout">
       <section
         class="preview-document"
+        :class="{ 'has-fidelity-banner': showFidelityBanner }"
         aria-label="PDF 文档预览"
         :aria-busy="previewLoading"
       >
@@ -499,6 +528,16 @@ onBeforeUnmount(() => {
             打开完整 PDF
           </a>
         </header>
+        <div v-if="showFidelityBanner" class="preview-fidelity-banner" role="status">
+          <span>{{ fidelityBannerText }}</span>
+          <button
+            type="button"
+            class="resolve-fidelity-action"
+            @click="emit('resolveFidelity')"
+          >
+            查看并处理
+          </button>
+        </div>
         <div class="preview-document-canvas">
           <div v-if="previewLoading" class="preview-placeholder" role="status">
             <strong>正在生成预览…</strong>
@@ -570,15 +609,6 @@ onBeforeUnmount(() => {
           <p v-if="blockingPreflightMessages.length" class="preflight-blocked-copy">
             处理后才能导出：{{ blockingPreflightMessages[0] }}
           </p>
-          <!-- 只做导航：跳回编辑态的 Source / 结构问题区域，不修改任何数据。 -->
-          <el-button
-            v-if="previewPreflight.needsReview"
-            size="small"
-            class="resolve-fidelity-action"
-            @click="emit('resolveFidelity')"
-          >
-            查看并处理
-          </el-button>
           <details v-if="allPreflightMessages.length" class="preflight-details">
             <summary>查看完整检查</summary>
             <ul>
@@ -654,11 +684,18 @@ onBeforeUnmount(() => {
           <p v-if="exportSuccess" class="export-success-copy">
             {{ exportSuccess.fileName }} · {{ exportSuccess.pageCount }} 页 · {{ Math.ceil(exportSuccess.fileSize / 1024) }} KB
           </p>
+          <ul
+            v-else-if="exportIssueMessages.length"
+            class="export-issue-list"
+            aria-label="导出前需要处理的问题"
+          >
+            <li v-for="issue in exportIssueMessages.slice(0, 3)" :key="issue">{{ issue }}</li>
+          </ul>
           <p v-else-if="!canExport" class="export-blocked-copy">
-            {{ preflightStatusLabel === '尚未检查' ? '生成预览并完成导出前检查后可导出。' : '请先处理导出前检查中的阻断项。' }}
+            {{ previewPreflight ? '请先处理导出前检查中的阻断项。' : '生成预览并完成导出前检查后可导出。' }}
           </p>
           <el-button type="primary" :loading="exporting" :disabled="!canExport" @click="handleExport">
-            导出 PDF
+            {{ exportButtonLabel }}
           </el-button>
         </section>
       </aside>
@@ -695,6 +732,43 @@ onBeforeUnmount(() => {
   overflow: hidden;
   border-right: 1px solid var(--app-border-strong);
   background: var(--app-pdf-canvas);
+}
+
+.preview-document.has-fidelity-banner {
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+
+.preview-fidelity-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--app-space-3);
+  padding: 8px var(--app-space-5);
+  border-bottom: 1px solid var(--app-border-strong);
+  color: var(--app-text);
+  font-size: var(--app-font-size-xs);
+  line-height: var(--app-line-height-body);
+  background: var(--app-warning-soft);
+}
+
+.preview-fidelity-banner .resolve-fidelity-action {
+  flex: 0 0 auto;
+  min-height: 28px;
+  border: 1px solid var(--app-primary);
+  border-radius: 4px;
+  padding: 0 10px;
+  color: var(--app-primary-active);
+  font: inherit;
+  font-size: var(--app-font-size-xs);
+  font-weight: 700;
+  background: var(--app-surface);
+  cursor: pointer;
+}
+
+.preview-fidelity-banner .resolve-fidelity-action:hover,
+.preview-fidelity-banner .resolve-fidelity-action:focus-visible {
+  color: #fff;
+  background: var(--app-primary);
 }
 
 .preview-document-toolbar {
@@ -969,6 +1043,16 @@ onBeforeUnmount(() => {
 
 .export-blocked-copy {
   color: var(--app-warning);
+}
+
+.export-issue-list {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding-left: var(--app-space-4);
+  color: var(--app-warning);
+  font-size: var(--app-font-size-xs);
+  line-height: var(--app-line-height-body);
 }
 
 .export-success-copy {

@@ -63,7 +63,7 @@ async function uploadAndStartAnalysis(page: Page, jobDescription: string, fixtur
   )
   await page.getByRole('button', { name: '上传简历', exact: true }).click()
   await uploadFinished
-  await expect(page.locator('.home-resume-option').filter({ hasText: '可用于分析' })).toBeVisible({
+  await expect(page.locator('.home-resume-option').filter({ hasText: '可用于岗位分析' })).toBeVisible({
     timeout: 30_000,
   })
   await page.locator('#home-jd').fill(jobDescription)
@@ -226,7 +226,7 @@ test('delayed upload keeps the JD and blocks analysis until the selected resume 
   releaseUpload()
   await uploadClick
   await page.unroute('**/api/resumes')
-  await expect(page.locator('.home-resume-option.is-selected')).toContainText('可用于分析', {
+  await expect(page.locator('.home-resume-option.is-selected')).toContainText('可用于岗位分析', {
     timeout: 30_000,
   })
   await expect(page.locator('#home-jd')).toHaveValue(englishPlatformJobDescription)
@@ -454,7 +454,7 @@ test('intentional omission: a deleted source bullet blocks delivery until confir
   )
   await changedSave
   await expect(page.getByText('✓ 已保存', { exact: true })).toBeVisible({ timeout: 15_000 })
-  await expect(sourceCard.locator('.mapping-state')).toHaveText('已定位 · 内容已修改', {
+  await expect(sourceCard.locator('.mapping-state')).toHaveText('内容已修改', {
     timeout: 15_000,
   })
 
@@ -466,8 +466,8 @@ test('intentional omission: a deleted source bullet blocks delivery until confir
   await targetBullet.locator('.bullet-delete-action').click()
   await deletedSave
   await expect(page.getByText('✓ 已保存', { exact: true })).toBeVisible({ timeout: 15_000 })
-  await expect(sourceCard.locator('.mapping-state')).toHaveText('未映射', { timeout: 15_000 })
-  await expect(page.getByText(/结构保真：\d+ 项阻断/)).toBeVisible()
+  await expect(sourceCard.locator('.mapping-state')).toHaveText('需要处理', { timeout: 15_000 })
+  await expect(page.locator('.fidelity-strip')).toContainText(/还有 \d+ 项内容需要确认/)
 
   let previewRequestCount = 0
   const countPreviewRequest = (request: { url: () => string }) => {
@@ -491,15 +491,12 @@ test('intentional omission: a deleted source bullet blocks delivery until confir
   expect(expectedOrdinaryOccurrenceIds).toBeTruthy()
   expect(fidelityPayload.data.exportBlocked).toBe(true)
   // Structure Fidelity blocker no longer prevents Preview; it only prevents Export.
-  await expect(
-    page.getByText('当前存在原文结构保真问题，仍可预览检查，但处理完成前不能导出。'),
-  ).toBeVisible()
   await expect(page.getByTitle('简历 PDF 预览')).toBeVisible({ timeout: 45_000 })
   expect(previewRequestCount).toBeGreaterThan(0)
-  // Pin the needsReview copy to its unique semantic container: the same sentence also
-  // appears inside the collapsed .preflight-details list, so a bare getByText is ambiguous.
-  await expect(page.locator('.preflight-blocked-copy')).toContainText('原文结构仍需确认')
-  await expect(page.getByRole('button', { name: '导出 PDF', exact: true })).toBeDisabled()
+  // Preview 顶部以人话提示还剩多少项需要确认，并提供“查看并处理”入口。
+  await expect(page.locator('.preview-fidelity-banner')).toContainText('项内容需要确认，处理后才能导出。')
+  await expect(page.locator('.preview-fidelity-banner button')).toHaveText('查看并处理')
+  await expect(page.getByRole('button', { name: /导出 PDF/ })).toBeDisabled()
   page.off('request', countPreviewRequest)
   // Return to edit mode so the omission confirmation flow can continue.
   await page.getByRole('button', { name: '返回编辑', exact: true }).click()
@@ -507,8 +504,9 @@ test('intentional omission: a deleted source bullet blocks delivery until confir
 
   const confirmAction = sourceCard.getByRole('button', { name: /^确认省略/ })
   await expect(confirmAction).toBeEnabled()
+  const unconfirmAction = sourceCard.getByRole('button', { name: /^取消省略/ })
 
-  // Dirty and saving states must disable omission and issue zero omission POSTs.
+  // 点击时自动保存：dirty 点击先 flush 保存，保存落地后同一击继续执行 omission，无需二次点击。
   let omissionPostCount = 0
   const countOmissionPost = (request: { method: () => string; url: () => string }) => {
     if (request.method() === 'POST' && request.url().includes('/source-omissions/')) {
@@ -531,26 +529,35 @@ test('intentional omission: a deleted source bullet blocks delivery until confir
     await route.continue()
   })
   const remainingBullet = page.locator('.bullet-block textarea').first()
-  await remainingBullet.fill(`${await remainingBullet.inputValue()} 补充保存门禁验证`)
-  await expect(confirmAction).toBeDisabled()
-  await confirmAction.click({ force: true })
-  expect(omissionPostCount).toBe(0)
-  await saveStarted
-  await expect(confirmAction).toBeDisabled()
-  await confirmAction.click({ force: true })
-  expect(omissionPostCount).toBe(0)
-  const gateSaveResponse = page.waitForResponse(
+  await remainingBullet.fill(`${await remainingBullet.inputValue()} 点击自动保存验证`)
+  const autoConfirmResponse = page.waitForResponse(
     (response) =>
-      response.request().method() === 'PUT' &&
-      /\/api\/workspace\/\d+\/content$/.test(new URL(response.url()).pathname),
+      response.request().method() === 'POST' &&
+      response.url().endsWith('/source-omissions/confirm'),
   )
+  await confirmAction.click()
+  await saveStarted
+  // omission 必须等待保存落地：在途保存完成前不得发出任何 POST。
+  expect(omissionPostCount).toBe(0)
   releaseSave()
-  expect((await gateSaveResponse).ok()).toBe(true)
+  const autoConfirmed = await autoConfirmResponse
+  expect(autoConfirmed.ok()).toBe(true)
+  expect(omissionPostCount).toBe(1)
+  const autoConfirmBody = autoConfirmed.request().postDataJSON() as {
+    expectedRevision: number
+    sourceOccurrenceIds: string[]
+  }
+  expect(Number.isInteger(autoConfirmBody.expectedRevision)).toBe(true)
+  expect(autoConfirmBody.sourceOccurrenceIds).toEqual(expectedOrdinaryOccurrenceIds)
   await page.unroute('**/api/workspace/*/content')
-  await expect(page.getByText('✓ 已保存', { exact: true })).toBeVisible({ timeout: 15_000 })
-  await expect(confirmAction).toBeEnabled({ timeout: 15_000 })
+  await expect(sourceCard.locator('.mapping-state')).toHaveText('已确认省略', {
+    timeout: 15_000,
+  })
+  await expect(page.locator('.fidelity-strip')).toContainText('内容检查通过', {
+    timeout: 15_000,
+  })
 
-  // A failed save keeps the omission action disabled and cannot emit an omission POST.
+  // 保存失败时真正阻止：按钮不可用并给出简单说明，且不发任何 omission POST。
   await page.route('**/api/workspace/*/content', async (route) => {
     if (route.request().method() === 'PUT') await route.abort('failed')
     else await route.continue()
@@ -565,9 +572,12 @@ test('intentional omission: a deleted source bullet blocks delivery until confir
   await expect(page.getByRole('button', { name: '重新保存', exact: true })).toBeVisible({
     timeout: 15_000,
   })
-  await expect(confirmAction).toBeDisabled()
-  await confirmAction.click({ force: true })
-  expect(omissionPostCount).toBe(0)
+  await expect(unconfirmAction).toBeDisabled()
+  await expect(page.locator('.source-block .omission-disabled-reason').first()).toContainText(
+    '保存失败，请先重试保存。',
+  )
+  await unconfirmAction.click({ force: true })
+  expect(omissionPostCount).toBe(1)
   await page.unroute('**/api/workspace/*/content')
   const retrySaveResponse = page.waitForResponse(
     (response) =>
@@ -577,52 +587,7 @@ test('intentional omission: a deleted source bullet blocks delivery until confir
   await page.getByRole('button', { name: '重新保存', exact: true }).click()
   expect((await retrySaveResponse).ok()).toBe(true)
   await expect(page.getByText('✓ 已保存', { exact: true })).toBeVisible({ timeout: 15_000 })
-  await expect(confirmAction).toBeEnabled({ timeout: 15_000 })
-
-  // Keep the real confirm request pending and prove every TARGET mutation surface is locked.
-  let releaseConfirm!: () => void
-  let markConfirmStarted!: () => void
-  const confirmStarted = new Promise<void>((resolve) => {
-    markConfirmStarted = resolve
-  })
-  const confirmRelease = new Promise<void>((resolve) => {
-    releaseConfirm = resolve
-  })
-  await page.route('**/source-omissions/confirm', async (route) => {
-    if (route.request().method() !== 'POST') return route.continue()
-    markConfirmStarted()
-    await confirmRelease
-    await route.continue()
-  })
-  const confirmResponse = page.waitForResponse(
-    (response) =>
-      response.request().method() === 'POST' &&
-      response.url().endsWith('/source-omissions/confirm'),
-  )
-  await confirmAction.click()
-  await confirmStarted
-  await expect(page.locator('.resume-editor')).toHaveAttribute('aria-busy', 'true')
-  await expect(page.locator('.resume-editor')).toHaveAttribute('inert', /^(|true)$/)
-  await expect(page.getByRole('button', { name: '预览 →', exact: true })).toBeDisabled()
-  releaseConfirm()
-  const confirmed = await confirmResponse
-  await page.unroute('**/source-omissions/confirm')
-  page.off('request', countOmissionPost)
-  const confirmBody = confirmed.request().postDataJSON() as {
-    expectedRevision: number
-    sourceOccurrenceIds: string[]
-  }
-  expect(Number.isInteger(confirmBody.expectedRevision)).toBe(true)
-  expect(confirmBody.sourceOccurrenceIds).toEqual(expectedOrdinaryOccurrenceIds)
-  expect(new Set(confirmBody.sourceOccurrenceIds).size).toBe(confirmBody.sourceOccurrenceIds.length)
-  expect(confirmed.ok()).toBe(true)
-
-  await expect(sourceCard.locator('.mapping-state')).toHaveText('已确认省略', {
-    timeout: 15_000,
-  })
-  await expect(page.getByText('结构保真检查通过', { exact: true })).toBeVisible({
-    timeout: 15_000,
-  })
+  await expect(unconfirmAction).toBeEnabled({ timeout: 15_000 })
 
   // A failed authoritative source-reference refresh must fail closed and issue no preview request.
   let failedGatePreviewRequests = 0
@@ -656,30 +621,79 @@ test('intentional omission: a deleted source bullet blocks delivery until confir
   ).toBeVisible({ timeout: 45_000 })
   await page.getByRole('button', { name: '返回编辑', exact: true }).click()
 
-  const unconfirmAction = sourceCard.getByRole('button', { name: /^取消省略/ })
-  await expect(unconfirmAction).toBeEnabled({ timeout: 15_000 })
+  // Keep the real unconfirm request pending and prove every TARGET mutation surface is locked.
+  let releaseConfirm!: () => void
+  let markConfirmStarted!: () => void
+  const confirmStarted = new Promise<void>((resolve) => {
+    markConfirmStarted = resolve
+  })
+  const confirmRelease = new Promise<void>((resolve) => {
+    releaseConfirm = resolve
+  })
+  await page.route('**/source-omissions/unconfirm', async (route) => {
+    if (route.request().method() !== 'POST') return route.continue()
+    markConfirmStarted()
+    await confirmRelease
+    await route.continue()
+  })
   const unconfirmResponse = page.waitForResponse(
     (response) =>
       response.request().method() === 'POST' &&
       response.url().endsWith('/source-omissions/unconfirm'),
   )
+  await expect(unconfirmAction).toBeEnabled({ timeout: 15_000 })
   await unconfirmAction.click()
-  const unconfirmed = await unconfirmResponse
-  expect(unconfirmed.ok()).toBe(true)
-  const unconfirmBody = unconfirmed.request().postDataJSON() as {
+  await confirmStarted
+  await expect(page.locator('.resume-editor')).toHaveAttribute('aria-busy', 'true')
+  await expect(page.locator('.resume-editor')).toHaveAttribute('inert', /^(|true)$/)
+  await expect(page.getByRole('button', { name: '预览 →', exact: true })).toBeDisabled()
+  releaseConfirm()
+  const confirmed = await unconfirmResponse
+  await page.unroute('**/source-omissions/unconfirm')
+  page.off('request', countOmissionPost)
+  expect(confirmed.ok()).toBe(true)
+  const confirmBody = confirmed.request().postDataJSON() as {
     expectedRevision: number
     sourceOccurrenceIds: string[]
   }
-  expect(unconfirmBody.sourceOccurrenceIds).toEqual(expectedOrdinaryOccurrenceIds)
-  await expect(sourceCard.locator('.mapping-state')).toHaveText('未映射', { timeout: 15_000 })
-  await expect(page.getByText(/结构保真：\d+ 项阻断/)).toBeVisible({ timeout: 15_000 })
+  expect(Number.isInteger(confirmBody.expectedRevision)).toBe(true)
+  expect(confirmBody.sourceOccurrenceIds).toEqual(expectedOrdinaryOccurrenceIds)
+  expect(new Set(confirmBody.sourceOccurrenceIds).size).toBe(confirmBody.sourceOccurrenceIds.length)
 
-  // A second clean page keeps the old revision while the first page wins a save.
-  // Its omission POST must lose CAS, report conflict, adopt the server revision, and never claim success.
+  await expect(sourceCard.locator('.mapping-state')).toHaveText('需要处理', { timeout: 15_000 })
+  await expect(page.locator('.fidelity-strip')).toContainText(/还有 \d+ 项内容需要确认/, {
+    timeout: 15_000,
+  })
+
+  // A second clean page opens at the winning revision. Hold its omission POST while the
+  // first page wins a newer save: the stale POST must lose CAS, report conflict, adopt the
+  // server revision, and never claim success.
   const stalePage = await page.context().newPage()
   await stalePage.goto(page.url())
   const staleConfirmAction = stalePage.getByRole('button', { name: /^确认省略/ }).first()
   await expect(staleConfirmAction).toBeEnabled({ timeout: 15_000 })
+
+  let releaseStaleConfirm!: () => void
+  let markStaleConfirmStarted!: () => void
+  const staleConfirmStarted = new Promise<void>((resolve) => {
+    markStaleConfirmStarted = resolve
+  })
+  const staleConfirmRelease = new Promise<void>((resolve) => {
+    releaseStaleConfirm = resolve
+  })
+  await stalePage.route('**/source-omissions/confirm', async (route) => {
+    if (route.request().method() !== 'POST') return route.continue()
+    markStaleConfirmStarted()
+    await staleConfirmRelease
+    await route.continue()
+  })
+  const staleConfirmResponse = stalePage.waitForResponse(
+    (response) =>
+      response.request().method() === 'POST' &&
+      response.url().endsWith('/source-omissions/confirm'),
+  )
+  await staleConfirmAction.click()
+  await staleConfirmStarted
 
   const winnerSave = page.waitForResponse(
     (response) =>
@@ -690,12 +704,7 @@ test('intentional omission: a deleted source bullet blocks delivery until confir
   expect((await winnerSave).ok()).toBe(true)
   await expect(page.getByText('✓ 已保存', { exact: true })).toBeVisible({ timeout: 15_000 })
 
-  const staleConfirmResponse = stalePage.waitForResponse(
-    (response) =>
-      response.request().method() === 'POST' &&
-      response.url().endsWith('/source-omissions/confirm'),
-  )
-  await staleConfirmAction.click()
+  releaseStaleConfirm()
   const staleResponse = await staleConfirmResponse
   expect(staleResponse.ok()).toBe(true)
   const stalePayload = (await staleResponse.json()) as {
@@ -706,7 +715,7 @@ test('intentional omission: a deleted source bullet blocks delivery until confir
   // The same conflict is reported next to the block and on its issue card; the scoped locator
   // keeps the assertion pinned to the inline source-card surface.
   await expect(stalePage.locator('.source-block .mutation-error')).toBeVisible()
-  await expect(stalePage.getByText('已确认省略，结构保真状态已更新')).toHaveCount(0)
+  await expect(stalePage.locator('.el-message', { hasText: '已确认省略' })).toHaveCount(0)
   await expect(stalePage.getByText('✓ 已保存', { exact: true })).toBeVisible({ timeout: 15_000 })
   await stalePage.close()
 })
@@ -774,7 +783,9 @@ test('intentional omission: a whole Project entry is released after authoritativ
   expect((await deletedSave).ok()).toBe(true)
   await expect(page.getByText('✓ 已保存', { exact: true })).toBeVisible({ timeout: 15_000 })
   // Deleting a whole Project without confirmation produces boundary + source-gap blockers.
-  await expect(page.getByText(/结构保真：\d+ 项阻断/)).toBeVisible({ timeout: 15_000 })
+  await expect(page.locator('.fidelity-strip')).toContainText(/还有 \d+ 项内容需要确认/, {
+    timeout: 15_000,
+  })
 
   const projectSourceCard = page.locator(
     `.source-block[data-source-block-id="${projectBlocks[0]!.id}"]`,
@@ -803,12 +814,10 @@ test('intentional omission: a whole Project entry is released after authoritativ
     data: { exportBlocked: boolean }
   }
   expect(blockedPayload.data.exportBlocked).toBe(true)
-  await expect(
-    page.getByText('当前存在原文结构保真问题，仍可预览检查，但处理完成前不能导出。'),
-  ).toBeVisible()
   await expect(page.getByTitle('简历 PDF 预览')).toBeVisible({ timeout: 45_000 })
   expect(projectPreviewRequests).toBeGreaterThan(0)
-  await expect(page.getByRole('button', { name: '导出 PDF', exact: true })).toBeDisabled()
+  await expect(page.locator('.preview-fidelity-banner')).toContainText('项内容需要确认，处理后才能导出。')
+  await expect(page.getByRole('button', { name: /导出 PDF/ })).toBeDisabled()
   page.off('request', countProjectPreview)
   await page.getByRole('button', { name: '返回编辑', exact: true }).click()
   await expect(page.locator('textarea').first()).toBeVisible({ timeout: 15_000 })
@@ -835,7 +844,7 @@ test('intentional omission: a whole Project entry is released after authoritativ
   const confirmedRevision = confirmedPayload.data.revision
   expect(Number.isInteger(confirmedRevision)).toBe(true)
   // Whole-Project confirmed omission releases PROJECT_BOUNDARY_LOST; fidelity passes.
-  await expect(page.getByText('结构保真检查通过', { exact: true })).toBeVisible({
+  await expect(page.getByText('内容检查通过', { exact: true })).toBeVisible({
     timeout: 15_000,
   })
 
@@ -885,7 +894,9 @@ test('intentional omission: a whole Project entry is released after authoritativ
     sourceOccurrenceIds: string[]
   }
   expect(unconfirmBody.sourceOccurrenceIds).toEqual(expectedProjectOccurrenceIds)
-  await expect(page.getByText(/结构保真：\d+ 项阻断/)).toBeVisible({ timeout: 15_000 })
+  await expect(page.locator('.fidelity-strip')).toContainText(/还有 \d+ 项内容需要确认/, {
+    timeout: 15_000,
+  })
 })
 
 test.describe('desktop preview viewport', () => {
@@ -986,8 +997,8 @@ test.describe('structure fidelity resolver', () => {
     await targetBullet.locator('.bullet-delete-action').click()
     await deletedSave
     await expect(page.getByText('✓ 已保存', { exact: true })).toBeVisible({ timeout: 15_000 })
-    await expect(sourceCard.locator('.mapping-state')).toHaveText('未映射', { timeout: 15_000 })
-    await expect(page.getByText(/结构保真：\d+ 项阻断/)).toBeVisible()
+    await expect(sourceCard.locator('.mapping-state')).toHaveText('需要处理', { timeout: 15_000 })
+    await expect(page.locator('.fidelity-strip')).toContainText(/还有 \d+ 项内容需要确认/)
 
     // The server verdict must authorize a BULLET restore for this block before any button shows.
     const fidelityVerdict = page.waitForResponse(
@@ -1019,8 +1030,8 @@ test.describe('structure fidelity resolver', () => {
 
     // Preview stays diagnostic: PDF visible, Export blocked, and 查看并处理 offered.
     await expect(page.getByTitle('简历 PDF 预览')).toBeVisible({ timeout: 45_000 })
-    await expect(page.locator('.preflight-blocked-copy')).toContainText('原文结构仍需确认')
-    await expect(page.getByRole('button', { name: '导出 PDF', exact: true })).toBeDisabled()
+    await expect(page.locator('.preview-fidelity-banner')).toContainText('项内容需要确认，处理后才能导出。')
+    await expect(page.getByRole('button', { name: /导出 PDF/ })).toBeDisabled()
     const resolveAction = page.locator('.resolve-fidelity-action')
     await expect(resolveAction).toBeVisible()
     await resolveAction.click()
@@ -1055,9 +1066,9 @@ test.describe('structure fidelity resolver', () => {
     const restoredRevision = restorePayload.data.revision
     expect(Number.isInteger(restoredRevision)).toBe(true)
 
-    // The authoritative refresh decides the outcome: located again, no blocker, exportable.
-    await expect(sourceCard.locator('.mapping-state')).toHaveText('已定位', { timeout: 15_000 })
-    await expect(page.getByText('结构保真检查通过', { exact: true })).toBeVisible({
+    // The authoritative refresh decides the outcome: located again without a pending label, exportable.
+    await expect(sourceCard.locator('.mapping-state')).toHaveCount(0, { timeout: 15_000 })
+    await expect(page.getByText('内容检查通过', { exact: true })).toBeVisible({
       timeout: 15_000,
     })
     if (restoreBlock?.text) {
@@ -1127,7 +1138,7 @@ test.describe('structure fidelity resolver', () => {
     )
     await confirmAction.click()
     expect((await confirmResponse).ok()).toBe(true)
-    await expect(page.getByText('结构保真检查通过', { exact: true })).toBeVisible({
+    await expect(page.getByText('内容检查通过', { exact: true })).toBeVisible({
       timeout: 15_000,
     })
     await expect(sourceCard.locator('.mapping-state')).toHaveText('已确认省略', { timeout: 15_000 })
@@ -1198,7 +1209,9 @@ test.describe('structure fidelity resolver', () => {
       .click()
     expect((await deletedSave).ok()).toBe(true)
     await expect(page.getByText('✓ 已保存', { exact: true })).toBeVisible({ timeout: 15_000 })
-    await expect(page.getByText(/结构保真：\d+ 项阻断/)).toBeVisible({ timeout: 15_000 })
+    await expect(page.locator('.fidelity-strip')).toContainText(/还有 \d+ 项内容需要确认/, {
+      timeout: 15_000,
+    })
 
     // Preview diagnostic → 查看并处理 → the Project boundary card offers the whole-project restore.
     const fidelityVerdict = page.waitForResponse(
@@ -1209,7 +1222,7 @@ test.describe('structure fidelity resolver', () => {
     await page.getByRole('button', { name: '预览 →', exact: true }).click()
     expect((await fidelityVerdict).ok()).toBe(true)
     await expect(page.getByTitle('简历 PDF 预览')).toBeVisible({ timeout: 45_000 })
-    await expect(page.getByRole('button', { name: '导出 PDF', exact: true })).toBeDisabled()
+    await expect(page.getByRole('button', { name: /导出 PDF/ })).toBeDisabled()
     await page.locator('.resolve-fidelity-action').click()
     await expect(page.locator('textarea').first()).toBeVisible({ timeout: 15_000 })
 
@@ -1241,7 +1254,7 @@ test.describe('structure fidelity resolver', () => {
     const restoredEntry = page.locator(`.editor-entry[data-entry-id="${sourceEntryId}"]`)
     await expect(restoredEntry).toBeVisible({ timeout: 15_000 })
     await expect(restoredEntry.locator('.bullet-block').first()).toBeVisible()
-    await expect(page.getByText('结构保真检查通过', { exact: true })).toBeVisible({
+    await expect(page.getByText('内容检查通过', { exact: true })).toBeVisible({
       timeout: 15_000,
     })
     expect(await page.locator('.issue-card').filter({ hasText: '项目未进入当前简历' }).count()).toBe(0)

@@ -290,6 +290,64 @@ class ResumeServiceImplTest {
     }
 
     @Test
+    void listMarksAReadyCanonicalSourceAsCanonicalReady() {
+        var vo = listWith(listParseResult("SUCCESS", "READY", 900L)).get(0);
+
+        assertThat(vo.getCanonicalReady()).isTrue();
+        assertThat(vo.getQualityStatus()).isEqualTo("READY");
+    }
+
+    @Test
+    void listMarksANeedsReviewCanonicalSourceAsCanonicalReady() {
+        // P0 回归：质量待确认不等于没有 canonical SOURCE；
+        // 若这里返回 false，重新准备完成后列表会继续要求“重新准备”，形成死循环。
+        var vo = listWith(listParseResult("SUCCESS", "NEEDS_REVIEW", 900L)).get(0);
+
+        assertThat(vo.getCanonicalReady()).isTrue();
+        assertThat(vo.getQualityStatus()).isEqualTo("NEEDS_REVIEW");
+    }
+
+    @Test
+    void listRequiresTheCanonicalSourcePointerEvenWhenQualityIsReady() {
+        var vo = listWith(listParseResult("SUCCESS", "READY", null)).get(0);
+
+        assertThat(vo.getCanonicalReady()).isFalse();
+    }
+
+    @Test
+    void listRequiresTheCanonicalSourcePointerWhenQualityNeedsReview() {
+        var vo = listWith(listParseResult("SUCCESS", "NEEDS_REVIEW", null)).get(0);
+
+        assertThat(vo.getCanonicalReady()).isFalse();
+    }
+
+    private java.util.List<com.winter.airesumeoptimizer.module.resume.vo.ResumeListVO> listWith(
+            ResumeParseResult parseResult) {
+        Resume resume = new Resume();
+        resume.setId(100L);
+        resume.setUserId(1L);
+        resume.setOriginalFilename("resume.pdf");
+        resume.setDisplayName("resume");
+        resume.setFileType("PDF");
+        resume.setFileSize(1024L);
+        resume.setUploadStatus("UPLOADED");
+        resume.setCreatedAt(LocalDateTime.now());
+        when(resumeMapper.selectList(any(Wrapper.class))).thenReturn(List.of(resume));
+        when(resumeParseResultMapper.selectList(any(Wrapper.class)))
+                .thenReturn(parseResult == null ? List.of() : List.of(parseResult));
+        return service.listByUser(1L);
+    }
+
+    private ResumeParseResult listParseResult(String parseStatus, String qualityStatus, Long sourceVersionId) {
+        ResumeParseResult result = new ResumeParseResult();
+        result.setResumeId(100L);
+        result.setParseStatus(parseStatus);
+        result.setQualityStatus(qualityStatus);
+        result.setCanonicalSourceVersionId(sourceVersionId);
+        return result;
+    }
+
+    @Test
     void uploadShouldRejectUnsupportedFileExtension() {
         MockMultipartFile file = new MockMultipartFile(
                 "file",

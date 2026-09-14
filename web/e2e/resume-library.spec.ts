@@ -129,10 +129,12 @@ test.describe('Resume Library', () => {
       { ...readyResume, id: 3, originalFilename: 'stale.pdf', canonicalReady: false },
       { ...readyResume, id: 4, originalFilename: 'broken.pdf', parseStatus: 'FAILED', parseErrorMessage: '文件无法读取' },
       { ...readyResume, id: 5, originalFilename: 'waiting.pdf', parseStatus: 'PROCESSING', qualityStatus: null },
+      // 旧数据：没有 canonical SOURCE 时，即使 quality 是 NEEDS_REVIEW 也必须先重新准备。
+      { ...reviewResume, id: 6, originalFilename: 'legacy-review.pdf', displayName: '旧版解析 · 待重准备', canonicalReady: false },
     ])
     await page.goto('/resumes')
 
-    await expect(page.locator('.resume-library-summary')).toHaveText('共 5 份')
+    await expect(page.locator('.resume-library-summary')).toHaveText('共 6 份')
     await expect(page.locator('.resume-library-row').nth(1)).toContainText('需要确认')
     await expect(page.locator('.resume-library-row').nth(1).getByRole('button', { name: /确认 product-analytics-review/ })).toBeVisible()
     await expect(page.locator('.resume-library-row').nth(2)).toContainText('需要重新准备')
@@ -142,6 +144,51 @@ test.describe('Resume Library', () => {
     await expect(page.locator('.resume-library-row').nth(3).getByRole('button', { name: /重试 broken/ })).toBeVisible()
     await expect(page.locator('.resume-library-row').nth(4)).toContainText('等待准备')
     await expect(page.locator('.resume-library-row').nth(4)).toContainText('尚未完成内容准备')
+    await expect(page.locator('.resume-library-row').nth(5)).toContainText('需要重新准备')
+    await expect(page.locator('.resume-library-row').nth(5).getByRole('button', { name: /重新准备 legacy-review/ })).toBeVisible()
+  })
+
+  test('a reprepared legacy resume becomes 需要确认 instead of looping back to 需要重新准备', async ({ page }) => {
+    const legacyResume = {
+      ...reviewResume,
+      id: 7,
+      originalFilename: 'legacy-flow.pdf',
+      displayName: '旧版解析 · 流程回归',
+      canonicalReady: false,
+    }
+    await mockShell(page, [legacyResume])
+    // 重新准备完成后：canonical SOURCE 已生成（canonicalReady=true），quality 仍为 NEEDS_REVIEW。
+    let listServed = 0
+    await page.route('**/api/resumes', (route) => {
+      if (route.request().method() !== 'GET') return route.continue()
+      listServed += 1
+      const payload = listServed < 2 ? [legacyResume] : [{ ...legacyResume, canonicalReady: true }]
+      return route.fulfill(response(payload))
+    })
+    await page.route('**/api/resumes/7/preparation', (route) => route.fulfill(response({
+      taskId: 707,
+      taskType: 'RESUME_PREPARATION',
+      status: 'RUNNING',
+      progress: 10,
+      message: '正在读取简历',
+    })))
+    await page.route('**/api/tasks/707', (route) => route.fulfill(response({
+      taskId: 707,
+      taskType: 'RESUME_PREPARATION',
+      status: 'SUCCESS',
+      progress: 100,
+      message: '准备完成',
+    })))
+
+    await page.goto('/resumes')
+    const row = page.locator('.resume-library-row')
+    // 旧数据没有 canonical SOURCE：先重新准备，不能直接进入确认。
+    await expect(row).toContainText('需要重新准备')
+    await row.getByRole('button', { name: /重新准备 legacy-flow/ }).click()
+    // 准备完成后列表刷新：canonical SOURCE 已生成，只剩人工确认，不再要求重新准备。
+    await expect(row).toContainText('需要确认', { timeout: 15_000 })
+    await expect(row).not.toContainText('需要重新准备')
+    await expect(row.getByRole('button', { name: /确认 legacy-flow/ })).toBeVisible()
   })
 
   test('opens canonical SOURCE preview and renames the management label without changing file metadata', async ({ page }) => {

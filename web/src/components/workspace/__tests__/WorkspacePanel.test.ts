@@ -3,10 +3,15 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import WorkspacePanel from '@/components/workspace/WorkspacePanel.vue'
+import type { WorkspaceSourceBlock, WorkspaceSourceReference } from '@/types/workspace'
 
 const {
   contentMock,
   sourceMock,
+  saveMock,
+  confirmMock,
+  unconfirmMock,
+  restoreMock,
   analysisMock,
   messageWarning,
   messageSuccess,
@@ -15,6 +20,10 @@ const {
 } = vi.hoisted(() => ({
   contentMock: vi.fn(),
   sourceMock: vi.fn(),
+  saveMock: vi.fn(),
+  confirmMock: vi.fn(),
+  unconfirmMock: vi.fn(),
+  restoreMock: vi.fn(),
   analysisMock: vi.fn(),
   messageWarning: vi.fn(),
   messageSuccess: vi.fn(),
@@ -25,13 +34,13 @@ const {
 vi.mock('@/api/workspace', () => ({
   getWorkspaceContent: contentMock,
   getWorkspaceSourceReference: sourceMock,
-  saveWorkspaceContent: vi.fn(),
+  saveWorkspaceContent: saveMock,
   restorePreOptimizationContent: vi.fn(),
   requestBulletSuggestion: vi.fn(),
   getWorkspaceSourcePdf: vi.fn(),
-  confirmWorkspaceSourceOmissions: vi.fn(),
-  unconfirmWorkspaceSourceOmissions: vi.fn(),
-  restoreWorkspaceSourceContent: vi.fn(),
+  confirmWorkspaceSourceOmissions: confirmMock,
+  unconfirmWorkspaceSourceOmissions: unconfirmMock,
+  restoreWorkspaceSourceContent: restoreMock,
 }))
 
 vi.mock('@/api/job-analysis', () => ({
@@ -78,7 +87,7 @@ const document = {
   ],
 }
 
-const blockerBlock = {
+const blockerBlock: WorkspaceSourceBlock = {
   id: 'occ-9',
   order: 0,
   text: '负责 Redis 热点缓存与缓存一致性',
@@ -89,16 +98,16 @@ const blockerBlock = {
   sourceEntryId: 's-1-e-1',
   sourceBulletId: 'lost-bullet',
   targetNodeIds: [],
-  status: 'UNMAPPED' as const,
+  status: 'UNMAPPED',
   reliable: false,
   omissionConfirmed: false,
   omissionEligible: true,
-  restoreScope: 'BULLET' as const,
+  restoreScope: 'BULLET',
   restoreEligible: true,
   restoreBlockedReason: null,
 }
 
-const sourceReference = {
+const sourceReference: WorkspaceSourceReference = {
   optimizationTaskId: 50,
   sourceResumeVersionId: 40,
   targetResumeVersionId: 41,
@@ -110,7 +119,7 @@ const sourceReference = {
   fidelityIssues: [
     {
       code: 'SOURCE_CONTENT_UNMAPPED',
-      severity: 'BLOCKER' as const,
+      severity: 'BLOCKER',
       message: '冻结原文仍有内容未进入当前结构，导出已阻止。',
       sourceOccurrenceIds: ['occ-9'],
       targetNodeIds: [],
@@ -120,6 +129,29 @@ const sourceReference = {
   confirmedOmissionCount: 0,
   exportBlocked: true,
 }
+
+const projectBlocks: WorkspaceSourceBlock[] = [
+  {
+    ...blockerBlock,
+    id: 'occ-1',
+    order: 0,
+    text: '项目标题',
+    occurrenceIds: ['occ-1', 'occ-1b'],
+    sourceNodeType: 'ENTRY',
+    sourceSectionKind: 'PROJECT',
+    sourceEntryId: 'project-entry',
+  },
+  {
+    ...blockerBlock,
+    id: 'occ-2',
+    order: 1,
+    text: '项目要点',
+    occurrenceIds: ['occ-2'],
+    sourceBulletId: 'project-bullet',
+    sourceSectionKind: 'PROJECT',
+    sourceEntryId: 'project-entry',
+  },
+]
 
 const mountPanel = () =>
   mount(WorkspacePanel, {
@@ -251,5 +283,156 @@ describe('WorkspacePanel structure fidelity resolver navigation', () => {
 
     // 定位不修改数据，只把锚点交给编辑器（此处断言没有触发保存路径）
     expect(messageError).not.toHaveBeenCalled()
+  })
+})
+
+describe('WorkspacePanel single source mutation runner', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    analysisMock.mockResolvedValue({
+      jobTitle: 'Java 后端工程师',
+      resumeName: '张三的简历',
+      analysisMode: 'EVIDENCE',
+      evidenceAnalysis: { requirements: [] },
+    })
+    saveMock.mockResolvedValue({
+      saved: true,
+      conflict: false,
+      revision: 1,
+      document,
+    })
+    confirmMock.mockResolvedValue({
+      saved: true,
+      conflict: false,
+      revision: 6,
+      document: null,
+    })
+    restoreMock.mockResolvedValue({
+      saved: true,
+      conflict: false,
+      revision: 6,
+      document: null,
+    })
+  })
+
+  it('flushes a dirty draft, then runs the omission in one click with the fresh revision', async () => {
+    contentMock.mockResolvedValue({ optimizationTaskId: 50, revision: 0, document })
+    sourceMock
+      .mockResolvedValueOnce({ ...sourceReference, targetRevision: 0 })
+      .mockResolvedValue({ ...sourceReference, targetRevision: 1 })
+    const wrapper = mountPanel()
+    await flushPromises()
+
+    // Dirty 状态不再禁用操作：点击即自动保存。
+    await wrapper.get('.source-block button.omission-action').trigger('click')
+    await flushPromises()
+
+    expect(saveMock).toHaveBeenCalledTimes(1)
+    expect(saveMock).toHaveBeenCalledWith(50, { expectedRevision: 0, document })
+    expect(confirmMock).toHaveBeenCalledTimes(1)
+    expect(confirmMock).toHaveBeenCalledWith(50, {
+      expectedRevision: 1,
+      sourceOccurrenceIds: ['occ-9'],
+    })
+    expect(messageSuccess).toHaveBeenCalledWith('已确认省略')
+  })
+
+  it('resolves the whole Project boundary from the fresh authoritative reference', async () => {
+    contentMock.mockResolvedValue({ optimizationTaskId: 50, revision: 5, document })
+    sourceMock.mockResolvedValue({ ...sourceReference, sourceBlocks: projectBlocks })
+    const wrapper = mountPanel()
+    await flushPromises()
+
+    const action = wrapper
+      .findAll('button.omission-action')
+      .find((button) => button.text().includes('确认省略此项目对应的'))
+    expect(action).toBeTruthy()
+    await action!.trigger('click')
+    await flushPromises()
+
+    // 客户端只提交服务端给出的 occurrence 边界；这里验证按冻结项目聚合后的并集。
+    expect(confirmMock).toHaveBeenCalledWith(50, {
+      expectedRevision: 5,
+      sourceOccurrenceIds: ['occ-1', 'occ-1b', 'occ-2'],
+    })
+    expect(saveMock).not.toHaveBeenCalled()
+  })
+
+  it('blocks the mutation and surfaces the conflict UI when the click-time save loses CAS', async () => {
+    contentMock.mockResolvedValue({ optimizationTaskId: 50, revision: 0, document })
+    saveMock.mockResolvedValue({ saved: false, conflict: true, revision: 7, document: null })
+    sourceMock.mockResolvedValue({ ...sourceReference, targetRevision: 0 })
+    const wrapper = mountPanel()
+    await flushPromises()
+
+    await wrapper.get('.source-block button.omission-action').trigger('click')
+    await flushPromises()
+
+    // mutation 不执行，冲突处置入口保持可见。
+    expect(confirmMock).not.toHaveBeenCalled()
+    expect(wrapper.find('.workspace-conflict').exists()).toBe(true)
+    expect(messageWarning).toHaveBeenCalledWith('存在编辑冲突，请先选择保留哪个版本。')
+  })
+
+  it('converges a stale client to the winning revision before executing the omission', async () => {
+    contentMock
+      .mockResolvedValueOnce({ optimizationTaskId: 50, revision: 5, document })
+      .mockResolvedValue({ optimizationTaskId: 50, revision: 6, document })
+    sourceMock.mockResolvedValue({ ...sourceReference, targetRevision: 6 })
+    confirmMock.mockResolvedValue({
+      saved: true,
+      conflict: false,
+      revision: 7,
+      document: null,
+    })
+    const wrapper = mountPanel()
+    await flushPromises()
+
+    // 另一个页面已经保存到 revision 6：本地没有未保存修改，点击先无损同步再继续。
+    await wrapper.get('.source-block button.omission-action').trigger('click')
+    await flushPromises()
+
+    expect(contentMock).toHaveBeenCalledTimes(2)
+    expect(saveMock).not.toHaveBeenCalled()
+    expect(confirmMock).toHaveBeenCalledWith(50, {
+      expectedRevision: 6,
+      sourceOccurrenceIds: ['occ-9'],
+    })
+    expect(messageSuccess).toHaveBeenCalledWith('已确认省略')
+  })
+
+  it('never submits a stale plan after the fresh reference invalidates the block', async () => {
+    contentMock.mockResolvedValue({ optimizationTaskId: 50, revision: 5, document })
+    const noLongerActionable = {
+      ...sourceReference,
+      sourceBlocks: [{ ...blockerBlock, status: 'EXACT' as const, omissionEligible: false }],
+      fidelityIssues: [],
+      exportBlocked: false,
+    }
+    sourceMock.mockResolvedValueOnce(sourceReference).mockResolvedValue(noLongerActionable)
+    const wrapper = mountPanel()
+    await flushPromises()
+
+    await wrapper.get('.source-block button.omission-action').trigger('click')
+    await flushPromises()
+
+    expect(confirmMock).not.toHaveBeenCalled()
+    expect(messageWarning).toHaveBeenCalledWith('该内容已更新，请重新确认后再试。')
+  })
+
+  it('runs a restore from the fresh reference and accepts the authoritative save result', async () => {
+    contentMock.mockResolvedValue({ optimizationTaskId: 50, revision: 5, document })
+    sourceMock.mockResolvedValue(sourceReference)
+    const wrapper = mountPanel()
+    await flushPromises()
+
+    await wrapper.get('.source-block button.restore-action').trigger('click')
+    await flushPromises()
+
+    expect(restoreMock).toHaveBeenCalledWith(50, {
+      expectedRevision: 5,
+      sourceOccurrenceIds: ['occ-9'],
+    })
+    expect(messageSuccess).toHaveBeenCalledWith('已恢复原文')
   })
 })

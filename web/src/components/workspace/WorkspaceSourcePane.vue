@@ -1,29 +1,34 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import {
-  confirmWorkspaceSourceOmissions,
-  getWorkspaceSourcePdf,
-  restoreWorkspaceSourceContent,
-  unconfirmWorkspaceSourceOmissions,
-} from '@/api/workspace'
+import { getWorkspaceSourcePdf } from '@/api/workspace'
 import ErrorState from '@/components/common/ErrorState.vue'
+import {
+  buildOmissionPlansByBlockId,
+  buildRestorePlansByBlockId,
+  type OmissionActionPlan,
+  type RestoreActionPlan,
+} from '@/components/workspace/sourceMutationPlans'
 import type {
-  WorkspaceSaveResult,
   WorkspaceSourceBlock,
   WorkspaceSourceReference,
-  WorkspaceSourceRestoreScope,
 } from '@/types/workspace'
 
+/**
+ * SourcePane 只做两件事：展示服务端 verdict，emit 用户意图。
+ * 所有写操作（保存、CAS、API 调用、并发处理）由 WorkspacePanel 编排。
+ */
 const props = defineProps<{
   optimizationTaskId: number
   source: WorkspaceSourceReference | null
   loading: boolean
   error: string | null
   selectedOccurrenceIds?: string[]
-  /** 有本地修改、正在保存或 SOURCE revision 尚未同步时，由 Workspace 禁止省略操作。 */
-  omissionDisabledReason?: string | null
-  /** 同样的保存门禁；Restore 不能用服务端结果覆盖尚未持久化的本地编辑。 */
-  restoreDisabledReason?: string | null
+  /** failed / conflict / busy 时的统一门禁说明；dirty 不再阻止操作。 */
+  sourceMutationDisabledReason?: string | null
+  /** SOURCE mutation 在途：按钮显示进度并整体禁用。 */
+  mutationBusy?: boolean
+  /** WorkspacePanel 权威的 mutation 失败说明，仅用于就地展示。 */
+  mutationError?: { blockId: string; message: string } | null
   /** Preview → “查看并处理”递增该 key：打开结构问题区域并定位第一个 blocker。 */
   reviewRequestKey?: number
 }>()
@@ -31,11 +36,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   retry: []
   focusTarget: [targetNodeId: string]
-  omissionSaved: [expectedRevision: number, result: WorkspaceSaveResult, confirmed: boolean]
-  omissionConcurrent: []
-  restoreSaved: [expectedRevision: number, result: WorkspaceSaveResult, wholeProject: boolean]
-  restoreConcurrent: []
-  sourceMutationBusy: [busy: boolean]
+  restoreRequested: [blockId: string]
+  omissionRequested: [blockId: string, confirm: boolean]
   locateIssueTarget: [targetNodeId: string]
   restartUpload: []
 }>()
@@ -47,10 +49,9 @@ const pdfError = ref<string | null>(null)
 const blockRoot = ref<HTMLElement | null>(null)
 const issueArea = ref<HTMLElement | null>(null)
 const issuesOpen = ref(true)
-const mutationOperationKey = ref<string | null>(null)
-const mutationError = ref<{ blockId: string; message: string } | null>(null)
-let mutationRequestSequence = 0
-let activeMutationOperation: symbol | null = null
+const mutationError = computed(() => props.mutationError ?? null)
+// 纯展示状态：点击后立即显示“正在恢复/确认…”，mutationBusy 结束后清空。
+const pendingMutationKey = ref<string | null>(null)
 
 const blockers = computed(
   () => props.source?.fidelityIssues.filter((issue) => issue.severity === 'BLOCKER') ?? [],
@@ -90,81 +91,32 @@ const blockTextChanged = (block: WorkspaceSourceBlock) =>
     ),
   )
 
-/** 内部 lineage 枚举只能在这里转换成用户文案，不能直接进入模板。 */
+/** 内部 lineage 枚举只能在这里转换成用户文案，不能直接进入模板。正常映射成功的长句不再占位。 */
 const mappingLabel = (block: WorkspaceSourceBlock) => {
   if (block.omissionConfirmed) return '已确认省略'
   switch (block.status) {
     case 'EXACT':
-      return blockTextChanged(block) ? '已定位 · 内容已修改' : '已定位'
+      return blockTextChanged(block) ? '内容已修改' : ''
     case 'MERGED':
       return blockTextChanged(block) ? '合并来源 · 内容已修改' : '合并来源'
     case 'SPLIT':
       return blockTextChanged(block) ? '拆分来源 · 内容已修改' : '拆分来源'
     case 'UNMAPPED':
-      return '未映射'
+      return '需要处理'
     case 'AMBIGUOUS':
-      return '待确认'
+      return '需要核对'
     default:
-      return '待确认'
+      return '需要核对'
   }
 }
 
-type OmissionActionPlan = {
-  key: string
-  leaderBlockId: string
-  blockIds: string[]
-  sourceOccurrenceIds: string[]
-  confirmed: boolean
-  projectBlockCount: number
+const blockAriaLabel = (block: WorkspaceSourceBlock) => {
+  const prefix = block.reliable ? '在当前简历中定位' : '尚未确认该原文对应位置'
+  const state = mappingLabel(block)
+  return `${prefix}第 ${block.order + 1} 段冻结原文：${block.text}${state ? `。${state}` : ''}`
 }
 
-const omissionPlansByBlockId = computed(() => {
-  const result = new Map<string, OmissionActionPlan>()
-  const groups = new Map<string, WorkspaceSourceBlock[]>()
-
-  // Group every block first. Filtering before grouping could make a partially
-  // mapped/ineligible Project entry look like a complete omission boundary.
-  for (const block of props.source?.sourceBlocks ?? []) {
-    // 只有服务端给出的 PROJECT section + entry 或 BULLET 边界完整时才批量；
-    // 前端不按文本或相邻位置猜测，也不把部分确认状态拆成两个独立操作。
-    const projectEntryKey =
-      block.sourceSectionKind?.toUpperCase() === 'PROJECT' &&
-      block.sourceSectionId &&
-      block.sourceEntryId
-        ? `project:${block.sourceSectionId}:${block.sourceEntryId}`
-        : block.sourceNodeType === 'BULLET' &&
-            block.sourceSectionId &&
-            block.sourceEntryId &&
-            block.sourceBulletId
-          ? `bullet:${block.sourceSectionId}:${block.sourceEntryId}:${block.sourceBulletId}`
-          : `block:${block.id}`
-    const group = groups.get(projectEntryKey) ?? []
-    group.push(block)
-    groups.set(projectEntryKey, group)
-  }
-
-  for (const [key, blocks] of groups) {
-    const ordered = [...blocks].sort((left, right) => left.order - right.order)
-    const completeActionableBoundary = ordered.every(
-      (block) =>
-        block.occurrenceIds.length > 0 &&
-        (block.omissionConfirmed || (block.status === 'UNMAPPED' && block.omissionEligible)),
-    )
-    if (!completeActionableBoundary) continue
-    const occurrenceIds = [...new Set(ordered.flatMap((block) => block.occurrenceIds))]
-    if (!ordered[0] || occurrenceIds.length === 0) continue
-    const plan: OmissionActionPlan = {
-      key,
-      leaderBlockId: ordered[0].id,
-      blockIds: ordered.map((block) => block.id),
-      sourceOccurrenceIds: occurrenceIds,
-      confirmed: ordered.every((block) => block.omissionConfirmed),
-      projectBlockCount: key.startsWith('project:') ? ordered.length : 1,
-    }
-    for (const block of ordered) result.set(block.id, plan)
-  }
-  return result
-})
+const omissionPlansByBlockId = computed(() => buildOmissionPlansByBlockId(props.source))
 
 const omissionPlan = (blockId: string) => omissionPlansByBlockId.value.get(blockId) ?? null
 const isProjectPlan = (plan: OmissionActionPlan) => plan.key.startsWith('project:')
@@ -196,57 +148,7 @@ const omissionDescription = (plan: OmissionActionPlan) => {
 const omissionPlanLabel = (plan: OmissionActionPlan) =>
   isProjectPlan(plan) ? '确认省略整个项目' : '确认省略'
 
-type ApiErrorLike = Error & { code?: number }
-
-type RestoreActionPlan = {
-  key: string
-  leaderBlockId: string
-  blockIds: string[]
-  scope: WorkspaceSourceRestoreScope
-  occurrenceIds: string[]
-}
-
-/** 恢复边界由服务端 resolved verdict 分组；前端不拼 occurrence ID，也不推导 provenance。 */
-const restoreBoundaryKey = (block: WorkspaceSourceBlock) => {
-  switch (block.restoreScope) {
-    case 'PROJECT_ENTRY':
-      return `project:${block.sourceSectionId}:${block.sourceEntryId}`
-    case 'ENTRY':
-      return `entry:${block.sourceSectionId}:${block.sourceEntryId}`
-    case 'BULLET':
-      return `bullet:${block.sourceSectionId}:${block.sourceEntryId}:${block.sourceBulletId}`
-    case 'CONTACT':
-      return `contact:${block.id}`
-    default:
-      return `block:${block.id}`
-  }
-}
-
-const restorePlansByBlockId = computed(() => {
-  const result = new Map<string, RestoreActionPlan>()
-  const groups = new Map<string, WorkspaceSourceBlock[]>()
-  for (const block of props.source?.sourceBlocks ?? []) {
-    // 只有服务端 restoreEligible 的 block 才进入恢复计划；eligible 由整个边界的安全 verdict 决定。
-    if (!block.restoreEligible || block.restoreScope === 'NONE') continue
-    const key = restoreBoundaryKey(block)
-    const group = groups.get(key) ?? []
-    group.push(block)
-    groups.set(key, group)
-  }
-  for (const [key, blocks] of groups) {
-    const ordered = [...blocks].sort((left, right) => left.order - right.order)
-    if (!ordered[0]) continue
-    const plan: RestoreActionPlan = {
-      key: `restore:${key}`,
-      leaderBlockId: ordered[0].id,
-      blockIds: ordered.map((block) => block.id),
-      scope: ordered[0].restoreScope,
-      occurrenceIds: [...new Set(ordered.flatMap((block) => block.occurrenceIds))],
-    }
-    for (const block of ordered) result.set(block.id, plan)
-  }
-  return result
-})
+const restorePlansByBlockId = computed(() => buildRestorePlansByBlockId(props.source))
 
 const restorePlan = (blockId: string) => restorePlansByBlockId.value.get(blockId) ?? null
 
@@ -419,102 +321,19 @@ const locateActionLabel = (card: IssueCard, index: number) =>
     ? `定位第 ${index + 1} 处`
     : '定位问题内容'
 
-type SourceMutation =
-  | { kind: 'omission'; plan: OmissionActionPlan }
-  | { kind: 'restore'; plan: RestoreActionPlan }
-
-const mutationConflictMessage = (mutation: SourceMutation) =>
-  mutation.kind === 'omission'
-    ? '当前简历已有更新，本次操作未生效。请刷新后重试。'
-    : '当前简历已有更新，本次恢复未生效。请刷新后重试。'
-
-// Restore / confirm / unconfirm 共享同一个 SOURCE mutation mutex，
-// 三者竞争同一个 TARGET revision，必须互斥。
-const performSourceMutation = async (mutation: SourceMutation) => {
-  const source = props.source
-  const disabledReason =
-    mutation.kind === 'omission' ? props.omissionDisabledReason : props.restoreDisabledReason
-  const occurrenceIds =
-    mutation.kind === 'omission' ? mutation.plan.sourceOccurrenceIds : mutation.plan.occurrenceIds
-  if (!source || disabledReason || mutationOperationKey.value !== null || occurrenceIds.length === 0) {
-    return
-  }
-
-  const expectedRevision = source.targetRevision
-  const taskAtRequest = props.optimizationTaskId
-  const requestSequence = ++mutationRequestSequence
-  const operationToken = Symbol(mutation.plan.key)
-  const blockId = mutation.plan.leaderBlockId
-  activeMutationOperation = operationToken
-  mutationOperationKey.value = mutation.plan.key
-  mutationError.value = null
-  emit('sourceMutationBusy', true)
-  try {
-    const request = {
-      expectedRevision,
-      // 只提交服务端给出的 occurrence 边界；恢复范围仍由服务端重新解析并重新验证。
-      sourceOccurrenceIds: occurrenceIds,
-    }
-    const result =
-      mutation.kind === 'omission'
-        ? mutation.plan.confirmed
-          ? await unconfirmWorkspaceSourceOmissions(taskAtRequest, request)
-          : await confirmWorkspaceSourceOmissions(taskAtRequest, request)
-        : await restoreWorkspaceSourceContent(taskAtRequest, request)
-    if (requestSequence !== mutationRequestSequence || taskAtRequest !== props.optimizationTaskId) {
-      return
-    }
-    if (!result.saved || result.conflict) {
-      mutationError.value = { blockId, message: mutationConflictMessage(mutation) }
-      if (mutation.kind === 'omission') emit('omissionConcurrent')
-      else emit('restoreConcurrent')
-      return
-    }
-    if (mutation.kind === 'omission') {
-      emit('omissionSaved', expectedRevision, result, !mutation.plan.confirmed)
-    } else {
-      emit('restoreSaved', expectedRevision, result, mutation.plan.scope === 'PROJECT_ENTRY')
-    }
-  } catch (error) {
-    if (requestSequence !== mutationRequestSequence) return
-    const concurrent = (error as ApiErrorLike)?.code === 409
-    mutationError.value = {
-      blockId,
-      message: concurrent
-        ? mutationConflictMessage(mutation)
-        : error instanceof Error
-          ? error.message
-          : mutation.kind === 'omission'
-            ? '省略状态更新失败，请稍后重试。'
-            : '恢复原文失败，请稍后重试。',
-    }
-    if (concurrent) {
-      if (mutation.kind === 'omission') emit('omissionConcurrent')
-      else emit('restoreConcurrent')
-    }
-  } finally {
-    // A route change can release this task's lock before its old request settles. Only the
-    // operation that still owns the lock may clear it, otherwise a late response could unlock
-    // a newer task's CAS request.
-    if (activeMutationOperation === operationToken) {
-      activeMutationOperation = null
-      mutationOperationKey.value = null
-      emit('sourceMutationBusy', false)
-    }
-  }
+// 写操作全部交给 WorkspacePanel：这里只把点击变成意图，并做纯展示的“进行中”反馈。
+const requestRestore = (plan: RestoreActionPlan) => {
+  pendingMutationKey.value = plan.key
+  emit('restoreRequested', plan.leaderBlockId)
 }
 
-const performOmission = (plan: OmissionActionPlan) => performSourceMutation({ kind: 'omission', plan })
-const performRestore = (plan: RestoreActionPlan) => performSourceMutation({ kind: 'restore', plan })
-
-const mutationInFlight = (key: string) => mutationOperationKey.value === key
-
-const releaseMutationOperation = () => {
-  if (activeMutationOperation === null) return
-  activeMutationOperation = null
-  mutationOperationKey.value = null
-  emit('sourceMutationBusy', false)
+const requestOmission = (plan: OmissionActionPlan) => {
+  pendingMutationKey.value = plan.key
+  emit('omissionRequested', plan.leaderBlockId, !plan.confirmed)
 }
+
+const mutationInFlight = (key: string) =>
+  Boolean(props.mutationBusy) && pendingMutationKey.value === key
 
 watch(
   () => props.selectedOccurrenceIds?.join('|'),
@@ -548,22 +367,16 @@ const handleIssuesToggle = (event: Event) => {
 }
 
 watch(
-  () => props.optimizationTaskId,
-  () => {
-    mutationRequestSequence += 1
-    mutationError.value = null
-    // The old request is task-scoped and can no longer affect this view. Release the parent UI,
-    // while the operation token prevents its eventual finally block from unlocking a new request.
-    releaseMutationOperation()
+  () => props.mutationBusy,
+  (busy) => {
+    if (!busy) pendingMutationKey.value = null
   },
 )
 
 watch(
-  () => props.source?.targetRevision,
+  () => props.optimizationTaskId,
   () => {
-    // Invalidate any response tied to the old revision, but keep a CAS-conflict
-    // explanation visible after the parent adopts and reloads the winning version.
-    mutationRequestSequence += 1
+    pendingMutationKey.value = null
   },
 )
 
@@ -576,8 +389,6 @@ watch(
 )
 
 onBeforeUnmount(() => {
-  mutationRequestSequence += 1
-  releaseMutationOperation()
   if (pdfUrl.value) URL.revokeObjectURL(pdfUrl.value)
 })
 </script>
@@ -597,7 +408,7 @@ onBeforeUnmount(() => {
           :class="{ 'is-active': mode === 'text' }"
           @click="setMode('text')"
         >
-          原文
+          提取原文
         </button>
         <button
           v-if="source?.sourcePdfAvailable"
@@ -607,7 +418,7 @@ onBeforeUnmount(() => {
           :class="{ 'is-active': mode === 'pdf' }"
           @click="setMode('pdf')"
         >
-          版式
+          原始 PDF
         </button>
       </div>
     </header>
@@ -620,13 +431,14 @@ onBeforeUnmount(() => {
       <span class="fidelity-dot" aria-hidden="true" />
       <div>
         <strong>{{
-          source.exportBlocked ? `结构保真：${blockers.length} 项阻断` : '结构保真检查通过'
+          source.exportBlocked ? `还有 ${blockers.length} 项内容需要确认` : '内容检查通过'
         }}</strong>
+        <small v-if="source.exportBlocked">不影响继续编辑和预览，处理完成后才能正式导出。</small>
         <small v-if="source.confirmedOmissionCount"
           >已确认省略 {{ source.confirmedOmissionCount }} 段原文</small
         >
         <small v-if="warnings.length">另有 {{ warnings.length }} 项待核对</small>
-        <small v-else>导出仍会执行文档与版式检查</small>
+        <small v-else-if="!source.exportBlocked">导出前仍会执行文档检查</small>
       </div>
     </div>
 
@@ -662,7 +474,7 @@ onBeforeUnmount(() => {
               >
                 <div class="issue-card-heading">
                   <span class="issue-severity">{{
-                    card.severity === 'BLOCKER' ? '阻断' : '提醒'
+                    card.severity === 'BLOCKER' ? '需要处理' : '提醒'
                   }}</span>
                   <strong class="issue-card-title">{{ card.title }}</strong>
                 </div>
@@ -682,8 +494,8 @@ onBeforeUnmount(() => {
                     v-if="card.restorePlan"
                     type="button"
                     class="issue-action issue-restore-action"
-                    :disabled="Boolean(restoreDisabledReason) || mutationOperationKey !== null"
-                    @click="performRestore(card.restorePlan)"
+                    :disabled="Boolean(sourceMutationDisabledReason)"
+                    @click="requestRestore(card.restorePlan)"
                   >
                     {{
                       mutationInFlight(card.restorePlan.key)
@@ -695,8 +507,8 @@ onBeforeUnmount(() => {
                     v-if="card.omissionPlan"
                     type="button"
                     class="issue-action issue-omission-action"
-                    :disabled="Boolean(omissionDisabledReason) || mutationOperationKey !== null"
-                    @click="performOmission(card.omissionPlan)"
+                    :disabled="Boolean(sourceMutationDisabledReason)"
+                    @click="requestOmission(card.omissionPlan)"
                   >
                     {{
                       mutationInFlight(card.omissionPlan.key)
@@ -722,12 +534,11 @@ onBeforeUnmount(() => {
                     返回首页重新上传
                   </button>
                 </div>
-                <small v-if="card.restorePlan && restoreDisabledReason" class="issue-disabled-reason">{{
-                  restoreDisabledReason
-                }}</small>
-                <small v-if="card.omissionPlan && omissionDisabledReason" class="issue-disabled-reason">{{
-                  omissionDisabledReason
-                }}</small>
+                <small
+                  v-if="(card.restorePlan || card.omissionPlan) && sourceMutationDisabledReason"
+                  class="issue-disabled-reason"
+                  >{{ sourceMutationDisabledReason }}</small
+                >
                 <small
                   v-if="mutationError && card.blockIds.includes(mutationError.blockId)"
                   class="mutation-error"
@@ -755,12 +566,12 @@ onBeforeUnmount(() => {
               type="button"
               class="source-block-main"
               :disabled="!block.reliable || block.targetNodeIds.length !== 1"
-              :aria-label="`${block.reliable ? '在当前简历中定位' : '尚未确认该原文对应位置'}第 ${block.order + 1} 段冻结原文：${block.text}。${mappingLabel(block)}`"
+              :aria-label="blockAriaLabel(block)"
               @click="selectBlock(block.targetNodeIds, block.reliable)"
             >
               <span class="source-order">{{ String(block.order + 1).padStart(2, '0') }}</span>
               <span class="source-text">{{ block.text }}</span>
-              <span class="mapping-state">{{ mappingLabel(block) }}</span>
+              <span v-if="mappingLabel(block)" class="mapping-state">{{ mappingLabel(block) }}</span>
             </button>
 
             <div
@@ -782,9 +593,9 @@ onBeforeUnmount(() => {
                   v-if="restorePlan(block.id)?.leaderBlockId === block.id"
                   type="button"
                   class="restore-action"
-                  :disabled="Boolean(restoreDisabledReason) || mutationOperationKey !== null"
+                  :disabled="Boolean(sourceMutationDisabledReason)"
                   :aria-label="`${restoreActionLabel(restorePlan(block.id)!)}：第 ${block.order + 1} 段冻结原文：${block.text}`"
-                  @click="performRestore(restorePlan(block.id)!)"
+                  @click="requestRestore(restorePlan(block.id)!)"
                 >
                   {{
                     mutationInFlight(restorePlan(block.id)!.key)
@@ -797,14 +608,14 @@ onBeforeUnmount(() => {
                   type="button"
                   class="omission-action"
                   :class="{ 'is-cancel': omissionPlan(block.id)!.confirmed }"
-                  :disabled="Boolean(omissionDisabledReason) || mutationOperationKey !== null"
+                  :disabled="Boolean(sourceMutationDisabledReason)"
                   :aria-label="`${omissionActionLabel(omissionPlan(block.id)!)}：第 ${block.order + 1} 段冻结原文：${block.text}`"
                   :aria-describedby="
-                    omissionDisabledReason
+                    sourceMutationDisabledReason
                       ? `omission-description-${block.order} omission-disabled-${block.order}`
                       : `omission-description-${block.order}`
                   "
-                  @click="performOmission(omissionPlan(block.id)!)"
+                  @click="requestOmission(omissionPlan(block.id)!)"
                 >
                   {{
                     mutationInFlight(omissionPlan(block.id)!.key)
@@ -816,15 +627,14 @@ onBeforeUnmount(() => {
                 </button>
               </div>
               <small
-                v-if="restorePlan(block.id)?.leaderBlockId === block.id && restoreDisabledReason"
-                class="omission-disabled-reason"
-                >{{ restoreDisabledReason }}</small
-              >
-              <small
-                v-if="omissionPlan(block.id)?.leaderBlockId === block.id && omissionDisabledReason"
+                v-if="
+                  (restorePlan(block.id)?.leaderBlockId === block.id ||
+                    omissionPlan(block.id)?.leaderBlockId === block.id) &&
+                  sourceMutationDisabledReason
+                "
                 :id="`omission-disabled-${block.order}`"
                 class="omission-disabled-reason"
-                >{{ omissionDisabledReason }}</small
+                >{{ sourceMutationDisabledReason }}</small
               >
               <small
                 v-if="mutationError?.blockId === block.id"

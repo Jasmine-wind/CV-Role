@@ -111,6 +111,7 @@ const mountComponent = (
   status: 'dirty' | 'saving' | 'saved' | 'failed' | 'conflict' = 'saved',
   revision = 3,
   active = true,
+  fidelityIssueCount = 0,
 ) =>
   mount(WorkspacePreviewExport, {
     props: {
@@ -118,6 +119,7 @@ const mountComponent = (
       revision,
       status,
       active,
+      fidelityIssueCount,
       onStale: staleHandler,
     },
   })
@@ -266,15 +268,17 @@ describe('WorkspacePreviewExport', () => {
         needsReview: true,
       },
     })
-    const wrapper = mountComponent()
+    const wrapper = mountComponent('saved', 3, true, 2)
     await flushPromises()
 
     // Preview is a diagnostic tool: the PDF stays visible even when the
     // structure fidelity gate blocks formal export.
     expect(wrapper.find('.preview-frame').exists()).toBe(true)
-    expect(wrapper.text()).toContain('原文结构仍需确认')
-    expect(wrapper.text()).toContain('当前 PDF 仅供检查')
+    const banner = wrapper.get('.preview-fidelity-banner')
+    expect(banner.text()).toContain('还有 2 项内容需要确认，处理后才能导出。')
+    expect(banner.get('button').text()).toBe('查看并处理')
     expect(button(wrapper, '导出 PDF').attributes('disabled')).toBeDefined()
+    expect(button(wrapper, '导出 PDF').text()).toBe('导出 PDF（需要先处理 1 项问题）')
   })
 
   it('regenerates an invalidated preview when preview mode becomes active again', async () => {
@@ -445,8 +449,8 @@ describe('WorkspacePreviewExport', () => {
     // PDF 仍然可见（Preview 是诊断工具），但导出被阻断且提供处理入口。
     expect(wrapper.find('.preview-frame').exists()).toBe(true)
     expect(button(wrapper, '导出 PDF').attributes('disabled')).toBeDefined()
-    const action = button(wrapper, '查看并处理')
-    expect(action).toBeTruthy()
+    const action = wrapper.get('.preview-fidelity-banner button')
+    expect(action.text()).toBe('查看并处理')
 
     const previewRequestsBefore = previewMock.mock.calls.length
     await action.trigger('click')
