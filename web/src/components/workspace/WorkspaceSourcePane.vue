@@ -38,6 +38,7 @@ const blockRoot = ref<HTMLElement | null>(null)
 const omissionOperationKey = ref<string | null>(null)
 const omissionError = ref<{ blockId: string; message: string } | null>(null)
 let omissionRequestSequence = 0
+let activeOmissionOperation: symbol | null = null
 
 const blockers = computed(
   () => props.source?.fidelityIssues.filter((issue) => issue.severity === 'BLOCKER') ?? [],
@@ -154,17 +155,22 @@ const omissionPlansByBlockId = computed(() => {
 })
 
 const omissionPlan = (blockId: string) => omissionPlansByBlockId.value.get(blockId) ?? null
+const isProjectPlan = (plan: OmissionActionPlan) => plan.key.startsWith('project:')
+
 const omissionActionLabel = (plan: OmissionActionPlan) => {
-  if (plan.projectBlockCount > 1) {
-    return plan.confirmed
-      ? `取消省略此项目对应的 ${plan.projectBlockCount} 段原文`
-      : `确认省略此项目对应的 ${plan.projectBlockCount} 段原文`
+  if (isProjectPlan(plan)) {
+    if (plan.projectBlockCount > 1) {
+      return plan.confirmed
+        ? `取消省略此项目对应的 ${plan.projectBlockCount} 段原文`
+        : `确认省略此项目对应的 ${plan.projectBlockCount} 段原文`
+    }
+    return plan.confirmed ? '取消省略此项目原文' : '确认省略此项目原文'
   }
   return plan.confirmed ? '取消省略' : '确认省略'
 }
 
 const omissionDescription = (plan: OmissionActionPlan) => {
-  if (plan.projectBlockCount > 1) {
+  if (isProjectPlan(plan)) {
     return plan.confirmed
       ? '这些项目原文已作为有意省略处理；取消后会重新进入导出检查。'
       : '这些内容属于同一个项目，且均未出现在当前简历中。请只在确认是有意删除时操作。'
@@ -190,6 +196,8 @@ const performOmission = async (plan: OmissionActionPlan) => {
   const expectedRevision = source.targetRevision
   const taskAtRequest = props.optimizationTaskId
   const requestSequence = ++omissionRequestSequence
+  const operationToken = Symbol(plan.key)
+  activeOmissionOperation = operationToken
   omissionOperationKey.value = plan.key
   omissionError.value = null
   emit('omissionBusy', true)
@@ -227,11 +235,22 @@ const performOmission = async (plan: OmissionActionPlan) => {
     }
     if (concurrent) emit('omissionConcurrent')
   } finally {
-    // While a request is in flight the action key remains occupied, even if a revision watcher
-    // invalidates its response. Clearing here prevents duplicate CAS operations and busy leaks.
-    omissionOperationKey.value = null
-    emit('omissionBusy', false)
+    // A route change can release this task's lock before its old request settles. Only the
+    // operation that still owns the lock may clear it, otherwise a late response could unlock
+    // a newer task's CAS request.
+    if (activeOmissionOperation === operationToken) {
+      activeOmissionOperation = null
+      omissionOperationKey.value = null
+      emit('omissionBusy', false)
+    }
   }
+}
+
+const releaseOmissionOperation = () => {
+  if (activeOmissionOperation === null) return
+  activeOmissionOperation = null
+  omissionOperationKey.value = null
+  emit('omissionBusy', false)
 }
 
 watch(
@@ -250,6 +269,9 @@ watch(
   () => {
     omissionRequestSequence += 1
     omissionError.value = null
+    // The old request is task-scoped and can no longer affect this view. Release the parent UI,
+    // while the operation token prevents its eventual finally block from unlocking a new request.
+    releaseOmissionOperation()
   },
 )
 
@@ -264,7 +286,7 @@ watch(
 
 onBeforeUnmount(() => {
   omissionRequestSequence += 1
-  if (omissionOperationKey.value !== null) emit('omissionBusy', false)
+  releaseOmissionOperation()
   if (pdfUrl.value) URL.revokeObjectURL(pdfUrl.value)
 })
 </script>
@@ -360,7 +382,7 @@ onBeforeUnmount(() => {
               type="button"
               class="source-block-main"
               :disabled="!block.reliable || block.targetNodeIds.length !== 1"
-              :aria-label="`${block.reliable ? '在当前简历中定位' : '尚未确认该原文对应位置'}：${block.text}。${mappingLabel(block)}`"
+              :aria-label="`${block.reliable ? '在当前简历中定位' : '尚未确认该原文对应位置'}第 ${block.order + 1} 段冻结原文：${block.text}。${mappingLabel(block)}`"
               @click="selectBlock(block.targetNodeIds, block.reliable)"
             >
               <span class="source-order">{{ String(block.order + 1).padStart(2, '0') }}</span>
@@ -377,7 +399,7 @@ onBeforeUnmount(() => {
                 class="omission-action"
                 :class="{ 'is-cancel': omissionPlan(block.id)!.confirmed }"
                 :disabled="Boolean(omissionDisabledReason) || omissionOperationKey !== null"
-                :aria-label="`${omissionActionLabel(omissionPlan(block.id)!)}：${block.text}`"
+                :aria-label="`${omissionActionLabel(omissionPlan(block.id)!)}：第 ${block.order + 1} 段冻结原文：${block.text}`"
                 :aria-describedby="
                   omissionDisabledReason
                     ? `omission-description-${block.order} omission-disabled-${block.order}`

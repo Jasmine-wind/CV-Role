@@ -494,7 +494,7 @@ test('intentional omission: a deleted source bullet blocks delivery until confir
   await expect(page.getByRole('button', { name: '导出 PDF', exact: true })).toHaveCount(0)
   page.off('request', countPreviewRequest)
 
-  const confirmAction = page.getByRole('button', { name: /^确认省略/ }).first()
+  const confirmAction = sourceCard.getByRole('button', { name: /^确认省略/ })
   await expect(confirmAction).toBeEnabled()
 
   // Dirty and saving states must disable omission and issue zero omission POSTs.
@@ -627,14 +627,25 @@ test('intentional omission: a deleted source bullet blocks delivery until confir
   await page.unroute('**/api/workspace/*/source-reference')
   page.off('request', countFailedGatePreview)
 
+  const successfulFidelityVerdict = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'GET' &&
+      /\/api\/workspace\/\d+\/source-reference$/.test(new URL(response.url()).pathname),
+  )
   await page.getByRole('button', { name: '预览 →', exact: true }).click()
+  const successfulFidelityResponse = await successfulFidelityVerdict
+  expect(successfulFidelityResponse.ok()).toBe(true)
+  const successfulFidelityPayload = (await successfulFidelityResponse.json()) as {
+    data: { exportBlocked: boolean }
+  }
+  expect(successfulFidelityPayload.data.exportBlocked).toBe(false)
   await expect(page.getByTitle('简历 PDF 预览')).toBeVisible({ timeout: 45_000 })
   await expect(
     page.locator('.preflight-section').getByText('可以导出', { exact: true }),
   ).toBeVisible({ timeout: 45_000 })
   await page.getByRole('button', { name: '返回编辑', exact: true }).click()
 
-  const unconfirmAction = page.getByRole('button', { name: /^取消省略/ }).first()
+  const unconfirmAction = sourceCard.getByRole('button', { name: /^取消省略/ })
   await expect(unconfirmAction).toBeEnabled({ timeout: 15_000 })
   const unconfirmResponse = page.waitForResponse(
     (response) =>
@@ -704,6 +715,7 @@ test('intentional omission: a whole Project entry remains blocked after authorit
   const sourcePayload = (await (await sourceReferenceResponse).json()) as {
     data: {
       sourceBlocks: Array<{
+        id: string
         order: number
         occurrenceIds: string[]
         sourceSectionKind: string | null
@@ -749,7 +761,12 @@ test('intentional omission: a whole Project entry remains blocked after authorit
   expect((await deletedSave).ok()).toBe(true)
   await expect(page.getByText('✓ 已保存', { exact: true })).toBeVisible({ timeout: 15_000 })
 
-  const projectConfirm = page.getByRole('button', { name: /^确认省略此项目对应的/ }).first()
+  const projectSourceCard = page.locator(
+    `.source-block[data-source-block-id="${projectBlocks[0]!.id}"]`,
+  )
+  const projectConfirm = projectSourceCard.getByRole('button', {
+    name: /^确认省略此项目对应的/,
+  })
   await expect(projectConfirm).toBeEnabled({ timeout: 15_000 })
   const confirmResponse = page.waitForResponse(
     (response) =>
@@ -773,12 +790,25 @@ test('intentional omission: a whole Project entry remains blocked after authorit
     if (request.url().includes('/preview.pdf')) projectPreviewRequests += 1
   }
   page.on('request', countProjectPreview)
+  const freshProjectFidelityVerdict = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'GET' &&
+      /\/api\/workspace\/\d+\/source-reference$/.test(new URL(response.url()).pathname),
+  )
   await page.getByRole('button', { name: '预览 →', exact: true }).click()
+  const projectFidelityResponse = await freshProjectFidelityVerdict
+  expect(projectFidelityResponse.ok()).toBe(true)
+  const projectFidelityPayload = (await projectFidelityResponse.json()) as {
+    data: { exportBlocked: boolean }
+  }
+  expect(projectFidelityPayload.data.exportBlocked).toBe(true)
   await expect(page.getByText('请先处理冻结原文中的结构保真问题，再预览或导出')).toBeVisible()
   expect(projectPreviewRequests).toBe(0)
   page.off('request', countProjectPreview)
 
-  const projectUnconfirm = page.getByRole('button', { name: /^取消省略此项目对应的/ }).first()
+  const projectUnconfirm = projectSourceCard.getByRole('button', {
+    name: /^取消省略此项目对应的/,
+  })
   await expect(projectUnconfirm).toBeEnabled({ timeout: 15_000 })
   const unconfirmResponse = page.waitForResponse(
     (response) =>

@@ -360,6 +360,82 @@ describe('WorkspaceSourcePane', () => {
     expect(wrapper.get('button.omission-action').attributes('disabled')).toBeUndefined()
   })
 
+  it('releases an obsolete task lock without letting its late response unlock the next task', async () => {
+    const firstPending = deferred<{
+      saved: boolean
+      conflict: boolean
+      revision: number
+      document: null
+    }>()
+    const secondPending = deferred<{
+      saved: boolean
+      conflict: boolean
+      revision: number
+      document: null
+    }>()
+    confirmMock.mockReturnValueOnce(firstPending.promise).mockReturnValueOnce(secondPending.promise)
+    const source = sourceWith([block('occ-1', 'UNMAPPED', { omissionEligible: true })])
+    const omissionBusy = vi.fn()
+    const wrapper = mountPane(source, { onOmissionBusy: omissionBusy })
+
+    await wrapper.get('button.omission-action').trigger('click')
+    await wrapper.setProps({ optimizationTaskId: 2 })
+    expect(omissionBusy.mock.calls).toEqual([[true], [false]])
+    expect(wrapper.get('button.omission-action').attributes('disabled')).toBeUndefined()
+
+    await wrapper.get('button.omission-action').trigger('click')
+    expect(confirmMock.mock.calls[1]?.[0]).toBe(2)
+    expect(omissionBusy.mock.calls).toEqual([[true], [false], [true]])
+
+    firstPending.resolve({ saved: true, conflict: false, revision: 5, document: null })
+    await flushPromises()
+    expect(wrapper.get('button.omission-action').attributes('disabled')).toBeDefined()
+    expect(omissionBusy.mock.calls).toEqual([[true], [false], [true]])
+
+    secondPending.resolve({ saved: true, conflict: false, revision: 5, document: null })
+    await flushPromises()
+    expect(wrapper.get('button.omission-action').attributes('disabled')).toBeUndefined()
+    expect(omissionBusy.mock.calls).toEqual([[true], [false], [true], [false]])
+  })
+
+  it('gives each source and omission control a contextual accessible name and description', () => {
+    const source = sourceWith([
+      block('occ-1', 'UNMAPPED', { text: '重复原文', omissionEligible: true }),
+      block('occ-2', 'UNMAPPED', {
+        text: '项目原文',
+        sourceNodeType: 'ENTRY',
+        sourceSectionKind: 'PROJECT',
+        sourceSectionId: 'project-section',
+        sourceEntryId: 'project-entry',
+        omissionEligible: true,
+      }),
+    ])
+    const wrapper = mountPane(source, {
+      omissionDisabledReason: '请先完成当前简历保存，再确认省略。',
+    })
+
+    const sourceNames = wrapper
+      .findAll('button.source-block-main')
+      .map((button) => button.attributes('aria-label'))
+    expect(sourceNames[0]).toContain('第 2 段冻结原文：重复原文')
+    expect(sourceNames[1]).toContain('第 3 段冻结原文：项目原文')
+    expect(new Set(sourceNames).size).toBe(2)
+
+    const omissionActions = wrapper.findAll('button.omission-action')
+    expect(omissionActions[0]!.attributes('aria-label')).toContain(
+      '确认省略：第 2 段冻结原文：重复原文',
+    )
+    expect(omissionActions[1]!.attributes('aria-label')).toContain(
+      '确认省略此项目原文：第 3 段冻结原文：项目原文',
+    )
+    for (const action of omissionActions) {
+      expect(action.attributes('disabled')).toBeDefined()
+      for (const descriptionId of action.attributes('aria-describedby')!.split(' ')) {
+        expect(wrapper.find(`#${descriptionId}`).exists()).toBe(true)
+      }
+    }
+  })
+
   it('disables omission while the editor is not fully saved', () => {
     const source = sourceWith([block('occ-1', 'UNMAPPED', { omissionEligible: true })])
     const wrapper = mountPane(source, {
