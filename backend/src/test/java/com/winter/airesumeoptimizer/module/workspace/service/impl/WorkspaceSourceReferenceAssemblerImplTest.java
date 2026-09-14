@@ -293,7 +293,7 @@ class WorkspaceSourceReferenceAssemblerImplTest {
     }
 
     @Test
-    void projectBoundaryIsRestoredUnlessEveryMeaningfulOccurrenceOfMissingEntryIsConfirmed() {
+    void projectBoundaryRemainsBlockedEvenWhenEveryMissingOccurrenceIsConfirmed() {
         ResumeDocumentDTO source = document(List.of(
                         "occ-heading", "occ-p1", "occ-p2", "occ-p2-field", "occ-p2-bullet"),
                 Map.of("occ-heading", "项目经历", "occ-p1", "项目一", "occ-p2", "项目二",
@@ -331,8 +331,9 @@ class WorkspaceSourceReferenceAssemblerImplTest {
         WorkspaceSourceReferenceVO confirmed = assembler.assemble(
                 1L, 2L, 3L, 1L, "resume.pdf", true, source, target);
         assertThat(confirmed.fidelityIssues()).extracting(WorkspaceSourceReferenceVO.FidelityIssue::code)
-                .doesNotContain("PROJECT_BOUNDARY_LOST", "SOURCE_CONTENT_UNMAPPED");
-        assertThat(confirmed.exportBlocked()).isFalse();
+                .contains("PROJECT_BOUNDARY_LOST")
+                .doesNotContain("SOURCE_CONTENT_UNMAPPED");
+        assertThat(confirmed.exportBlocked()).isTrue();
     }
 
     @Test
@@ -779,7 +780,7 @@ class WorkspaceSourceReferenceAssemblerImplTest {
     }
 
     @Test
-    void projectBoundaryUsesEveryValidatedFrozenChildReferenceAndBulletFallback() {
+    void projectOmissionCoversEveryFrozenChildReferenceButCannotWaiveBoundaryLoss() {
         ResumeDocumentDTO source = document(List.of(
                         "occ-heading", "occ-p1", "occ-p2", "occ-field", "occ-tech",
                         "occ-skill", "occ-description", "occ-bullet"),
@@ -811,8 +812,9 @@ class WorkspaceSourceReferenceAssemblerImplTest {
                 1L, 2L, 3L, 1L, "resume.pdf", true, source, target);
 
         assertThat(result.fidelityIssues()).extracting(WorkspaceSourceReferenceVO.FidelityIssue::code)
-                .doesNotContain("PROJECT_BOUNDARY_LOST", "SOURCE_CONTENT_UNMAPPED", "SOURCE_MANIFEST_INVALID");
-        assertThat(result.exportBlocked()).isFalse();
+                .contains("PROJECT_BOUNDARY_LOST")
+                .doesNotContain("SOURCE_CONTENT_UNMAPPED", "SOURCE_MANIFEST_INVALID");
+        assertThat(result.exportBlocked()).isTrue();
     }
 
     @Test

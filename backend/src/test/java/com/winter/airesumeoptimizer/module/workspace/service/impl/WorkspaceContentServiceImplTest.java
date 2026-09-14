@@ -35,6 +35,7 @@ import com.winter.airesumeoptimizer.module.workspace.dto.WorkspaceContentSaveReq
 import com.winter.airesumeoptimizer.module.workspace.dto.WorkspaceSourceOmissionRequestDTO;
 import com.winter.airesumeoptimizer.module.workspace.vo.WorkspaceContentSaveResultVO;
 import com.winter.airesumeoptimizer.module.workspace.vo.WorkspaceContentVO;
+import com.winter.airesumeoptimizer.module.workspace.vo.WorkspaceSourceReferenceVO;
 import java.nio.charset.StandardCharsets;
 import java.util.Collection;
 import java.util.LinkedHashMap;
@@ -630,8 +631,11 @@ class WorkspaceContentServiceImplTest {
         assertThat(confirmed.getDocument().getConfirmedSourceOmissionIds())
                 .containsExactly("occ-entry", "occ-field", "occ-tech",
                         "occ-skill", "occ-description", "occ-bullet");
-        assertThat(service.getSourceReference(USER_ID, TASK_ID).fidelityIssues())
-                .extracting(issue -> issue.code()).doesNotContain("PROJECT_BOUNDARY_LOST");
+        WorkspaceSourceReferenceVO confirmedFidelity = service.getSourceReference(USER_ID, TASK_ID);
+        assertThat(confirmedFidelity.fidelityIssues()).extracting(issue -> issue.code())
+                .contains("PROJECT_BOUNDARY_LOST")
+                .doesNotContain("SOURCE_CONTENT_UNMAPPED");
+        assertThat(confirmedFidelity.exportBlocked()).isTrue();
 
         WorkspaceContentSaveResultVO unconfirmed = service.unconfirmSourceOmissions(
                 USER_ID, TASK_ID, new WorkspaceSourceOmissionRequestDTO(2L, List.of("occ-entry")));

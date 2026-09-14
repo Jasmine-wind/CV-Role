@@ -682,12 +682,12 @@ test('intentional omission: a deleted source bullet blocks delivery until confir
   expect(stalePayload.data.saved).toBe(false)
   expect(stalePayload.data.conflict).toBe(true)
   await expect(stalePage.getByText(/当前简历已有更新，本次操作未生效/)).toBeVisible()
-  await expect(stalePage.getByText('已确认省略，可继续预览或导出')).toHaveCount(0)
+  await expect(stalePage.getByText('已确认省略，结构保真状态已更新')).toHaveCount(0)
   await expect(stalePage.getByText('✓ 已保存', { exact: true })).toBeVisible({ timeout: 15_000 })
   await stalePage.close()
 })
 
-test('intentional omission: a whole Project entry uses the authoritative server boundary', async ({
+test('intentional omission: a whole Project entry remains blocked after authoritative confirmation', async ({
   page,
 }) => {
   await registerAndLogin(page)
@@ -764,9 +764,19 @@ test('intentional omission: a whole Project entry uses the authoritative server 
     sourceOccurrenceIds: string[]
   }
   expect(confirmBody.sourceOccurrenceIds).toEqual(expectedProjectOccurrenceIds)
-  await expect(page.getByText('结构保真检查通过', { exact: true })).toBeVisible({
+  await expect(page.getByText(/冻结项目条目缺失，省略确认不能解除项目边界阻断/)).toBeVisible({
     timeout: 15_000,
   })
+  await expect(page.getByText(/结构保真：\d+ 项阻断/)).toBeVisible()
+  let projectPreviewRequests = 0
+  const countProjectPreview = (request: { url: () => string }) => {
+    if (request.url().includes('/preview.pdf')) projectPreviewRequests += 1
+  }
+  page.on('request', countProjectPreview)
+  await page.getByRole('button', { name: '预览 →', exact: true }).click()
+  await expect(page.getByText('请先处理冻结原文中的结构保真问题，再预览或导出')).toBeVisible()
+  expect(projectPreviewRequests).toBe(0)
+  page.off('request', countProjectPreview)
 
   const projectUnconfirm = page.getByRole('button', { name: /^取消省略此项目对应的/ }).first()
   await expect(projectUnconfirm).toBeEnabled({ timeout: 15_000 })

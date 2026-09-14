@@ -249,7 +249,7 @@ const handleOmissionSaved = (
   if (!accepted) {
     ElMessage.warning('省略状态已更新，但本地版本也发生了变化。正在重新同步，请勿重复操作。')
   } else {
-    ElMessage.success(confirmed ? '已确认省略，可继续预览或导出' : '已取消省略')
+    ElMessage.success(confirmed ? '已确认省略，结构保真状态已更新' : '已取消省略')
   }
   void loadSourceReference()
 }

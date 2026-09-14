@@ -173,7 +173,7 @@ public class WorkspaceSourceReferenceAssemblerImpl implements WorkspaceSourceRef
         }
 
         addStructuralIssues(
-                source, target, blocks, sourceOwnership, manifest, nodes, authenticatedNodes, issues);
+                source, target, sourceOwnership, manifest, nodes, authenticatedNodes, issues);
         EnumMap<WorkspaceSourceMappingStatus, Integer> counts = new EnumMap<>(WorkspaceSourceMappingStatus.class);
         for (WorkspaceSourceMappingStatus status : WorkspaceSourceMappingStatus.values()) counts.put(status, 0);
         for (TargetMapping mapping : mappings) counts.compute(mapping.status(), (key, value) -> value == null ? 1 : value + 1);
@@ -772,7 +772,6 @@ public class WorkspaceSourceReferenceAssemblerImpl implements WorkspaceSourceRef
     private static void addStructuralIssues(
             ResumeDocumentDTO source,
             ResumeDocumentDTO target,
-            List<SourceBlock> sourceBlocks,
             FrozenOwnership sourceOwnership,
             Manifest manifest,
             List<Node> targetNodes,
@@ -784,17 +783,10 @@ public class WorkspaceSourceReferenceAssemblerImpl implements WorkspaceSourceRef
                         "章节标题为空但子内容仍存在，导出已阻止。", List.of(), List.of("section:" + safeId(section.getId()))));
             }
         }
-        Map<String, SourceBlock> blocksByOccurrence = new HashMap<>();
-        for (SourceBlock block : sourceBlocks) {
-            blocksByOccurrence.put(block.id(), block);
-            for (String occurrenceId : block.occurrenceIds()) {
-                blocksByOccurrence.put(occurrenceId, block);
-            }
-        }
         Set<String> targetProjectEntries = authenticatedProjectEntries(
                 target, targetNodes, manifest, authenticatedNodes, sourceOwnership.owners());
-        List<String> unconfirmedMissingProjectOccurrences = new ArrayList<>();
-        boolean unconfirmedMissingProject = false;
+        List<String> missingProjectOccurrences = new ArrayList<>();
+        boolean missingProject = false;
         for (ResumeDocumentSectionDTO section : safe(source == null ? null : source.getSections())) {
             if (section == null || !"PROJECT".equals(section.getKind())) {
                 continue;
@@ -803,22 +795,15 @@ public class WorkspaceSourceReferenceAssemblerImpl implements WorkspaceSourceRef
                 if (entry == null || targetProjectEntries.contains(boundaryKey(section.getId(), entry.getId()))) {
                     continue;
                 }
-                LinkedHashSet<String> meaningful = projectEntryOccurrenceIds(
-                        section.getId(), entry.getId(), sourceOwnership, manifest);
-                boolean allConfirmed = !meaningful.isEmpty() && meaningful.stream().allMatch(id -> {
-                    SourceBlock block = blocksByOccurrence.get(id);
-                    return block != null && block.omissionEligible() && block.omissionConfirmed();
-                });
-                if (!allConfirmed) {
-                    unconfirmedMissingProject = true;
-                    unconfirmedMissingProjectOccurrences.addAll(meaningful);
-                }
+                missingProject = true;
+                missingProjectOccurrences.addAll(projectEntryOccurrenceIds(
+                        section.getId(), entry.getId(), sourceOwnership, manifest));
             }
         }
-        if (unconfirmedMissingProject) {
+        if (missingProject) {
             issues.add(issue("PROJECT_BOUNDARY_LOST", BLOCKER,
-                    "冻结项目条目缺失且尚未完整确认省略，可能发生项目边界合并。",
-                    unconfirmedMissingProjectOccurrences.stream().distinct().toList(), List.of()));
+                    "冻结项目条目缺失，省略确认不能解除项目边界阻断。",
+                    missingProjectOccurrences.stream().distinct().toList(), List.of()));
         }
         Map<String, Long> contacts = safe(target == null || target.getBasics() == null ? null : target.getBasics().getContacts())
                 .stream().filter(Objects::nonNull).map(ResumeDocumentContactDTO::getValue)
