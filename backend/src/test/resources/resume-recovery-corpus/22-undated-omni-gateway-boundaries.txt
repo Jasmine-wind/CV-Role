@@ -1,0 +1,35 @@
+姓名：合成候选
+
+教育经历
+River University · 本科 · 软件工程
+2023.09 - 2027.06
+
+技术栈
+Java 理解集合、异常处理、并发与 JVM 基础，能够编写可维护的后端服务
+Spring 能够基于 Spring Boot、Spring MVC 构建分层应用与 RESTful API
+数据库 能够使用 PostgreSQL、MySQL 进行数据建模与查询优化
+缓存与存储 熟悉 Redis，并使用对象存储管理文件
+工程化 使用 Git、Maven、Linux、Docker 完成构建、发布与故障排查
+
+项目经历
+Resume Evidence Workspace
+个人项目 ｜ 后端开发 ｜ 2026.03 - 2026.05
+项目描述：构建冻结原文与岗位版简历之间的可审阅证据链路
+主要工作：
+• 实现来源事实校验、内容版本 CAS 与项目边界检查
+• 建立预览回执与导出质量门，避免未确认内容进入交付文档
+
+OmniGateway 高可用多智能体网关
+团队项目 ｜ Python Agent 负责人
+项目描述：基于 MCP 与向量检索构建多模型调用的高可用路由与故障恢复能力
+主要工作：
+• 设计请求编排、流量保护和可追溯审计流程
+• 实现 Agent 服务隔离与降级策略
+• 为工具调用补充超时、重试和可观测性
+
+荣誉奖项
+Synthetic Software Contest 省二等奖 2025.04
+Synthetic Challenge 省三等奖 2024.07 - 2024.09
+
+其他说明
+该合成材料的归属有待人工确认

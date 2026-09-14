@@ -18,6 +18,7 @@ import com.winter.airesumeoptimizer.module.optimization.mapper.JobTargetMapper;
 import com.winter.airesumeoptimizer.module.optimization.mapper.OptimizationTaskMapper;
 import com.winter.airesumeoptimizer.module.optimization.mapper.ResumeVersionMapper;
 import com.winter.airesumeoptimizer.module.optimization.service.OptimizationTaskService;
+import com.winter.airesumeoptimizer.module.resume.dto.ResumeSourceRefDTO;
 import com.winter.airesumeoptimizer.module.resume.entity.Resume;
 import com.winter.airesumeoptimizer.module.resume.mapper.ResumeMapper;
 import com.winter.airesumeoptimizer.module.resume.service.ResumeService;
@@ -39,6 +40,7 @@ import java.sql.PreparedStatement;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
@@ -342,30 +344,64 @@ class ExportLifecyclePostgresIntegrationTest {
     }
 
     private ResumeDocumentDTO exportableDocument() {
+        List<String> occurrenceIds = List.of(
+                "occ-name", "occ-contact", "occ-section", "occ-entry", "occ-bullet");
+        Map<String, String> occurrenceTexts = Map.of(
+                "occ-name", "Integration User",
+                "occ-contact", "integration@example.com",
+                "occ-section", "工作经历",
+                "occ-entry", "Example Technology · Java Engineer · 2022.01 · 至今",
+                "occ-bullet", "负责 Java 服务开发与稳定性优化");
+        Map<String, ResumeSourceRefDTO> occurrenceRefs = occurrenceTexts.entrySet().stream()
+                .collect(java.util.stream.Collectors.toMap(Map.Entry::getKey,
+                        item -> ResumeSourceRefDTO.builder()
+                                .text(item.getValue())
+                                .sourceOccurrenceIds(List.of(item.getKey()))
+                                .build()));
         return ResumeDocumentDTO.builder()
                 .schemaVersion(ResumeDocumentDTO.SCHEMA_VERSION)
+                .sourceOccurrenceIds(occurrenceIds)
+                .sourceRef(ResumeSourceRefDTO.builder()
+                        .text(occurrenceIds.stream().map(occurrenceTexts::get)
+                                .collect(java.util.stream.Collectors.joining()))
+                        .sourceOccurrenceIds(occurrenceIds)
+                        .build())
+                .sourceOccurrenceTexts(occurrenceTexts)
+                .sourceOccurrenceRefs(occurrenceRefs)
+                .sourceOccurrencePrimaryIds(Map.of(
+                        "occ-name", "occ-name",
+                        "occ-contact", "occ-contact",
+                        "occ-section", "occ-section",
+                        "occ-entry", "occ-entry",
+                        "occ-bullet", "occ-bullet"))
                 .basics(ResumeDocumentBasicsDTO.builder()
                         .name("Integration User")
+                        .fieldSourceRefs(Map.of("name", ResumeSourceRefDTO.builder()
+                                .text("Integration User").sourceOccurrenceIds(List.of("occ-name")).build()))
                         .contacts(new ArrayList<>(List.of(ResumeDocumentContactDTO.builder()
                                 .id("contact-email")
                                 .type("EMAIL")
                                 .label("邮箱")
                                 .value("integration@example.com")
+                                .sourceOccurrenceIds(List.of("occ-contact"))
                                 .build())))
                         .build())
                 .sections(new ArrayList<>(List.of(ResumeDocumentSectionDTO.builder()
                         .id("section-experience")
                         .kind("EXPERIENCE")
                         .title("工作经历")
+                        .sourceOccurrenceIds(List.of("occ-section"))
                         .entries(new ArrayList<>(List.of(ResumeDocumentEntryDTO.builder()
                                 .id("entry-experience")
                                 .organization("Example Technology")
                                 .role("Java Engineer")
                                 .startDate("2022.01")
                                 .endDate("至今")
+                                .sourceOccurrenceIds(List.of("occ-entry"))
                                 .bullets(new ArrayList<>(List.of(ResumeDocumentBulletDTO.builder()
                                         .id("bullet-experience")
                                         .text("负责 Java 服务开发与稳定性优化")
+                                        .sourceOccurrenceIds(List.of("occ-bullet"))
                                         .build())))
                                 .build())))
                         .build())))

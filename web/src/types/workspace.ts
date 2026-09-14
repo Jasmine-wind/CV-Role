@@ -6,12 +6,11 @@ export interface WorkspaceContent {
   document: ResumeDocument
 }
 
-export type WorkspaceSourceMappingStatus =
-  | 'EXACT'
-  | 'MERGED'
-  | 'SPLIT'
-  | 'UNMAPPED'
-  | 'AMBIGUOUS'
+/**
+ * 原文与当前简历节点之间的 lineage relationship；不是文本相似度或用户可见状态文案。
+ * UI 必须把这些内部枚举转换成用户语言。
+ */
+export type WorkspaceSourceMappingStatus = 'EXACT' | 'MERGED' | 'SPLIT' | 'UNMAPPED' | 'AMBIGUOUS'
 
 export interface WorkspaceSourceGeometry {
   page?: number | null
@@ -32,9 +31,19 @@ export interface WorkspaceSourceBlock {
   text: string
   occurrenceIds: string[]
   sourceGeometry?: WorkspaceSourceGeometry | null
+  /** 服务端证明的 SOURCE 语义边界；仅用于同一 PROJECT entry 的批量省略操作，不由前端猜测。 */
+  sourceNodeType: string | null
+  sourceSectionKind: string | null
+  sourceSectionId: string | null
+  sourceEntryId: string | null
+  sourceBulletId: string | null
   targetNodeIds: string[]
+  /** 只描述该 SOURCE block 与 TARGET node 的 lineage relationship。 */
   status: WorkspaceSourceMappingStatus
   reliable: boolean
+  omissionConfirmed: boolean
+  /** 仅服务端可以判定该 occurrence 是否允许确认为有意省略。 */
+  omissionEligible: boolean
 }
 
 export interface WorkspaceTargetMapping {
@@ -45,9 +54,14 @@ export interface WorkspaceTargetMapping {
   bulletId: string | null
   targetText: string | null
   sourceOccurrenceIds: string[]
+  /** 只描述 SOURCE 与 TARGET node 的 lineage relationship，不表示文字是否相同。 */
   status: WorkspaceSourceMappingStatus
   reliable: boolean
+  /** 当前 TARGET text 是否不同于冻结 SOURCE text；与 lineage status 相互独立。 */
   textChanged: boolean
+  omissionConfirmed: boolean
+  /** 仅服务端可以判定该 mapping 是否允许确认为有意省略。 */
+  omissionEligible: boolean
 }
 
 export interface WorkspaceFidelityIssue {
@@ -69,7 +83,13 @@ export interface WorkspaceSourceReference {
   mappings: WorkspaceTargetMapping[]
   fidelityIssues: WorkspaceFidelityIssue[]
   statusCounts: Record<WorkspaceSourceMappingStatus, number>
+  confirmedOmissionCount: number
   exportBlocked: boolean
+}
+
+export interface WorkspaceSourceOmissionRequest {
+  expectedRevision: number
+  sourceOccurrenceIds: string[]
 }
 
 export interface WorkspaceSaveRequest {

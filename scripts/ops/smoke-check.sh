@@ -15,13 +15,26 @@ http_status() {
   curl "${CURL_ARGS[@]}" --output /dev/null --write-out '%{http_code}' "$1"
 }
 
+bounded_http_diagnostic() {
+  local url="$1"
+  # These smoke targets are public, body-less GETs. Keep failure output useful but
+  # bounded so a broken upstream cannot flood CI/operator logs.
+  curl "${CURL_ARGS[@]}" --include "$url" 2>&1 | head -c 2048 || true
+  printf '\n' >&2
+}
+
 expect_status() {
   local url="$1"
   local expected="$2"
   local actual
-  actual="$(http_status "$url")"
+  if ! actual="$(http_status "$url")"; then
+    echo "Smoke check failed: could not request $url" >&2
+    bounded_http_diagnostic "$url" >&2
+    return 1
+  fi
   if [[ "$actual" != "$expected" ]]; then
     echo "Smoke check failed: $url returned HTTP $actual (expected $expected)" >&2
+    bounded_http_diagnostic "$url" >&2
     return 1
   fi
   echo "ok: $url -> $actual"
@@ -29,15 +42,11 @@ expect_status() {
 
 expect_status "$BASE_URL/healthz" 200
 expect_status "$BASE_URL/" 200
-expect_status "$BASE_URL/v3/api-docs/" 200
-# This route is intentionally called without credentials or a request body. Its
-# exact application error status may vary, but a gateway/server failure must not.
-api_status="$(http_status "$BASE_URL/api/auth/login")"
-if [[ ! "$api_status" =~ ^[234][0-9][0-9]$ ]]; then
-  echo "Smoke check failed: backend route returned HTTP $api_status" >&2
-  exit 1
-fi
-echo "ok: $BASE_URL/api/auth/login -> $api_status"
+# Production intentionally disables Springdoc. Backend liveness/readiness are
+# checked directly by the production Compose restart gate. GET on this POST-only
+# endpoint has no side effect and its 405 proves that Nginx reached Spring MVC;
+# accepting an arbitrary 4xx could mistake an Nginx/local 404 for backend health.
+expect_status "$BASE_URL/api/auth/login" 405
 
 if [[ "${EXPECT_HTTPS_REDIRECT:-no}" == yes ]]; then
   HTTP_URL="${SMOKE_HTTP_URL:-}"

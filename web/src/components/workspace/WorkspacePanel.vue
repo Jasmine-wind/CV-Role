@@ -13,11 +13,14 @@ import WorkspaceSourcePane from '@/components/workspace/WorkspaceSourcePane.vue'
 import WorkspaceSuggestions from '@/components/workspace/WorkspaceSuggestions.vue'
 import TaskHeader from '@/components/task/TaskHeader.vue'
 import type { OptimizationAnalysisResult } from '@/types/job-analysis'
-import type { WorkspaceSourceReference } from '@/types/workspace'
+import type { WorkspaceSaveResult, WorkspaceSourceReference } from '@/types/workspace'
 import { useBulletSuggest } from '@/utils/useBulletSuggest'
 import { useWorkspaceEditor } from '@/utils/useWorkspaceEditor'
 import type { WorkspaceEvidenceAnchor } from '@/views/workspaceEvidenceAnchor'
-import { resolveWorkspaceEvidenceAnchor, retainWorkspaceEvidenceAnchor } from '@/views/workspaceEvidenceAnchor'
+import {
+  resolveWorkspaceEvidenceAnchor,
+  retainWorkspaceEvidenceAnchor,
+} from '@/views/workspaceEvidenceAnchor'
 
 const props = defineProps<{
   optimizationTaskId: number
@@ -50,6 +53,7 @@ const selectedRequirementId = ref<number | null>(initialRequirementId)
 const sourceReference = ref<WorkspaceSourceReference | null>(null)
 const sourceLoading = ref(false)
 const sourceError = ref<string | null>(null)
+const omissionBusy = ref(false)
 const selectedTargetNodeId = ref<string | null>(null)
 const selectedSourceOccurrenceIds = ref<string[]>([])
 let sourceRequestSequence = 0
@@ -84,8 +88,12 @@ const evidenceAnchor = ref<WorkspaceEvidenceAnchor | null>(null)
 const focusRequestKey = ref(0)
 const provenanceSectionId = ref<string | null>(null)
 const provenanceBulletId = ref<string | null>(null)
-const selectedWorkspaceSectionId = computed(() => provenanceSectionId.value ?? evidenceAnchor.value?.sectionId ?? null)
-const selectedWorkspaceBulletId = computed(() => provenanceBulletId.value ?? evidenceAnchor.value?.bulletId ?? null)
+const selectedWorkspaceSectionId = computed(
+  () => provenanceSectionId.value ?? evidenceAnchor.value?.sectionId ?? null,
+)
+const selectedWorkspaceBulletId = computed(
+  () => provenanceBulletId.value ?? evidenceAnchor.value?.bulletId ?? null,
+)
 
 const retainSelectedEvidenceAnchor = () => {
   const requirement = requirements.value.find(
@@ -99,9 +107,9 @@ const retainSelectedEvidenceAnchor = () => {
 
   const anchor = evidenceAnchor.value
   const anchorStillBelongsToRequirement = Boolean(
-    anchor
-    && anchor.requirementId === requirement.evidenceRequirementId
-    && requirement.evidences.some(
+    anchor &&
+    anchor.requirementId === requirement.evidenceRequirementId &&
+    requirement.evidences.some(
       (evidence) => evidence.requirementEvidenceId === anchor.requirementEvidenceId,
     ),
   )
@@ -111,11 +119,7 @@ const retainSelectedEvidenceAnchor = () => {
   // always resolve the clicked evidence ID rather than silently falling back to this default.
   const initialEvidence = requirement.evidences.at(0)
   evidenceAnchor.value = initialEvidence
-    ? resolveWorkspaceEvidenceAnchor(
-        requirement,
-        document,
-        initialEvidence.requirementEvidenceId,
-      )
+    ? resolveWorkspaceEvidenceAnchor(requirement, document, initialEvidence.requirementEvidenceId)
     : null
 }
 
@@ -125,9 +129,16 @@ watch(
   { immediate: true },
 )
 watch(
-  () => editor.draft.value?.sections.map((section) => `${section.id}:${section.entries.map((entry) => `${entry.id}:${entry.bullets.map((bullet) => bullet.id).join(',')}`).join('|')}`).join(';'),
+  () =>
+    editor.draft.value?.sections
+      .map(
+        (section) =>
+          `${section.id}:${section.entries.map((entry) => `${entry.id}:${entry.bullets.map((bullet) => bullet.id).join(',')}`).join('|')}`,
+      )
+      .join(';'),
   () => {
-    if (evidenceAnchor.value) evidenceAnchor.value = retainWorkspaceEvidenceAnchor(evidenceAnchor.value, editor.draft.value)
+    if (evidenceAnchor.value)
+      evidenceAnchor.value = retainWorkspaceEvidenceAnchor(evidenceAnchor.value, editor.draft.value)
   },
 )
 
@@ -152,6 +163,19 @@ const saveStatusText = computed(() => {
 })
 
 const saveStatusClass = computed(() => `save-status is-${editor.status.value}`)
+
+const omissionDisabledReason = computed(() => {
+  if (editor.status.value !== 'saved' || editor.hasUnsavedChanges.value) {
+    return '请先完成当前简历保存，再确认省略。'
+  }
+  if (
+    editor.revision.value === null ||
+    sourceReference.value?.targetRevision !== editor.revision.value
+  ) {
+    return '原文状态正在同步，请稍候。'
+  }
+  return null
+})
 
 // 未保存 / saving / failed / conflict 时不允许发起 Suggest，避免候选绑定到未落库内容。
 const suggestLocked = computed(() => editor.status.value !== 'saved')
@@ -212,6 +236,32 @@ const viewSourceForTarget = (targetNodeId: string) => {
   }
   selectedSourceOccurrenceIds.value = mapping.sourceOccurrenceIds
   if (isNarrowScreen.value) mobilePanel.value = 'source'
+}
+
+const handleOmissionSaved = (
+  expectedRevision: number,
+  result: WorkspaceSaveResult,
+  confirmed: boolean,
+) => {
+  const accepted = editor.acceptExternalSaveResult(expectedRevision, result)
+  if (!accepted) {
+    ElMessage.warning('省略状态已更新，但本地版本也发生了变化。正在重新同步，请勿重复操作。')
+  } else {
+    ElMessage.success(confirmed ? '已确认省略，可继续预览或导出' : '已取消省略')
+  }
+  void loadSourceReference()
+}
+
+const handleOmissionConcurrent = async () => {
+  ElMessage.warning('当前简历已有更新，本次省略操作未生效。')
+  if (!editor.hasUnsavedChanges.value && editor.status.value === 'saved') {
+    try {
+      await editor.adoptServerVersion()
+    } catch {
+      ElMessage.error('同步线上版本失败，请刷新页面后重试')
+    }
+  }
+  await loadSourceReference()
 }
 
 const goToAnalysis = () => {
@@ -324,7 +374,7 @@ const handleRetry = () => {
 }
 
 const openPreviewMode = async () => {
-  if (previewPreparing.value || workspaceMode.value === 'preview') return
+  if (previewPreparing.value || omissionBusy.value || workspaceMode.value === 'preview') return
   previewPreparing.value = true
   try {
     const ready = await editor.ensurePersistedForRender()
@@ -332,6 +382,24 @@ const openPreviewMode = async () => {
       ElMessage.warning('请先完成当前简历保存或冲突处理')
       return
     }
+
+    // 保存可能改变 SOURCE/TARGET 映射；必须以刚落库的 revision 重新取服务端 fidelity
+    // verdict，不能用保存前的快照放行 Preview。
+    await loadSourceReference()
+    if (
+      sourceError.value ||
+      !sourceReference.value ||
+      sourceReference.value.targetRevision !== editor.revision.value
+    ) {
+      ElMessage.warning('冻结原文检查尚未完成，请稍后重试')
+      return
+    }
+    if (sourceReference.value.exportBlocked) {
+      ElMessage.warning('请先处理冻结原文中的结构保真问题，再预览或导出')
+      if (isNarrowScreen.value) mobilePanel.value = 'source'
+      return
+    }
+
     previewComponentMounted.value = true
     workspaceMode.value = 'preview'
   } finally {
@@ -351,7 +419,8 @@ const closeInspector = () => {
 }
 
 watch(editor.revision, (revision) => {
-  if (revision !== null && sourceReference.value?.targetRevision !== revision) void loadSourceReference()
+  if (revision !== null && sourceReference.value?.targetRevision !== revision)
+    void loadSourceReference()
 })
 
 watch(bulletSuggest.activeBulletId, (bulletId) => {
@@ -451,7 +520,13 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
       @step="setReviewStep"
     >
       <template #actions>
-        <el-button v-if="workspaceMode === 'edit'" type="primary" :loading="previewPreparing" @click="openPreviewMode">
+        <el-button
+          v-if="workspaceMode === 'edit'"
+          type="primary"
+          :loading="previewPreparing"
+          :disabled="omissionBusy"
+          @click="openPreviewMode"
+        >
           {{ previewPreparing ? '准备预览…' : '预览 →' }}
         </el-button>
         <el-button v-else @click="setReviewStep('edit')">返回编辑</el-button>
@@ -482,16 +557,69 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
 
     <template v-else-if="editor.draft.value">
       <div v-if="workspaceMode === 'edit'" class="workspace-edit-mode">
-        <div v-if="isNarrowScreen" class="workspace-mobile-switch" role="tablist" aria-label="工作区内容">
-          <button id="workspace-tab-source" type="button" role="tab" aria-controls="workspace-panel-source" :aria-selected="mobilePanel === 'source'" :class="{ 'is-active': mobilePanel === 'source' }" @click="mobilePanel = 'source'; inspectorOpen = false">冻结原文</button>
-          <button id="workspace-tab-editor" type="button" role="tab" aria-controls="workspace-panel-editor" :aria-selected="mobilePanel === 'editor'" :class="{ 'is-active': mobilePanel === 'editor' }" @click="mobilePanel = 'editor'; inspectorOpen = false">当前简历</button>
-          <button id="workspace-tab-context" type="button" role="tab" aria-controls="workspace-panel-context" :aria-selected="mobilePanel === 'context'" :class="{ 'is-active': mobilePanel === 'context' }" @click="openInspector('requirements')">岗位 / AI</button>
+        <div
+          v-if="isNarrowScreen"
+          class="workspace-mobile-switch"
+          role="tablist"
+          aria-label="工作区内容"
+        >
+          <button
+            id="workspace-tab-source"
+            type="button"
+            role="tab"
+            aria-controls="workspace-panel-source"
+            :aria-selected="mobilePanel === 'source'"
+            :class="{ 'is-active': mobilePanel === 'source' }"
+            @click="mobilePanel = 'source'; inspectorOpen = false"
+          >
+            冻结原文
+          </button>
+          <button
+            id="workspace-tab-editor"
+            type="button"
+            role="tab"
+            aria-controls="workspace-panel-editor"
+            :aria-selected="mobilePanel === 'editor'"
+            :class="{ 'is-active': mobilePanel === 'editor' }"
+            @click="mobilePanel = 'editor'; inspectorOpen = false"
+          >
+            当前简历
+          </button>
+          <button
+            id="workspace-tab-context"
+            type="button"
+            role="tab"
+            aria-controls="workspace-panel-context"
+            :aria-selected="mobilePanel === 'context'"
+            :class="{ 'is-active': mobilePanel === 'context' }"
+            @click="openInspector('requirements')"
+          >
+            岗位 / AI
+          </button>
           <details class="workspace-mobile-more">
             <summary>更多</summary>
             <div class="workspace-more-menu">
-              <button type="button" :disabled="!editor.canUndo.value || editor.status.value === 'saving'" @click="editor.undo()">撤销</button>
-              <button type="button" :disabled="!editor.canRedo.value || editor.status.value === 'saving'" @click="editor.redo()">重做</button>
-              <button type="button" :disabled="editor.status.value === 'saving'" @click="confirmRestore">{{ restoring ? '正在恢复…' : '恢复优化前版本' }}</button>
+              <button
+                type="button"
+                :disabled="!editor.canUndo.value || editor.status.value === 'saving'"
+                @click="editor.undo()"
+              >
+                撤销
+              </button>
+              <button
+                type="button"
+                :disabled="!editor.canRedo.value || editor.status.value === 'saving'"
+                @click="editor.redo()"
+              >
+                重做
+              </button>
+              <button
+                type="button"
+                :disabled="editor.status.value === 'saving'"
+                @click="confirmRestore"
+              >
+                {{ restoring ? '正在恢复…' : '恢复优化前版本' }}
+              </button>
             </div>
           </details>
         </div>
@@ -507,19 +635,59 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
             role="tabpanel"
             aria-labelledby="workspace-tab-source"
             :selected-occurrence-ids="selectedSourceOccurrenceIds"
+            :omission-disabled-reason="omissionDisabledReason"
             @retry="loadSourceReference"
             @focus-target="focusTargetFromSource"
+            @omission-saved="handleOmissionSaved"
+            @omission-concurrent="handleOmissionConcurrent"
+            @omission-busy="omissionBusy = $event"
           />
 
-          <section v-show="!isNarrowScreen || mobilePanel === 'editor'" id="workspace-panel-editor" class="resume-stage" role="tabpanel" aria-labelledby="workspace-tab-editor" aria-label="当前结构化简历">
+          <section
+            v-show="!isNarrowScreen || mobilePanel === 'editor'"
+            id="workspace-panel-editor"
+            class="resume-stage"
+            role="tabpanel"
+            aria-labelledby="workspace-tab-editor"
+            aria-label="当前结构化简历"
+          >
             <div class="workspace-document-toolbar" aria-label="文档工具">
               <span class="document-toolbar-label">TARGET · 当前简历</span>
               <div class="document-toolbar-actions">
-                <button type="button" class="toolbar-button" :disabled="!editor.canUndo.value" @click="editor.undo()">撤销</button>
-                <button type="button" class="toolbar-button" :disabled="!editor.canRedo.value" @click="editor.redo()">重做</button>
-                <button type="button" class="toolbar-button" @click="openInspector('requirements')">岗位证据</button>
-                <button type="button" class="toolbar-button toolbar-button-accent" @click="openInspector('suggestions')">AI 建议</button>
-                <button type="button" class="toolbar-button toolbar-button-restore" :disabled="editor.status.value === 'saving'" @click="confirmRestore">{{ restoring ? '正在恢复…' : '恢复版本' }}</button>
+                <button
+                  type="button"
+                  class="toolbar-button"
+                  :disabled="!editor.canUndo.value"
+                  @click="editor.undo()"
+                >
+                  撤销
+                </button>
+                <button
+                  type="button"
+                  class="toolbar-button"
+                  :disabled="!editor.canRedo.value"
+                  @click="editor.redo()"
+                >
+                  重做
+                </button>
+                <button type="button" class="toolbar-button" @click="openInspector('requirements')">
+                  岗位证据
+                </button>
+                <button
+                  type="button"
+                  class="toolbar-button toolbar-button-accent"
+                  @click="openInspector('suggestions')"
+                >
+                  AI 建议
+                </button>
+                <button
+                  type="button"
+                  class="toolbar-button toolbar-button-restore"
+                  :disabled="editor.status.value === 'saving'"
+                  @click="confirmRestore"
+                >
+                  {{ restoring ? '正在恢复…' : '恢复版本' }}
+                </button>
               </div>
             </div>
             <div class="resume-stage-scroll">
@@ -539,13 +707,40 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
             </div>
           </section>
 
-          <aside v-if="inspectorOpen" v-show="!isNarrowScreen || mobilePanel === 'context'" id="workspace-panel-context" class="workspace-context-drawer" role="tabpanel" aria-labelledby="workspace-tab-context" aria-label="岗位证据与 AI 建议">
+          <aside
+            v-if="inspectorOpen"
+            v-show="!isNarrowScreen || mobilePanel === 'context'"
+            id="workspace-panel-context"
+            class="workspace-context-drawer"
+            role="tabpanel"
+            aria-labelledby="workspace-tab-context"
+            aria-label="岗位证据与 AI 建议"
+          >
             <header class="context-drawer-header">
               <div role="tablist" aria-label="临时上下文">
-                <button type="button" :class="{ 'is-active': inspectorMode === 'requirements' }" @click="inspectorMode = 'requirements'">岗位与证据</button>
-                <button type="button" :class="{ 'is-active': inspectorMode === 'suggestions' }" @click="inspectorMode = 'suggestions'">AI 建议</button>
+                <button
+                  type="button"
+                  :class="{ 'is-active': inspectorMode === 'requirements' }"
+                  @click="inspectorMode = 'requirements'"
+                >
+                  岗位与证据
+                </button>
+                <button
+                  type="button"
+                  :class="{ 'is-active': inspectorMode === 'suggestions' }"
+                  @click="inspectorMode = 'suggestions'"
+                >
+                  AI 建议
+                </button>
               </div>
-              <button type="button" class="context-close" aria-label="关闭临时上下文" @click="closeInspector">×</button>
+              <button
+                type="button"
+                class="context-close"
+                aria-label="关闭临时上下文"
+                @click="closeInspector"
+              >
+                ×
+              </button>
             </header>
             <WorkspaceRequirements
               v-if="inspectorMode === 'requirements'"
@@ -569,7 +764,11 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
         </div>
       </div>
 
-      <div v-if="previewComponentMounted" v-show="workspaceMode === 'preview'" class="workspace-preview-mode">
+      <div
+        v-if="previewComponentMounted"
+        v-show="workspaceMode === 'preview'"
+        class="workspace-preview-mode"
+      >
         <WorkspacePreviewExport
           :key="optimizationTaskId"
           :optimization-task-id="optimizationTaskId"
@@ -948,7 +1147,9 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
 }
 
 .resume-stage,
-.resume-stage-scroll { min-width: 0; }
+.resume-stage-scroll {
+  min-width: 0;
+}
 
 .workspace-context-drawer {
   position: absolute;
@@ -974,22 +1175,66 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
   padding: 6px 8px 6px 12px;
   border-bottom: 1px solid var(--app-border-strong);
 }
-.context-drawer-header > div { display: flex; gap: 4px; }
-.context-drawer-header button { min-height: 30px; border: 0; border-radius: 4px; padding: 0 9px; color: var(--app-text-muted); font: inherit; font-size: 11px; font-weight: 750; background: transparent; cursor: pointer; }
-.context-drawer-header button.is-active { color: var(--app-text); background: var(--app-bg-soft); }
-.context-drawer-header .context-close { padding: 0 10px; font-size: 20px; }
+.context-drawer-header > div {
+  display: flex;
+  gap: 4px;
+}
+.context-drawer-header button {
+  min-height: 30px;
+  border: 0;
+  border-radius: 4px;
+  padding: 0 9px;
+  color: var(--app-text-muted);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 750;
+  background: transparent;
+  cursor: pointer;
+}
+.context-drawer-header button.is-active {
+  color: var(--app-text);
+  background: var(--app-bg-soft);
+}
+.context-drawer-header .context-close {
+  padding: 0 10px;
+  font-size: 20px;
+}
 .workspace-context-drawer > .workspace-requirements,
-.workspace-context-drawer > :deep(.workspace-inspector) { height: 0; min-height: 0; flex: 1 1 0; }
-
-@media (max-width: 1119px) {
-  .workspace-mobile-switch { gap: 2px; }
-  .workspace-mobile-switch button { min-width: 0; padding: 0 8px; font-size: 10px; }
-  .workspace-layout,
-  .workspace-layout.is-inspector-open { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
-  .workspace-document-toolbar { min-height: 38px; padding: 0 var(--app-space-3); }
-  .workspace-context-drawer { position: static; width: auto; height: 100%; border: 0; border-radius: 0; box-shadow: none; }
-  .workspace-context-drawer > .workspace-requirements,
-  .workspace-context-drawer > .workspace-requirements :deep(.requirements-rail) { height: 100%; }
+.workspace-context-drawer > :deep(.workspace-inspector) {
+  height: 0;
+  min-height: 0;
+  flex: 1 1 0;
 }
 
+@media (max-width: 1119px) {
+  .workspace-mobile-switch {
+    gap: 2px;
+  }
+  .workspace-mobile-switch button {
+    min-width: 0;
+    padding: 0 8px;
+    font-size: 10px;
+  }
+  .workspace-layout,
+  .workspace-layout.is-inspector-open {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+  }
+  .workspace-document-toolbar {
+    min-height: 38px;
+    padding: 0 var(--app-space-3);
+  }
+  .workspace-context-drawer {
+    position: static;
+    width: auto;
+    height: 100%;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+  .workspace-context-drawer > .workspace-requirements,
+  .workspace-context-drawer > .workspace-requirements :deep(.requirements-rail) {
+    height: 100%;
+  }
+}
 </style>

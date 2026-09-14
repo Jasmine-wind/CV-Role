@@ -2,6 +2,7 @@ package com.winter.airesumeoptimizer.module.workspace.controller;
 
 import com.winter.airesumeoptimizer.common.result.Result;
 import com.winter.airesumeoptimizer.module.workspace.dto.WorkspaceContentSaveRequestDTO;
+import com.winter.airesumeoptimizer.module.workspace.dto.WorkspaceSourceOmissionRequestDTO;
 import com.winter.airesumeoptimizer.module.workspace.service.WorkspaceContentService;
 import com.winter.airesumeoptimizer.module.workspace.vo.WorkspaceContentSaveResultVO;
 import com.winter.airesumeoptimizer.module.workspace.vo.WorkspaceContentVO;
@@ -90,6 +91,28 @@ public class WorkspaceContentController {
         AuthenticatedUser user = (AuthenticatedUser) authentication.getPrincipal();
         return Result.success(
                 workspaceContentService.saveContent(user.getUserId(), optimizationTaskId, request));
+    }
+
+    @PostMapping("/{optimizationTaskId}/source-omissions/confirm")
+    @Operation(summary = "确认 intentional omission", description = "按服务端冻结边界校验 manifest、当前 UNMAPPED 状态与 omission eligibility，并以 CAS 保存")
+    public Result<WorkspaceContentSaveResultVO> confirmSourceOmissions(
+            @PathVariable @Positive(message = "优化任务 ID 必须大于 0") Long optimizationTaskId,
+            @Valid @RequestBody WorkspaceSourceOmissionRequestDTO request,
+            Authentication authentication) {
+        AuthenticatedUser user = (AuthenticatedUser) authentication.getPrincipal();
+        return Result.success(workspaceContentService.confirmSourceOmissions(
+                user.getUserId(), optimizationTaskId, request));
+    }
+
+    @PostMapping("/{optimizationTaskId}/source-omissions/unconfirm")
+    @Operation(summary = "撤销 intentional omission", description = "只撤销任务 TARGET root 中的服务端确认，并以 CAS 保存")
+    public Result<WorkspaceContentSaveResultVO> unconfirmSourceOmissions(
+            @PathVariable @Positive(message = "优化任务 ID 必须大于 0") Long optimizationTaskId,
+            @Valid @RequestBody WorkspaceSourceOmissionRequestDTO request,
+            Authentication authentication) {
+        AuthenticatedUser user = (AuthenticatedUser) authentication.getPrincipal();
+        return Result.success(workspaceContentService.unconfirmSourceOmissions(
+                user.getUserId(), optimizationTaskId, request));
     }
 
     @PostMapping("/{optimizationTaskId}/restore-pre-optimization")

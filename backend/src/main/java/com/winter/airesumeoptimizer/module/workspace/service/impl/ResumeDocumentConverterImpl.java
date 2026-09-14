@@ -54,7 +54,7 @@ public class ResumeDocumentConverterImpl implements ResumeDocumentConverter {
     private static final int BULLET_MAX_LENGTH = 4000;
     private static final Set<String> PROVENANCE_FIELDS = Set.of(
             "sourceRef", "sourceOccurrenceIds", "sourceOccurrenceTexts",
-            "sourceOccurrencePrimaryIds", "sourceOccurrenceRefs", "fieldSourceRefs",
+            "sourceOccurrencePrimaryIds", "sourceOccurrenceRefs", "confirmedSourceOmissionIds", "fieldSourceRefs",
             "techStackSourceRefs", "skillItemSourceRefs", "skillDescriptionSourceRefs");
 
     private static final Pattern EMAIL_VALUE = Pattern.compile("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$");
@@ -96,6 +96,7 @@ public class ResumeDocumentConverterImpl implements ResumeDocumentConverter {
                 .sourceOccurrenceTexts(copySourceOccurrenceTexts(document.getSourceOccurrenceTexts()))
                 .sourceOccurrencePrimaryIds(copySourceOccurrenceTexts(document.getSourceOccurrencePrimaryIds()))
                 .sourceOccurrenceRefs(copySourceOccurrenceRefs(document.getSourceOccurrenceRefs()))
+                .confirmedSourceOmissionIds(copyStrings(document.getConfirmedSourceOmissionIds()))
                 .basics(normalizeBasics(document.getBasics(), idAllocator))
                 .sections(normalizeSections(document.getSections(), idAllocator))
                 .build();
@@ -114,10 +115,13 @@ public class ResumeDocumentConverterImpl implements ResumeDocumentConverter {
         FrozenNodes frozen = frozenNodes(frozenSource);
 
         restoreRootProvenance(candidate, frozenSource);
+        // Intentional omission is task-local server state. A normal PUT cannot add/remove it.
+        candidate.setConfirmedSourceOmissionIds(copyStrings(currentTarget.getConfirmedSourceOmissionIds()));
         restoreBasicsProvenance(candidate.getBasics(), frozenSource.getBasics());
         for (ResumeDocumentContactDTO contact : safeList(candidate.getBasics() == null
                 ? null : candidate.getBasics().getContacts())) {
             NodeLocation contactLocation = new NodeLocation("CONTACT", "BASICS");
+            rejectFrozenIdResurrection(contact.getId(), contactLocation, currentTopology, frozen.topology());
             if (existingAt(contact.getId(), contactLocation, currentTopology)
                     && frozenAt(contact.getId(), contactLocation, frozen.topology())) {
                 restoreContactProvenance(contact, frozen.contacts().get(contact.getId()));
@@ -125,6 +129,7 @@ public class ResumeDocumentConverterImpl implements ResumeDocumentConverter {
         }
         for (ResumeDocumentSectionDTO section : safeList(candidate.getSections())) {
             NodeLocation sectionLocation = new NodeLocation("SECTION", "ROOT:" + section.getKind());
+            rejectFrozenIdResurrection(section.getId(), sectionLocation, currentTopology, frozen.topology());
             boolean existingSection = existingAt(section.getId(), sectionLocation, currentTopology);
             ResumeDocumentSectionDTO frozenSection = existingSection
                     && frozenAt(section.getId(), sectionLocation, frozen.topology())
@@ -132,6 +137,7 @@ public class ResumeDocumentConverterImpl implements ResumeDocumentConverter {
             restoreSectionProvenance(section, frozenSection);
             for (ResumeDocumentEntryDTO entry : safeList(section.getEntries())) {
                 NodeLocation entryLocation = new NodeLocation("ENTRY", "SECTION:" + section.getId());
+                rejectFrozenIdResurrection(entry.getId(), entryLocation, currentTopology, frozen.topology());
                 boolean existingEntry = existingAt(entry.getId(), entryLocation, currentTopology);
                 ResumeDocumentEntryDTO frozenEntry = existingEntry
                         && frozenAt(entry.getId(), entryLocation, frozen.topology())
@@ -140,6 +146,7 @@ public class ResumeDocumentConverterImpl implements ResumeDocumentConverter {
                 for (ResumeDocumentBulletDTO bullet : safeList(entry.getBullets())) {
                     NodeLocation bulletLocation = new NodeLocation(
                             "BULLET", "SECTION:" + section.getId() + "/ENTRY:" + entry.getId());
+                    rejectFrozenIdResurrection(bullet.getId(), bulletLocation, currentTopology, frozen.topology());
                     if (existingAt(bullet.getId(), bulletLocation, currentTopology)
                             && frozenAt(bullet.getId(), bulletLocation, frozen.topology())) {
                         restoreBulletProvenance(bullet, frozen.bullets().get(bullet.getId()));
@@ -257,6 +264,18 @@ public class ResumeDocumentConverterImpl implements ResumeDocumentConverter {
         return new FrozenNodes(contacts, sections, entries, bullets, topology(source));
     }
 
+    private void rejectFrozenIdResurrection(
+            String id,
+            NodeLocation expected,
+            Map<String, NodeLocation> currentTopology,
+            Map<String, NodeLocation> frozenTopology) {
+        if (id == null || id.isBlank()) return;
+        NodeLocation frozen = frozenTopology.get(id);
+        if (frozen != null && frozen.equals(expected) && !currentTopology.containsKey(id)) {
+            throw new BusinessException(400, "已删除的来源节点不能复用原 ID，请恢复优化前版本后重试");
+        }
+    }
+
     private void restoreRootProvenance(ResumeDocumentDTO target, ResumeDocumentDTO source) {
         target.setSourceRef(copySourceRef(source.getSourceRef()));
         target.setSourceOccurrenceIds(copyStrings(source.getSourceOccurrenceIds()));
@@ -354,6 +373,8 @@ public class ResumeDocumentConverterImpl implements ResumeDocumentConverter {
                 .sourceOccurrenceTexts(readSourceOccurrenceTexts(root.path("sourceOccurrenceTexts")))
                 .sourceOccurrencePrimaryIds(readSourceOccurrenceTexts(root.path("sourceOccurrencePrimaryIds")))
                 .sourceOccurrenceRefs(readSourceOccurrenceRefs(root.path("sourceOccurrenceRefs")))
+                .confirmedSourceOmissionIds(readStringList(root.path("confirmedSourceOmissionIds"),
+                        "确认省略 occurrence 格式不正确，请重新解析"))
                 .basics(upgradeBasics(root))
                 .sections(upgradeSections(root.path("sections")))
                 .build();

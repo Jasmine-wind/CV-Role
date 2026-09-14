@@ -43,6 +43,40 @@ class WorkspaceSourceReferenceAssemblerImplTest {
     }
 
     @Test
+    void reportsMergedLineageAndComparesTargetTextWithTheWholeFrozenSpan() {
+        ResumeDocumentDTO source = document(List.of("occ-heading", "occ-a", "occ-b"),
+                Map.of("occ-heading", "个人总结", "occ-a", "重视系统稳定", "occ-b", "性与可维护性"),
+                List.of(bullet("b-1", "重视系统稳定性与可维护性", List.of("occ-a", "occ-b"))));
+        ResumeDocumentDTO unchanged = document(List.of(), Map.of(),
+                List.of(bullet("b-1", "重视系统稳定性与可维护性", List.of("occ-a", "occ-b"))));
+        ResumeDocumentDTO changed = document(List.of(), Map.of(),
+                List.of(bullet("b-1", "重新编写的个人总结", List.of("occ-a", "occ-b"))));
+
+        WorkspaceSourceReferenceVO unchangedResult = assembler.assemble(
+                1L, 2L, 3L, 1L, "resume.pdf", true, source, unchanged);
+        WorkspaceSourceReferenceVO changedResult = assembler.assemble(
+                1L, 2L, 3L, 2L, "resume.pdf", true, source, changed);
+
+        assertThat(unchangedResult.mappings()).filteredOn(mapping -> "b-1".equals(mapping.bulletId()))
+                .singleElement().satisfies(mapping -> {
+                    assertThat(mapping.status()).isEqualTo(WorkspaceSourceMappingStatus.MERGED);
+                    assertThat(mapping.textChanged()).isFalse();
+                });
+        assertThat(changedResult.mappings()).filteredOn(mapping -> "b-1".equals(mapping.bulletId()))
+                .singleElement().satisfies(mapping -> {
+                    assertThat(mapping.status()).isEqualTo(WorkspaceSourceMappingStatus.MERGED);
+                    assertThat(mapping.textChanged()).isTrue();
+                });
+        assertThat(unchangedResult.sourceBlocks())
+                .filteredOn(block -> block.occurrenceIds().contains("occ-a")
+                        || block.occurrenceIds().contains("occ-b"))
+                .allSatisfy(block -> {
+                    assertThat(block.status()).isEqualTo(WorkspaceSourceMappingStatus.MERGED);
+                    assertThat(block.reliable()).isTrue();
+                });
+    }
+
+    @Test
     void exposesFrozenOccurrenceGeometryWithoutInferringItFromTargetContent() {
         ResumeDocumentDTO source = document(List.of("occ-heading", "occ-body"),
                 Map.of("occ-heading", "项目经历", "occ-body", "构建 OmniGateway"),
@@ -178,6 +212,156 @@ class WorkspaceSourceReferenceAssemblerImplTest {
     }
 
     @Test
+    void confirmedIntentionalOmissionSuppressesOnlyItsUnmappedSourceBlock() {
+        ResumeDocumentDTO source = document(List.of("occ-heading", "occ-body"),
+                Map.of("occ-heading", "项目经历", "occ-body", "可主动省略的职责"),
+                List.of(bullet("b-1", "可主动省略的职责", List.of("occ-body"))));
+        source.getSections().get(0).getEntries().get(0).setSourceOccurrenceIds(List.of("occ-heading"));
+        ResumeDocumentDTO target = document(List.of(), Map.of(), List.of());
+        target.getSections().get(0).getEntries().get(0).setSourceOccurrenceIds(List.of("occ-heading"));
+        target.setConfirmedSourceOmissionIds(List.of("occ-body"));
+
+        WorkspaceSourceReferenceVO result = assembler.assemble(1L, 2L, 3L, 4L,
+                "resume.pdf", true, source, target);
+
+        assertThat(result.sourceBlocks()).filteredOn(block -> "occ-body".equals(block.id()))
+                .singleElement().satisfies(block -> {
+                    assertThat(block.status()).isEqualTo(WorkspaceSourceMappingStatus.UNMAPPED);
+                    assertThat(block.sourceNodeType()).isEqualTo("BULLET");
+                    assertThat(block.sourceSectionKind()).isEqualTo("PROJECT");
+                    assertThat(block.sourceSectionId()).isEqualTo("s-1");
+                    assertThat(block.sourceEntryId()).isEqualTo("e-1");
+                    assertThat(block.sourceBulletId()).isEqualTo("b-1");
+                    assertThat(block.omissionEligible()).isTrue();
+                    assertThat(block.omissionConfirmed()).isTrue();
+                });
+        assertThat(result.fidelityIssues()).extracting(WorkspaceSourceReferenceVO.FidelityIssue::code)
+                .doesNotContain("SOURCE_CONTENT_UNMAPPED");
+        assertThat(result.confirmedOmissionCount()).isEqualTo(1);
+        assertThat(result.exportBlocked()).isFalse();
+    }
+
+    @Test
+    void deletingADeepChildDoesNotRemainMappedThroughAncestorAggregateProvenance() {
+        ResumeDocumentDTO source = document(List.of("occ-heading", "occ-body"),
+                Map.of("occ-heading", "项目经历", "occ-body", "可主动省略的职责"),
+                List.of(bullet("b-1", "可主动省略的职责", List.of("occ-body"))));
+        source.getSections().get(0).getEntries().get(0)
+                .setSourceOccurrenceIds(List.of("occ-heading", "occ-body"));
+        ResumeDocumentDTO target = document(List.of(), Map.of(), List.of());
+        target.getSections().get(0).getEntries().get(0)
+                .setSourceOccurrenceIds(List.of("occ-heading", "occ-body"));
+
+        WorkspaceSourceReferenceVO result = assembler.assemble(
+                1L, 2L, 3L, 1L, "resume.pdf", true, source, target);
+
+        assertThat(result.sourceBlocks()).filteredOn(block -> "occ-body".equals(block.id()))
+                .singleElement().satisfies(block -> {
+                    assertThat(block.status()).isEqualTo(WorkspaceSourceMappingStatus.UNMAPPED);
+                    assertThat(block.targetNodeIds()).isEmpty();
+                    assertThat(block.omissionEligible()).isTrue();
+                });
+        assertThat(result.fidelityIssues()).extracting(WorkspaceSourceReferenceVO.FidelityIssue::code)
+                .contains("SOURCE_CONTENT_UNMAPPED");
+        assertThat(result.exportBlocked()).isTrue();
+    }
+
+    @Test
+    void forgedConfirmationCannotBypassAmbiguousMapping() {
+        ResumeDocumentDTO source = document(List.of("occ-heading", "occ-body"),
+                Map.of("occ-heading", "项目经历", "occ-body", "原始职责"),
+                List.of(bullet("b-1", "原始职责", List.of("occ-body"))));
+        source.getSections().get(0).getEntries().get(0).setSourceOccurrenceIds(List.of("occ-heading"));
+        ResumeDocumentDTO target = document(List.of(), Map.of(),
+                List.of(bullet("new-bullet", "错误归属", List.of("occ-body"))));
+        target.getSections().get(0).getEntries().get(0).setSourceOccurrenceIds(List.of("occ-heading"));
+        target.setConfirmedSourceOmissionIds(List.of("occ-body"));
+
+        WorkspaceSourceReferenceVO result = assembler.assemble(1L, 2L, 3L, 1L,
+                "resume.pdf", true, source, target);
+
+        assertThat(result.sourceBlocks()).filteredOn(block -> "occ-body".equals(block.id()))
+                .singleElement().satisfies(block -> {
+                    assertThat(block.omissionEligible()).isFalse();
+                    assertThat(block.omissionConfirmed()).isFalse();
+                });
+        assertThat(result.fidelityIssues()).extracting(WorkspaceSourceReferenceVO.FidelityIssue::code)
+                .contains("AMBIGUOUS_MAPPING", "SOURCE_CONTENT_UNMAPPED");
+        assertThat(result.exportBlocked()).isTrue();
+    }
+
+    @Test
+    void projectBoundaryIsRestoredUnlessEveryMeaningfulOccurrenceOfMissingEntryIsConfirmed() {
+        ResumeDocumentDTO source = document(List.of(
+                        "occ-heading", "occ-p1", "occ-p2", "occ-p2-field", "occ-p2-bullet"),
+                Map.of("occ-heading", "项目经历", "occ-p1", "项目一", "occ-p2", "项目二",
+                        "occ-p2-field", "项目负责人", "occ-p2-bullet", "项目二职责"), List.of());
+        ResumeDocumentEntryDTO first = entry("e-1", "项目一", List.of());
+        first.setSourceOccurrenceIds(List.of("occ-p1"));
+        ResumeDocumentEntryDTO second = entry("e-2", "项目二",
+                List.of(bullet("b-2", "项目二职责", List.of("occ-p2-bullet"))));
+        second.setSourceOccurrenceIds(List.of("occ-p2"));
+        second.setFieldSourceRefs(Map.of("role", ResumeSourceRefDTO.builder()
+                .text("项目负责人").sourceOccurrenceIds(List.of("occ-p2-field")).build()));
+        source.getSections().get(0).setEntries(List.of(first, second));
+
+        ResumeDocumentDTO target = document(List.of(), Map.of(), List.of());
+        target.getSections().get(0).setEntries(List.of(first));
+        WorkspaceSourceReferenceVO unconfirmed = assembler.assemble(
+                1L, 2L, 3L, 1L, "resume.pdf", true, source, target);
+        assertThat(unconfirmed.fidelityIssues()).extracting(WorkspaceSourceReferenceVO.FidelityIssue::code)
+                .contains("PROJECT_BOUNDARY_LOST", "SOURCE_CONTENT_UNMAPPED");
+
+        target.setConfirmedSourceOmissionIds(List.of("occ-p2"));
+        WorkspaceSourceReferenceVO partiallyConfirmed = assembler.assemble(
+                1L, 2L, 3L, 1L, "resume.pdf", true, source, target);
+        assertThat(partiallyConfirmed.fidelityIssues()).extracting(WorkspaceSourceReferenceVO.FidelityIssue::code)
+                .contains("PROJECT_BOUNDARY_LOST", "SOURCE_CONTENT_UNMAPPED");
+
+        target.setConfirmedSourceOmissionIds(List.of("occ-p2", "occ-p2-bullet"));
+        WorkspaceSourceReferenceVO fieldUnconfirmed = assembler.assemble(
+                1L, 2L, 3L, 1L, "resume.pdf", true, source, target);
+        assertThat(fieldUnconfirmed.fidelityIssues()).extracting(WorkspaceSourceReferenceVO.FidelityIssue::code)
+                .contains("PROJECT_BOUNDARY_LOST", "SOURCE_CONTENT_UNMAPPED");
+
+        target.setConfirmedSourceOmissionIds(List.of("occ-p2", "occ-p2-field", "occ-p2-bullet"));
+        WorkspaceSourceReferenceVO confirmed = assembler.assemble(
+                1L, 2L, 3L, 1L, "resume.pdf", true, source, target);
+        assertThat(confirmed.fidelityIssues()).extracting(WorkspaceSourceReferenceVO.FidelityIssue::code)
+                .doesNotContain("PROJECT_BOUNDARY_LOST", "SOURCE_CONTENT_UNMAPPED");
+        assertThat(confirmed.exportBlocked()).isFalse();
+    }
+
+    @Test
+    void silentProjectMergeCannotBeDisguisedAsConfirmedOmission() {
+        ResumeDocumentDTO source = document(List.of("occ-heading", "occ-p1", "occ-p2"),
+                Map.of("occ-heading", "项目经历", "occ-p1", "项目一", "occ-p2", "项目二"), List.of());
+        ResumeDocumentEntryDTO first = entry("e-1", "项目一", List.of());
+        first.setSourceOccurrenceIds(List.of("occ-p1"));
+        ResumeDocumentEntryDTO second = entry("e-2", "项目二", List.of());
+        second.setSourceOccurrenceIds(List.of("occ-p2"));
+        source.getSections().get(0).setEntries(List.of(first, second));
+
+        ResumeDocumentDTO target = document(List.of(), Map.of(), List.of());
+        ResumeDocumentEntryDTO merged = entry("e-1", "项目一 / 项目二", List.of());
+        merged.setSourceOccurrenceIds(List.of("occ-p1", "occ-p2"));
+        target.getSections().get(0).setEntries(List.of(merged));
+        target.setConfirmedSourceOmissionIds(List.of("occ-p2"));
+
+        WorkspaceSourceReferenceVO result = assembler.assemble(
+                1L, 2L, 3L, 1L, "resume.pdf", true, source, target);
+
+        assertThat(result.fidelityIssues()).extracting(WorkspaceSourceReferenceVO.FidelityIssue::code)
+                .contains("AMBIGUOUS_MAPPING", "SOURCE_CONTENT_UNMAPPED", "PROJECT_BOUNDARY_LOST");
+        assertThat(result.sourceBlocks()).filteredOn(block -> "occ-p2".equals(block.id()))
+                .singleElement().satisfies(block -> {
+                    assertThat(block.omissionEligible()).isFalse();
+                    assertThat(block.omissionConfirmed()).isFalse();
+                });
+        assertThat(result.exportBlocked()).isTrue();
+    }
+
+    @Test
     void duplicateUseOfOneOccurrenceIsSplitAndBlocksDuplicateMapping() {
         ResumeDocumentDTO source = document(List.of("occ-heading", "occ-body"),
                 Map.of("occ-heading", "项目经历", "occ-body", "同一职责"),
@@ -187,6 +371,7 @@ class WorkspaceSourceReferenceAssemblerImplTest {
         ResumeDocumentDTO target = document(List.of(), Map.of(), List.of(
                 bullet("b-1", "同一职责", List.of("occ-body")),
                 bullet("b-2", "同一职责", List.of("occ-body"))));
+        target.setConfirmedSourceOmissionIds(List.of("occ-body"));
 
         WorkspaceSourceReferenceVO result = assembler.assemble(1L, 2L, 3L, 1L,
                 "resume.pdf", true, source, target);
@@ -196,7 +381,56 @@ class WorkspaceSourceReferenceAssemblerImplTest {
                 .containsOnly(WorkspaceSourceMappingStatus.SPLIT);
         assertThat(result.fidelityIssues()).extracting(WorkspaceSourceReferenceVO.FidelityIssue::code)
                 .contains("DUPLICATE_MAPPING");
+        assertThat(result.sourceBlocks()).filteredOn(block -> "occ-body".equals(block.id()))
+                .singleElement().satisfies(block -> {
+                    assertThat(block.omissionEligible()).isFalse();
+                    assertThat(block.omissionConfirmed()).isFalse();
+                });
         assertThat(result.exportBlocked()).isTrue();
+    }
+
+    @Test
+    void aliasGroupMustBeCompleteAndManifestMustHaveCanonicalRoots() {
+        ResumeDocumentDTO source = document(List.of("occ-heading", "occ-body", "occ-body-alias"),
+                Map.of("occ-heading", "项目经历", "occ-body", "同一职责", "occ-body-alias", "同一职责"),
+                List.of(bullet("b-1", "同一职责", List.of("occ-body", "occ-body-alias"))));
+        source.getSourceOccurrencePrimaryIds().put("occ-body-alias", "occ-body");
+        ResumeDocumentDTO target = document(List.of(), Map.of(), List.of());
+        target.getSections().get(0).getEntries().get(0).setSourceOccurrenceIds(List.of("occ-heading"));
+        target.setConfirmedSourceOmissionIds(List.of("occ-body-alias"));
+
+        WorkspaceSourceReferenceVO partial = assembler.assemble(
+                1L, 2L, 3L, 1L, "resume.pdf", true, source, target);
+        assertThat(partial.sourceBlocks()).filteredOn(block -> "occ-body".equals(block.id()))
+                .singleElement().satisfies(block -> assertThat(block.omissionConfirmed()).isFalse());
+        assertThat(partial.fidelityIssues()).extracting(WorkspaceSourceReferenceVO.FidelityIssue::code)
+                .contains("SOURCE_CONTENT_UNMAPPED");
+
+        source.getSourceOccurrencePrimaryIds().remove("occ-body-alias");
+        WorkspaceSourceReferenceVO invalid = assembler.assemble(
+                1L, 2L, 3L, 1L, "resume.pdf", true, source, target);
+        assertThat(invalid.fidelityIssues()).extracting(WorkspaceSourceReferenceVO.FidelityIssue::code)
+                .contains("SOURCE_MANIFEST_INVALID");
+        assertThat(invalid.exportBlocked()).isTrue();
+    }
+
+    @Test
+    void sectionKindIsPartOfAuthenticatedLineage() {
+        ResumeDocumentDTO source = document(List.of("occ-heading", "occ-body"),
+                Map.of("occ-heading", "项目经历", "occ-body", "原始职责"),
+                List.of(bullet("b-1", "原始职责", List.of("occ-body"))));
+        ResumeDocumentDTO target = document(List.of(), Map.of(),
+                List.of(bullet("b-1", "原始职责", List.of("occ-body"))));
+        target.getSections().get(0).setKind("EXPERIENCE");
+
+        WorkspaceSourceReferenceVO result = assembler.assemble(
+                1L, 2L, 3L, 1L, "resume.pdf", true, source, target);
+
+        assertThat(result.mappings()).filteredOn(mapping -> "b-1".equals(mapping.bulletId()))
+                .extracting(WorkspaceSourceReferenceVO.TargetMapping::status)
+                .containsExactly(WorkspaceSourceMappingStatus.AMBIGUOUS);
+        assertThat(result.fidelityIssues()).extracting(WorkspaceSourceReferenceVO.FidelityIssue::code)
+                .contains("AMBIGUOUS_MAPPING");
     }
 
     private static ResumeDocumentEntryDTO entry(

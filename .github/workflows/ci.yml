@@ -141,8 +141,9 @@ jobs:
 
       - name: Validate ops scripts
         run: |
-          bash -n scripts/ops/*.sh
+          bash -n scripts/ops/*.sh scripts/ops/tests/*.sh
           bash -n deploy/nginx/entrypoint/40-configure-production.sh
+          bash scripts/ops/tests/smoke-check.test.sh
 
       - name: Render local Compose configuration
         run: docker compose config >/dev/null
@@ -298,29 +299,56 @@ jobs:
             return 1
           }
 
+          wait_backend_recovery() {
+            for attempt in {1..90}; do
+              if "${COMPOSE[@]}" exec -T backend sh -ec \
+                  'curl -fsS --max-time 5 http://localhost:8080/actuator/health/liveness >/dev/null && curl -fsS --max-time 5 http://localhost:8080/actuator/health/readiness >/dev/null' \
+                  2>/dev/null; then
+                echo 'backend: liveness/readiness probes passed'
+                return 0
+              fi
+              sleep 2
+            done
+            echo 'Timed out waiting for backend liveness/readiness recovery' >&2
+            for probe in liveness readiness; do
+              echo "--- backend $probe response (first 2 KiB) ---" >&2
+              "${COMPOSE[@]}" exec -T backend curl --silent --show-error --include --max-time 5 \
+                "http://localhost:8080/actuator/health/$probe" 2>&1 | head -c 2048 >&2 || true
+              printf '\n' >&2
+            done
+            return 1
+          }
+
           wait_core() {
             wait_healthy postgres
             wait_healthy redis
             wait_healthy minio
             wait_completed minio-init
             wait_healthy backend
+            wait_backend_recovery
             wait_healthy nginx
           }
 
           verify_redis_auth() {
-            local response
-            response=$("${COMPOSE[@]}" exec -T redis sh -ec \
-              'export REDISCLI_AUTH="$REDIS_PASSWORD"; redis-cli --no-auth-warning ping')
+            local expected_password='ci Redis $runtime; password with spaces'
+            local response wrong_response wrong_status
+            response=$("${COMPOSE[@]}" exec -T -e REDISCLI_AUTH="$expected_password" \
+              redis redis-cli --no-auth-warning ping)
             if [[ "$response" != PONG ]]; then
-              echo 'Redis rejected the configured production password' >&2
+              echo 'Redis rejected the independently supplied production password' >&2
               return 1
             fi
-            if "${COMPOSE[@]}" exec -T -e REDISCLI_AUTH=definitely-wrong-password \
-                redis redis-cli --no-auth-warning ping 2>/dev/null | grep -qx PONG; then
-              echo 'Redis unexpectedly accepted an incorrect password' >&2
+            set +e
+            wrong_response=$("${COMPOSE[@]}" exec -T -e REDISCLI_AUTH=definitely-wrong-password \
+              redis redis-cli --no-auth-warning ping 2>&1)
+            wrong_status=$?
+            set -e
+            if [[ "$wrong_response" == PONG ]] ||
+                [[ "$wrong_response" != *WRONGPASS* && "$wrong_response" != *"AUTH failed"* && "$wrong_response" != *NOAUTH* ]]; then
+              echo "Redis wrong-password assertion was inconclusive (status=$wrong_status): $wrong_response" >&2
               return 1
             fi
-            echo 'Redis authentication accepts the configured password and rejects an incorrect password'
+            echo 'Redis authentication accepts the exact configured password and rejects an incorrect password'
           }
 
           smoke() {
@@ -342,6 +370,22 @@ jobs:
               'mc alias set local http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null && mc cp /tmp/runtime-marker.txt "local/$MINIO_BUCKET/runtime-restart-marker.txt" >/dev/null'
           }
 
+          assert_object_absent() {
+            local matches
+            # `mc find` exits non-zero for connectivity/authentication/bucket failures,
+            # while a successful empty search proves the marker itself is absent.
+            matches=$(docker run --rm --network "${OPS_PROJECT}_default" \
+              -e MINIO_ROOT_USER=cv-role-ci-minio \
+              -e MINIO_ROOT_PASSWORD=ci-minio-placeholder \
+              -e MINIO_BUCKET=cv-role-ops-ci \
+              --entrypoint /bin/sh "$MC_IMAGE" -c \
+              'mc alias set local http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null && mc find "local/$MINIO_BUCKET" --maxdepth 1 --name runtime-restart-marker.txt --print "{base}"')
+            if [[ -n "$matches" ]]; then
+              echo 'MinIO marker unexpectedly exists before its first write' >&2
+              return 1
+            fi
+          }
+
           object_sha() {
             docker run --rm --network "${OPS_PROJECT}_default" \
               -e MINIO_ROOT_USER=cv-role-ci-minio \
@@ -357,18 +401,39 @@ jobs:
           verify_redis_auth
           smoke
 
+          assert_object_absent
+          echo 'Restarting MinIO before creating the object marker'
+          "${COMPOSE[@]}" restart minio
+          wait_healthy minio
+          wait_healthy backend
+          wait_backend_recovery
+          wait_healthy nginx
+          smoke
+          assert_object_absent
+
           "${COMPOSE[@]}" exec -T postgres sh -c \
             "psql -v ON_ERROR_STOP=1 -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -c \"CREATE TABLE IF NOT EXISTS ops_ci_restart_marker (id integer PRIMARY KEY, marker text NOT NULL); INSERT INTO ops_ci_restart_marker (id, marker) VALUES (1, '$DB_MARKER') ON CONFLICT (id) DO UPDATE SET marker = EXCLUDED.marker;\""
           put_object_marker
           EXPECTED_OBJECT_SHA=$(sha256sum "$OBJECT_FILE" | cut -d ' ' -f1)
           [[ "$(object_sha)" == "$EXPECTED_OBJECT_SHA" ]]
 
+          echo 'Restarting PostgreSQL only'
+          "${COMPOSE[@]}" restart postgres
+          wait_healthy postgres
+          wait_healthy backend
+          wait_backend_recovery
+          wait_healthy nginx
+          smoke
+          [[ "$(db_marker)" == "$DB_MARKER" ]]
+
           echo 'Restarting backend only'
           "${COMPOSE[@]}" restart backend
           wait_healthy backend
+          wait_backend_recovery
           wait_healthy nginx
           smoke
-          if "${COMPOSE[@]}" logs --no-color backend | grep -Eiq 'flyway.*(error|fail)|migration.*(error|fail)'; then
+          backend_logs=$("${COMPOSE[@]}" logs --no-color backend)
+          if grep -Eiq 'flyway.*(error|fail)|migration.*(error|fail)' <<<"$backend_logs"; then
             echo 'Backend logs contain a Flyway/migration failure' >&2
             exit 1
           fi
@@ -378,6 +443,7 @@ jobs:
           wait_healthy redis
           verify_redis_auth
           wait_healthy backend
+          wait_backend_recovery
           wait_healthy nginx
           smoke
 
@@ -390,6 +456,7 @@ jobs:
           "${COMPOSE[@]}" restart minio
           wait_healthy minio
           wait_healthy backend
+          wait_backend_recovery
           wait_healthy nginx
           [[ "$(object_sha)" == "$EXPECTED_OBJECT_SHA" ]]
           smoke

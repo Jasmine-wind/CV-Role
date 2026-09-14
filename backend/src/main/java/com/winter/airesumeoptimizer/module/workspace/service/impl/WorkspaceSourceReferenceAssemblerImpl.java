@@ -47,12 +47,20 @@ public class WorkspaceSourceReferenceAssemblerImpl implements WorkspaceSourceRef
             ResumeDocumentDTO target) {
         List<FidelityIssue> issues = new ArrayList<>();
         Manifest manifest = manifest(source, issues);
+        ConfirmationState confirmations = confirmations(target, manifest, issues);
         List<Node> sourceNodes = flatten(source);
         List<Node> nodes = flatten(target);
         Map<String, Node> authenticatedNodes = sourceNodes.stream()
                 .collect(Collectors.toMap(WorkspaceSourceReferenceAssemblerImpl::identity, Function.identity(), (left, right) -> left));
+        FrozenOwnership sourceOwnership = frozenOwners(manifest, sourceNodes);
+        if (!sourceOwnership.valid()) {
+            issues.add(issue("SOURCE_MANIFEST_INVALID", BLOCKER,
+                    "冻结原文归属关系不完整，无法安全建立定位关系。", List.of(), List.of()));
+        }
+        Map<String, FrozenOwner> sourceOwners = sourceOwnership.owners();
 
-        Map<String, List<Node>> sourceTargets = deepestTargets(manifest, nodes, authenticatedNodes);
+        Map<String, List<Node>> sourceTargets = deepestTargets(
+                manifest, nodes, authenticatedNodes, sourceOwners);
         List<TargetMapping> mappings = new ArrayList<>();
         for (Node node : nodes) {
             Resolution resolution = resolve(node.occurrenceIds(), manifest);
@@ -78,11 +86,16 @@ public class WorkspaceSourceReferenceAssemblerImpl implements WorkspaceSourceRef
             }
             boolean reliable = status != WorkspaceSourceMappingStatus.UNMAPPED
                     && status != WorkspaceSourceMappingStatus.AMBIGUOUS;
-            boolean textChanged = resolution.primaryIds().size() == 1
-                    && !normalized(node.text()).equals(normalized(manifest.texts().get(resolution.primaryIds().get(0))));
+            String frozenSourceText = resolution.primaryIds().stream()
+                    .map(manifest.texts()::get)
+                    .filter(Objects::nonNull)
+                    .map(WorkspaceSourceReferenceAssemblerImpl::normalized)
+                    .collect(Collectors.joining());
+            boolean textChanged = reliable && !resolution.primaryIds().isEmpty()
+                    && !normalized(node.text()).equals(frozenSourceText);
             mappings.add(new TargetMapping(
                     node.id(), node.type(), node.sectionId(), node.entryId(), node.bulletId(), node.text(),
-                    resolution.primaryIds(), status, reliable, textChanged));
+                    resolution.primaryIds(), status, reliable, textChanged, false, false));
         }
 
         List<SourceBlock> blocks = new ArrayList<>();
@@ -90,12 +103,28 @@ public class WorkspaceSourceReferenceAssemblerImpl implements WorkspaceSourceRef
         for (Map.Entry<String, List<String>> entry : manifest.aliasesByPrimary().entrySet()) {
             String primary = entry.getKey();
             List<Node> inverse = sourceTargets.getOrDefault(primary, List.of());
-            WorkspaceSourceMappingStatus status = inverse.isEmpty()
-                    ? WorkspaceSourceMappingStatus.UNMAPPED
-                    : inverse.size() == 1 ? WorkspaceSourceMappingStatus.EXACT : WorkspaceSourceMappingStatus.SPLIT;
+            WorkspaceSourceMappingStatus status;
             if (inverse.isEmpty()) {
-                issues.add(issue("SOURCE_CONTENT_UNMAPPED", BLOCKER,
-                        "冻结原文仍有内容未进入当前结构，导出已阻止。", entry.getValue(), List.of()));
+                status = WorkspaceSourceMappingStatus.UNMAPPED;
+            } else if (inverse.size() > 1) {
+                status = WorkspaceSourceMappingStatus.SPLIT;
+            } else {
+                Resolution targetResolution = resolve(inverse.get(0).occurrenceIds(), manifest);
+                status = targetResolution.primaryIds().size() > 1
+                        ? WorkspaceSourceMappingStatus.MERGED : WorkspaceSourceMappingStatus.EXACT;
+            }
+            FrozenOwner owner = sourceOwners.get(primary);
+            boolean omissionEligible = status == WorkspaceSourceMappingStatus.UNMAPPED
+                    && manifest.valid() && sourceOwnership.valid()
+                    && owner != null && owner.eligible()
+                    && !hasAmbiguousTargetFor(primary, nodes, manifest, authenticatedNodes);
+            boolean omissionConfirmed = omissionEligible && confirmations.valid()
+                    && confirmations.ids().containsAll(entry.getValue());
+            if (inverse.isEmpty()) {
+                if (!omissionConfirmed) {
+                    issues.add(issue("SOURCE_CONTENT_UNMAPPED", BLOCKER,
+                            "冻结原文仍有内容未进入当前结构，导出已阻止。", entry.getValue(), List.of()));
+                }
             } else if (inverse.size() > 1) {
                 boolean duplicate = inverse.stream().map(Node::text).map(WorkspaceSourceReferenceAssemblerImpl::normalized)
                         .filter(WorkspaceSourceReferenceAssemblerImpl::hasText)
@@ -108,21 +137,28 @@ public class WorkspaceSourceReferenceAssemblerImpl implements WorkspaceSourceRef
             }
             blocks.add(new SourceBlock(primary, order++, manifest.texts().get(primary), entry.getValue(),
                     sourceGeometryFor(primary, entry.getValue(), manifest.refs()),
-                    inverse.stream().map(Node::id).toList(), status, inverse.size() == 1));
+                    inverse.stream().map(Node::id).toList(), status, inverse.size() == 1,
+                    owner == null ? null : owner.nodeType(), owner == null ? null : owner.sectionKind(),
+                    owner == null ? null : owner.sectionId(), owner == null ? null : owner.entryId(),
+                    owner == null ? null : owner.bulletId(), omissionConfirmed, omissionEligible));
         }
 
-        addStructuralIssues(source, target, issues);
+        addStructuralIssues(source, target, blocks, issues);
         EnumMap<WorkspaceSourceMappingStatus, Integer> counts = new EnumMap<>(WorkspaceSourceMappingStatus.class);
         for (WorkspaceSourceMappingStatus status : WorkspaceSourceMappingStatus.values()) counts.put(status, 0);
         for (TargetMapping mapping : mappings) counts.compute(mapping.status(), (key, value) -> value == null ? 1 : value + 1);
+        int confirmedOmissionCount = (int) blocks.stream().filter(SourceBlock::omissionConfirmed).count();
         boolean blocked = issues.stream().anyMatch(FidelityIssue::blocker);
         return new WorkspaceSourceReferenceVO(taskId, sourceVersionId, targetVersionId, targetRevision,
-                sourceFilename, sourcePdfAvailable, blocks, mappings, issues, counts, blocked);
+                sourceFilename, sourcePdfAvailable, blocks, mappings, issues, counts,
+                confirmedOmissionCount, blocked);
     }
 
     private static Manifest manifest(ResumeDocumentDTO source, List<FidelityIssue> issues) {
-        List<String> order = source == null || source.getSourceOccurrenceIds() == null
-                ? List.of() : source.getSourceOccurrenceIds().stream().filter(WorkspaceSourceReferenceAssemblerImpl::hasText).toList();
+        List<String> rawOrder = source == null || source.getSourceOccurrenceIds() == null
+                ? List.of() : source.getSourceOccurrenceIds();
+        List<String> order = rawOrder.stream().filter(WorkspaceSourceReferenceAssemblerImpl::hasText)
+                .map(String::strip).toList();
         Map<String, String> rawTexts = source == null || source.getSourceOccurrenceTexts() == null
                 ? Map.of() : source.getSourceOccurrenceTexts();
         Map<String, String> rawPrimary = source == null || source.getSourceOccurrencePrimaryIds() == null
@@ -132,28 +168,47 @@ public class WorkspaceSourceReferenceAssemblerImpl implements WorkspaceSourceRef
         if (order.isEmpty() || rawTexts.isEmpty()) {
             issues.add(issue("SOURCE_MANIFEST_UNAVAILABLE", BLOCKER,
                     "该历史版本没有可验证的原文 occurrence 清单，无法证明结构完整性。", List.of(), List.of()));
-            return new Manifest(Map.of(), Map.of(), Set.of(), Map.of());
+            return new Manifest(Map.of(), Map.of(), Map.of(), Set.of(), Map.of(), false);
         }
         LinkedHashMap<String, List<String>> aliases = new LinkedHashMap<>();
+        LinkedHashMap<String, String> aliasToPrimary = new LinkedHashMap<>();
         LinkedHashMap<String, String> texts = new LinkedHashMap<>();
         LinkedHashMap<String, ResumeSourceRefDTO> refs = new LinkedHashMap<>();
         Set<String> known = new LinkedHashSet<>(order);
-        boolean invalid = false;
+        boolean invalid = rawOrder.size() != order.size()
+                || known.size() != order.size()
+                || !rawTexts.keySet().equals(known)
+                || !rawPrimary.keySet().equals(known)
+                || rawRefs.keySet().stream().anyMatch(id -> !known.contains(id));
         for (String occurrenceId : order) {
-            String primary = rawPrimary.getOrDefault(occurrenceId, occurrenceId);
-            if (!hasText(primary) || !rawTexts.containsKey(occurrenceId)) {
+            String primary = rawPrimary.get(occurrenceId);
+            String text = rawTexts.get(occurrenceId);
+            if (!hasText(primary) || !known.contains(primary.strip()) || !hasText(text)) {
+                invalid = true;
+                continue;
+            }
+            primary = primary.strip();
+            String primaryRoot = rawPrimary.get(primary);
+            if (!hasText(primaryRoot) || !primary.equals(primaryRoot.strip())) {
+                invalid = true;
+                continue;
+            }
+            String primaryText = rawTexts.get(primary);
+            if (!hasText(primaryText) || !normalized(primaryText).equals(normalized(text))) {
                 invalid = true;
                 continue;
             }
             aliases.computeIfAbsent(primary, ignored -> new ArrayList<>()).add(occurrenceId);
-            texts.putIfAbsent(primary, rawTexts.get(occurrenceId));
-            known.add(primary);
+            if (aliasToPrimary.putIfAbsent(occurrenceId, primary) != null) {
+                invalid = true;
+            }
+            texts.putIfAbsent(primary, primaryText);
             ResumeSourceRefDTO ref = rawRefs.get(occurrenceId);
             if (ref != null) {
                 boolean authenticRef = ref.getSourceOccurrenceIds() != null
                         && ref.getSourceOccurrenceIds().stream().filter(Objects::nonNull)
                         .map(String::strip).anyMatch(occurrenceId::equals)
-                        && normalized(ref.getText()).equals(normalized(rawTexts.get(occurrenceId)));
+                        && normalized(ref.getText()).equals(normalized(text));
                 if (authenticRef) {
                     refs.put(occurrenceId, ref);
                 } else {
@@ -161,14 +216,83 @@ public class WorkspaceSourceReferenceAssemblerImpl implements WorkspaceSourceRef
                 }
             }
         }
-        if (rawRefs.keySet().stream().anyMatch(id -> !order.contains(id))) {
+        if (aliasToPrimary.size() != known.size()) {
             invalid = true;
         }
         if (invalid) {
             issues.add(issue("SOURCE_MANIFEST_INVALID", BLOCKER,
                     "冻结原文清单不完整，无法安全建立定位关系。", List.of(), List.of()));
         }
-        return new Manifest(aliases, texts, known, refs);
+        return new Manifest(aliases, aliasToPrimary, texts, known, refs, !invalid);
+    }
+
+    private static ConfirmationState confirmations(
+            ResumeDocumentDTO target, Manifest manifest, List<FidelityIssue> issues) {
+        List<String> raw = target == null || target.getConfirmedSourceOmissionIds() == null
+                ? List.of() : target.getConfirmedSourceOmissionIds();
+        LinkedHashSet<String> ids = new LinkedHashSet<>();
+        boolean valid = manifest.valid();
+        for (String id : raw) {
+            if (!hasText(id) || !manifest.knownIds().contains(id.strip()) || !ids.add(id.strip())) {
+                valid = false;
+            }
+        }
+        if (!valid && !raw.isEmpty()) {
+            issues.add(issue("CONFIRMED_OMISSION_INVALID", BLOCKER,
+                    "已确认省略项不属于当前冻结原文，必须重新核对。", raw.stream()
+                            .filter(Objects::nonNull).toList(), List.of()));
+            return new ConfirmationState(Set.of(), false);
+        }
+        return new ConfirmationState(Set.copyOf(ids), valid);
+    }
+
+    private static FrozenOwnership frozenOwners(Manifest manifest, List<Node> sourceNodes) {
+        Map<String, FrozenOwner> result = new HashMap<>();
+        boolean valid = sourceNodes.stream().map(Node::occurrenceIds)
+                .map(ids -> resolve(ids, manifest)).noneMatch(Resolution::invalid);
+        Set<String> identities = new LinkedHashSet<>();
+        if (sourceNodes.stream().map(WorkspaceSourceReferenceAssemblerImpl::identity)
+                .anyMatch(identity -> !identities.add(identity))) {
+            valid = false;
+        }
+        for (String primary : manifest.aliasesByPrimary().keySet()) {
+            List<Node> candidates = sourceNodes.stream().filter(node -> {
+                Resolution resolution = resolve(node.occurrenceIds(), manifest);
+                return !resolution.invalid() && resolution.primaryIds().contains(primary);
+            }).toList();
+            int depth = candidates.stream().mapToInt(Node::depth).max().orElse(-1);
+            List<Node> deepest = candidates.stream().filter(node -> node.depth() == depth).toList();
+            if (deepest.size() > 1) {
+                // One physical contact line can legitimately materialize as several typed contact
+                // fields. It remains a SPLIT relationship and is not omission-eligible, but does
+                // not make the frozen manifest corrupt. Other duplicate deepest owners are invalid.
+                if (deepest.stream().anyMatch(node -> !"CONTACT".equals(node.type()))) {
+                    valid = false;
+                }
+                continue;
+            }
+            if (deepest.size() != 1 || !hasText(manifest.texts().get(primary))) {
+                continue;
+            }
+            Node node = deepest.get(0);
+            boolean eligible = Set.of("SECTION", "ENTRY", "BULLET", "BASICS", "CONTACT").contains(node.type());
+            result.put(primary, new FrozenOwner(
+                    node.type(), node.sectionKind(), node.sectionId(), node.entryId(), node.bulletId(),
+                    node.depth(), eligible));
+        }
+        return new FrozenOwnership(Map.copyOf(result), valid);
+    }
+
+    private static boolean hasAmbiguousTargetFor(
+            String primary, List<Node> nodes, Manifest manifest, Map<String, Node> authenticatedNodes) {
+        for (Node node : nodes) {
+            Resolution resolution = resolve(node.occurrenceIds(), manifest);
+            if (resolution.primaryIds().contains(primary)
+                    && (resolution.invalid() || !authenticatedLineage(node, resolution, manifest, authenticatedNodes))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static SourceGeometry sourceGeometryFor(
@@ -186,19 +310,27 @@ public class WorkspaceSourceReferenceAssemblerImpl implements WorkspaceSourceRef
     }
 
     private static Map<String, List<Node>> deepestTargets(
-            Manifest manifest, List<Node> nodes, Map<String, Node> authenticatedNodes) {
+            Manifest manifest,
+            List<Node> nodes,
+            Map<String, Node> authenticatedNodes,
+            Map<String, FrozenOwner> sourceOwners) {
         Map<String, List<Node>> result = new HashMap<>();
         for (String primary : manifest.aliasesByPrimary().keySet()) {
+            FrozenOwner owner = sourceOwners.get(primary);
             List<Node> candidates = nodes.stream()
                     .filter(node -> {
                         Resolution resolution = resolve(node.occurrenceIds(), manifest);
-                        return !resolution.invalid()
+                        return (owner == null || node.depth() == owner.depth())
+                                && !resolution.invalid()
                                 && authenticatedLineage(node, resolution, manifest, authenticatedNodes)
                                 && resolution.primaryIds().contains(primary);
                     })
                     .toList();
-            int depth = candidates.stream().mapToInt(Node::depth).max().orElse(-1);
-            result.put(primary, candidates.stream().filter(node -> node.depth() == depth).toList());
+            if (owner == null) {
+                int depth = candidates.stream().mapToInt(Node::depth).max().orElse(-1);
+                candidates = candidates.stream().filter(node -> node.depth() == depth).toList();
+            }
+            result.put(primary, candidates);
         }
         return result;
     }
@@ -215,10 +347,11 @@ public class WorkspaceSourceReferenceAssemblerImpl implements WorkspaceSourceRef
 
     private static String identity(Node node) {
         if (node == null) return "UNKNOWN";
+        String sectionKind = normalized(node.sectionKind());
         return switch (node.type()) {
-            case "SECTION" -> "SECTION:" + node.sectionId();
-            case "ENTRY" -> "ENTRY:" + node.sectionId() + "/" + node.entryId();
-            case "BULLET" -> "BULLET:" + node.sectionId() + "/" + node.entryId() + "/" + node.bulletId();
+            case "SECTION" -> "SECTION:" + sectionKind + "/" + node.sectionId();
+            case "ENTRY" -> "ENTRY:" + sectionKind + "/" + node.sectionId() + "/" + node.entryId();
+            case "BULLET" -> "BULLET:" + sectionKind + "/" + node.sectionId() + "/" + node.entryId() + "/" + node.bulletId();
             default -> node.id();
         };
     }
@@ -228,13 +361,8 @@ public class WorkspaceSourceReferenceAssemblerImpl implements WorkspaceSourceRef
                 .filter(WorkspaceSourceReferenceAssemblerImpl::hasText).map(String::strip).distinct().toList();
         LinkedHashSet<String> primary = new LinkedHashSet<>();
         boolean invalid = false;
-        Map<String, String> aliases = new HashMap<>();
-        manifest.aliasesByPrimary().forEach((key, ids) -> {
-            aliases.put(key, key);
-            ids.forEach(id -> aliases.put(id, key));
-        });
         for (String id : raw) {
-            String resolved = aliases.get(id);
+            String resolved = manifest.aliasToPrimary().get(id);
             if (resolved == null) invalid = true;
             else primary.add(resolved);
         }
@@ -246,29 +374,30 @@ public class WorkspaceSourceReferenceAssemblerImpl implements WorkspaceSourceRef
         if (document == null) return nodes;
         ResumeDocumentBasicsDTO basics = document.getBasics();
         if (basics != null) {
-            addField(nodes, "basics:name", "BASICS", null, null, null, basics.getName(), refIds(basics.getFieldSourceRefs(), "name"), 3);
-            addField(nodes, "basics:jobIntention", "BASICS", null, null, null, basics.getJobIntention(), refIds(basics.getFieldSourceRefs(), "jobIntention"), 3);
-            addField(nodes, "basics:highestEducation", "BASICS", null, null, null, basics.getHighestEducation(), refIds(basics.getFieldSourceRefs(), "highestEducation"), 3);
+            addField(nodes, "basics:name", "BASICS", null, null, null, null, basics.getName(), refIds(basics.getFieldSourceRefs(), "name"), 3);
+            addField(nodes, "basics:jobIntention", "BASICS", null, null, null, null, basics.getJobIntention(), refIds(basics.getFieldSourceRefs(), "jobIntention"), 3);
+            addField(nodes, "basics:highestEducation", "BASICS", null, null, null, null, basics.getHighestEducation(), refIds(basics.getFieldSourceRefs(), "highestEducation"), 3);
             for (ResumeDocumentContactDTO contact : safe(basics.getContacts())) {
-                if (contact != null) addField(nodes, "contact:" + safeId(contact.getId()), "CONTACT", null, null, null,
+                if (contact != null) addField(nodes, "contact:" + safeId(contact.getId()), "CONTACT", null, null, null, null,
                         contact.getValue(), firstIds(contact.getSourceOccurrenceIds(), contact.getSourceRef()), 3);
             }
         }
         for (ResumeDocumentSectionDTO section : safe(document.getSections())) {
             if (section == null) continue;
             String sectionId = safeId(section.getId());
-            addField(nodes, "section:" + sectionId, "SECTION", sectionId, null, null, section.getTitle(),
+            String sectionKind = section.getKind();
+            addField(nodes, "section:" + sectionId, "SECTION", sectionKind, sectionId, null, null, section.getTitle(),
                     firstIds(section.getSourceOccurrenceIds(), section.getSourceRef()), 1);
             for (ResumeDocumentEntryDTO entry : safe(section.getEntries())) {
                 if (entry == null) continue;
                 String entryId = safeId(entry.getId());
-                addField(nodes, "section:" + sectionId + "/entry:" + entryId, "ENTRY", sectionId, entryId, null,
-                        entryText(entry), firstIds(entry.getSourceOccurrenceIds(), entry.getSourceRef()), 2);
+                addField(nodes, "section:" + sectionId + "/entry:" + entryId, "ENTRY", sectionKind, sectionId, entryId, null,
+                        entryText(entry), new ArrayList<>(entryOwnOccurrenceIds(entry)), 2);
                 for (ResumeDocumentBulletDTO bullet : safe(entry.getBullets())) {
                     if (bullet == null) continue;
                     String bulletId = safeId(bullet.getId());
                     addField(nodes, "section:" + sectionId + "/entry:" + entryId + "/bullet:" + bulletId,
-                            "BULLET", sectionId, entryId, bulletId, bullet.getText(),
+                            "BULLET", sectionKind, sectionId, entryId, bulletId, bullet.getText(),
                             firstIds(bullet.getSourceOccurrenceIds(), bullet.getSourceRef()), 3);
                 }
             }
@@ -276,9 +405,11 @@ public class WorkspaceSourceReferenceAssemblerImpl implements WorkspaceSourceRef
         return nodes;
     }
 
-    private static void addField(List<Node> nodes, String id, String type, String sectionId, String entryId,
-            String bulletId, String text, List<String> ids, int depth) {
-        if (hasText(text) || !ids.isEmpty()) nodes.add(new Node(id, type, sectionId, entryId, bulletId, text, ids, depth));
+    private static void addField(List<Node> nodes, String id, String type, String sectionKind,
+            String sectionId, String entryId, String bulletId, String text, List<String> ids, int depth) {
+        if (hasText(text) || !ids.isEmpty()) {
+            nodes.add(new Node(id, type, sectionKind, sectionId, entryId, bulletId, text, ids, depth));
+        }
     }
 
     private static List<String> refIds(Map<String, ResumeSourceRefDTO> refs, String key) {
@@ -299,18 +430,84 @@ public class WorkspaceSourceReferenceAssemblerImpl implements WorkspaceSourceRef
                 .collect(Collectors.joining(" · "));
     }
 
-    private static void addStructuralIssues(ResumeDocumentDTO source, ResumeDocumentDTO target, List<FidelityIssue> issues) {
+    private static LinkedHashSet<String> entryOwnOccurrenceIds(ResumeDocumentEntryDTO entry) {
+        LinkedHashSet<String> ids = new LinkedHashSet<>(safe(entry.getSourceOccurrenceIds()));
+        addRefOccurrenceIds(ids, entry.getSourceRef());
+        if (entry.getFieldSourceRefs() != null) {
+            entry.getFieldSourceRefs().values().forEach(ref -> addRefOccurrenceIds(ids, ref));
+        }
+        safe(entry.getTechStackSourceRefs()).forEach(ref -> addRefOccurrenceIds(ids, ref));
+        safe(entry.getSkillItemSourceRefs()).forEach(ref -> addRefOccurrenceIds(ids, ref));
+        safe(entry.getSkillDescriptionSourceRefs()).forEach(ref -> addRefOccurrenceIds(ids, ref));
+        ids.removeIf(id -> !hasText(id));
+        return ids;
+    }
+
+    private static LinkedHashSet<String> projectEntryOccurrenceIds(ResumeDocumentEntryDTO entry) {
+        LinkedHashSet<String> ids = entryOwnOccurrenceIds(entry);
+        for (ResumeDocumentBulletDTO bullet : safe(entry.getBullets())) {
+            if (bullet == null) continue;
+            ids.addAll(safe(bullet.getSourceOccurrenceIds()));
+            addRefOccurrenceIds(ids, bullet.getSourceRef());
+        }
+        ids.removeIf(id -> !hasText(id));
+        return ids;
+    }
+
+    private static void addRefOccurrenceIds(Set<String> ids, ResumeSourceRefDTO ref) {
+        if (ref != null) ids.addAll(safe(ref.getSourceOccurrenceIds()));
+    }
+
+    private static void addStructuralIssues(
+            ResumeDocumentDTO source,
+            ResumeDocumentDTO target,
+            List<SourceBlock> sourceBlocks,
+            List<FidelityIssue> issues) {
         for (ResumeDocumentSectionDTO section : safe(target == null ? null : target.getSections())) {
             if (section != null && !hasText(section.getTitle()) && !safe(section.getEntries()).isEmpty()) {
                 issues.add(issue("SECTION_HEADING_LOST", BLOCKER,
                         "章节标题为空但子内容仍存在，导出已阻止。", List.of(), List.of("section:" + safeId(section.getId()))));
             }
         }
-        int sourceProjects = entryCount(source, "PROJECT");
-        int targetProjects = entryCount(target, "PROJECT");
-        if (sourceProjects > 1 && targetProjects < sourceProjects) {
+        Map<String, SourceBlock> blocksByOccurrence = new HashMap<>();
+        for (SourceBlock block : sourceBlocks) {
+            blocksByOccurrence.put(block.id(), block);
+            for (String occurrenceId : block.occurrenceIds()) {
+                blocksByOccurrence.put(occurrenceId, block);
+            }
+        }
+        Set<String> targetProjectEntries = safe(target == null ? null : target.getSections()).stream()
+                .filter(Objects::nonNull)
+                .filter(section -> "PROJECT".equalsIgnoreCase(section.getKind() == null ? "" : section.getKind()))
+                .flatMap(section -> safe(section.getEntries()).stream()
+                        .filter(Objects::nonNull)
+                        .map(entry -> safeId(section.getId()) + "/" + safeId(entry.getId())))
+                .collect(Collectors.toSet());
+        List<String> unconfirmedMissingProjectOccurrences = new ArrayList<>();
+        boolean unconfirmedMissingProject = false;
+        for (ResumeDocumentSectionDTO section : safe(source == null ? null : source.getSections())) {
+            if (section == null || !"PROJECT".equalsIgnoreCase(section.getKind() == null ? "" : section.getKind())) {
+                continue;
+            }
+            for (ResumeDocumentEntryDTO entry : safe(section.getEntries())) {
+                if (entry == null || targetProjectEntries.contains(safeId(section.getId()) + "/" + safeId(entry.getId()))) {
+                    continue;
+                }
+                LinkedHashSet<String> meaningful = projectEntryOccurrenceIds(entry);
+                boolean allConfirmed = !meaningful.isEmpty() && meaningful.stream().allMatch(id -> {
+                    SourceBlock block = blocksByOccurrence.get(id);
+                    return block != null && block.omissionEligible() && block.omissionConfirmed();
+                });
+                if (!allConfirmed) {
+                    unconfirmedMissingProject = true;
+                    unconfirmedMissingProjectOccurrences.addAll(meaningful);
+                }
+            }
+        }
+        if (unconfirmedMissingProject) {
             issues.add(issue("PROJECT_BOUNDARY_LOST", BLOCKER,
-                    "项目条目数量少于冻结原文，可能发生项目边界合并。", List.of(), List.of()));
+                    "冻结项目条目缺失且尚未完整确认省略，可能发生项目边界合并。",
+                    unconfirmedMissingProjectOccurrences.stream().distinct().toList(), List.of()));
         }
         Map<String, Long> contacts = safe(target == null || target.getBasics() == null ? null : target.getBasics().getContacts())
                 .stream().filter(Objects::nonNull).map(ResumeDocumentContactDTO::getValue)
@@ -359,10 +556,17 @@ public class WorkspaceSourceReferenceAssemblerImpl implements WorkspaceSourceRef
 
     private record Manifest(
             Map<String, List<String>> aliasesByPrimary,
+            Map<String, String> aliasToPrimary,
             Map<String, String> texts,
             Set<String> knownIds,
-            Map<String, ResumeSourceRefDTO> refs) {}
+            Map<String, ResumeSourceRefDTO> refs,
+            boolean valid) {}
+    private record ConfirmationState(Set<String> ids, boolean valid) {}
+    private record FrozenOwnership(Map<String, FrozenOwner> owners, boolean valid) {}
+    private record FrozenOwner(
+            String nodeType, String sectionKind, String sectionId, String entryId, String bulletId,
+            int depth, boolean eligible) {}
     private record Resolution(List<String> rawIds, List<String> primaryIds, boolean invalid) {}
-    private record Node(String id, String type, String sectionId, String entryId, String bulletId,
-                        String text, List<String> occurrenceIds, int depth) {}
+    private record Node(String id, String type, String sectionKind, String sectionId, String entryId,
+                        String bulletId, String text, List<String> occurrenceIds, int depth) {}
 }

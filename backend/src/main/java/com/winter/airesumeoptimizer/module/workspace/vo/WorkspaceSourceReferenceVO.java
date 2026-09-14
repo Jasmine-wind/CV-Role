@@ -16,6 +16,7 @@ public record WorkspaceSourceReferenceVO(
         List<TargetMapping> mappings,
         List<FidelityIssue> fidelityIssues,
         Map<WorkspaceSourceMappingStatus, Integer> statusCounts,
+        int confirmedOmissionCount,
         boolean exportBlocked) {
 
     public WorkspaceSourceReferenceVO {
@@ -23,6 +24,24 @@ public record WorkspaceSourceReferenceVO(
         mappings = mappings == null ? List.of() : List.copyOf(mappings);
         fidelityIssues = fidelityIssues == null ? List.of() : List.copyOf(fidelityIssues);
         statusCounts = statusCounts == null ? Map.of() : Map.copyOf(statusCounts);
+    }
+
+    /** Compatibility constructor for callers that do not model intentional omissions. */
+    public WorkspaceSourceReferenceVO(
+            Long optimizationTaskId,
+            Long sourceResumeVersionId,
+            Long targetResumeVersionId,
+            long targetRevision,
+            String sourceFilename,
+            boolean sourcePdfAvailable,
+            List<SourceBlock> sourceBlocks,
+            List<TargetMapping> mappings,
+            List<FidelityIssue> fidelityIssues,
+            Map<WorkspaceSourceMappingStatus, Integer> statusCounts,
+            boolean exportBlocked) {
+        this(optimizationTaskId, sourceResumeVersionId, targetResumeVersionId, targetRevision,
+                sourceFilename, sourcePdfAvailable, sourceBlocks, mappings, fidelityIssues,
+                statusCounts, 0, exportBlocked);
     }
 
     public record SourceBlock(
@@ -33,7 +52,14 @@ public record WorkspaceSourceReferenceVO(
             SourceGeometry sourceGeometry,
             List<String> targetNodeIds,
             WorkspaceSourceMappingStatus status,
-            boolean reliable) {
+            boolean reliable,
+            String sourceNodeType,
+            String sourceSectionKind,
+            String sourceSectionId,
+            String sourceEntryId,
+            String sourceBulletId,
+            boolean omissionConfirmed,
+            boolean omissionEligible) {
         public SourceBlock {
             occurrenceIds = occurrenceIds == null ? List.of() : List.copyOf(occurrenceIds);
             targetNodeIds = targetNodeIds == null ? List.of() : List.copyOf(targetNodeIds);
@@ -63,7 +89,9 @@ public record WorkspaceSourceReferenceVO(
             List<String> sourceOccurrenceIds,
             WorkspaceSourceMappingStatus status,
             boolean reliable,
-            boolean textChanged) {
+            boolean textChanged,
+            boolean omissionConfirmed,
+            boolean omissionEligible) {
         public TargetMapping {
             sourceOccurrenceIds = sourceOccurrenceIds == null ? List.of() : List.copyOf(sourceOccurrenceIds);
         }

@@ -9,6 +9,7 @@ import type {
   WorkspacePreviewPdf,
   WorkspaceSaveRequest,
   WorkspaceSaveResult,
+  WorkspaceSourceOmissionRequest,
   WorkspaceSourceReference,
 } from '@/types/workspace'
 
@@ -29,10 +30,27 @@ export const getWorkspaceSourcePdf = (optimizationTaskId: number) => {
   return downloadBlob(`/api/workspace/${optimizationTaskId}/source.pdf`)
 }
 
-export const saveWorkspaceContent = (
+export const confirmWorkspaceSourceOmissions = (
   optimizationTaskId: number,
-  data: WorkspaceSaveRequest,
+  data: WorkspaceSourceOmissionRequest,
 ) => {
+  return request.post<WorkspaceSaveResult>(
+    `/api/workspace/${optimizationTaskId}/source-omissions/confirm`,
+    data,
+  )
+}
+
+export const unconfirmWorkspaceSourceOmissions = (
+  optimizationTaskId: number,
+  data: WorkspaceSourceOmissionRequest,
+) => {
+  return request.post<WorkspaceSaveResult>(
+    `/api/workspace/${optimizationTaskId}/source-omissions/unconfirm`,
+    data,
+  )
+}
+
+export const saveWorkspaceContent = (optimizationTaskId: number, data: WorkspaceSaveRequest) => {
   return request.put<WorkspaceSaveResult>(`/api/workspace/${optimizationTaskId}/content`, data)
 }
 
@@ -102,10 +120,7 @@ export const previewWorkspacePdf = (
 }
 
 /** 导出 PDF：编译、存储与记录全部成功后返回导出物。 */
-export const exportWorkspacePdf = (
-  optimizationTaskId: number,
-  data: WorkspaceExportRequest,
-) => {
+export const exportWorkspacePdf = (optimizationTaskId: number, data: WorkspaceExportRequest) => {
   return request.post<ExportArtifact>(`/api/workspace/${optimizationTaskId}/export`, data, {
     timeout: BULLET_SUGGESTION_TIMEOUT_MS,
   })

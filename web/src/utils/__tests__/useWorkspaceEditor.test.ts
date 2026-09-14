@@ -92,7 +92,12 @@ describe('useWorkspaceEditor', () => {
   })
 
   it('does not allow render when the pristine CAS save conflicts', async () => {
-    saveContentMock.mockResolvedValueOnce({ saved: false, conflict: true, revision: 1, document: null })
+    saveContentMock.mockResolvedValueOnce({
+      saved: false,
+      conflict: true,
+      revision: 1,
+      document: null,
+    })
     const editor = useWorkspaceEditor(10)
     await editor.load()
 
@@ -102,11 +107,60 @@ describe('useWorkspaceEditor', () => {
     expect(editor.revision.value).toBe(0)
   })
 
+  it('synchronizes the revision and canonical document from a successful external CAS operation', async () => {
+    getContentMock.mockResolvedValueOnce({
+      optimizationTaskId: 10,
+      revision: 4,
+      document: document('省略前内容'),
+    })
+    const editor = useWorkspaceEditor(10)
+    await editor.load()
+
+    expect(
+      editor.acceptExternalSaveResult(4, {
+        saved: true,
+        conflict: false,
+        revision: 5,
+        document: document('服务端规范内容'),
+      }),
+    ).toBe(true)
+
+    expect(editor.revision.value).toBe(5)
+    expect(editor.draft.value).toEqual(document('服务端规范内容'))
+    expect(editor.status.value).toBe('saved')
+  })
+
+  it('rejects a stale external CAS response instead of silently advancing the editor', async () => {
+    getContentMock.mockResolvedValueOnce({
+      optimizationTaskId: 10,
+      revision: 4,
+      document: document('当前内容'),
+    })
+    const editor = useWorkspaceEditor(10)
+    await editor.load()
+
+    expect(
+      editor.acceptExternalSaveResult(3, {
+        saved: true,
+        conflict: false,
+        revision: 4,
+        document: document('过期响应'),
+      }),
+    ).toBe(false)
+    expect(editor.revision.value).toBe(4)
+    expect(editor.draft.value).toEqual(document('当前内容'))
+  })
+
   it('does not let an old save response mark a newer draft as saved', async () => {
     const first = deferred<Awaited<ReturnType<typeof saveWorkspaceContent>>>()
     saveContentMock
       .mockReturnValueOnce(first.promise)
-      .mockResolvedValueOnce({ saved: true, conflict: false, revision: 2, document: document('第二次编辑') })
+      .mockResolvedValueOnce({
+        saved: true,
+        conflict: false,
+        revision: 2,
+        document: document('第二次编辑'),
+      })
     const editor = useWorkspaceEditor(10)
     await editor.load()
 
@@ -131,7 +185,12 @@ describe('useWorkspaceEditor', () => {
   it('retries a failed save with the latest draft rather than the failed snapshot', async () => {
     saveContentMock
       .mockRejectedValueOnce(new Error('network'))
-      .mockResolvedValueOnce({ saved: true, conflict: false, revision: 1, document: document('最新草稿') })
+      .mockResolvedValueOnce({
+        saved: true,
+        conflict: false,
+        revision: 1,
+        document: document('最新草稿'),
+      })
     const editor = useWorkspaceEditor(10)
     await editor.load()
 
@@ -155,8 +214,16 @@ describe('useWorkspaceEditor', () => {
       .mockResolvedValueOnce({ saved: false, conflict: true, revision: 1, document: null })
       .mockResolvedValueOnce({ saved: false, conflict: true, revision: 2, document: null })
     getContentMock
-      .mockResolvedValueOnce({ optimizationTaskId: 10, revision: 0, document: document('初始内容') })
-      .mockResolvedValueOnce({ optimizationTaskId: 10, revision: 1, document: document('另一端内容') })
+      .mockResolvedValueOnce({
+        optimizationTaskId: 10,
+        revision: 0,
+        document: document('初始内容'),
+      })
+      .mockResolvedValueOnce({
+        optimizationTaskId: 10,
+        revision: 1,
+        document: document('另一端内容'),
+      })
     const editor = useWorkspaceEditor(10)
     await editor.load()
 
@@ -176,9 +243,18 @@ describe('useWorkspaceEditor', () => {
   })
 
   it('keeps conflict recovery available when overwrite revision refetch fails', async () => {
-    saveContentMock.mockResolvedValueOnce({ saved: false, conflict: true, revision: 1, document: null })
+    saveContentMock.mockResolvedValueOnce({
+      saved: false,
+      conflict: true,
+      revision: 1,
+      document: null,
+    })
     getContentMock
-      .mockResolvedValueOnce({ optimizationTaskId: 10, revision: 0, document: document('初始内容') })
+      .mockResolvedValueOnce({
+        optimizationTaskId: 10,
+        revision: 0,
+        document: document('初始内容'),
+      })
       .mockRejectedValueOnce(new Error('refetch failed'))
     const editor = useWorkspaceEditor(10)
     await editor.load()
@@ -291,7 +367,12 @@ describe('useWorkspaceEditor', () => {
   })
 
   it('preserves the local draft when restore detects a conflict', async () => {
-    restoreContentMock.mockResolvedValue({ saved: false, conflict: true, revision: 2, document: null })
+    restoreContentMock.mockResolvedValue({
+      saved: false,
+      conflict: true,
+      revision: 2,
+      document: null,
+    })
     const editor = useWorkspaceEditor(10)
     await editor.load()
     editor.applyDocument(document('本地待恢复草稿'))

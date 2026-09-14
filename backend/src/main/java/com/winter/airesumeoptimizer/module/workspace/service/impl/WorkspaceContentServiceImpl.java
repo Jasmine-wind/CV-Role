@@ -17,6 +17,7 @@ import com.winter.airesumeoptimizer.module.resume.mapper.ResumeMapper;
 import com.winter.airesumeoptimizer.module.resume.service.ResumeCanonicalDocumentService;
 import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentDTO;
 import com.winter.airesumeoptimizer.module.workspace.dto.WorkspaceContentSaveRequestDTO;
+import com.winter.airesumeoptimizer.module.workspace.dto.WorkspaceSourceOmissionRequestDTO;
 import com.winter.airesumeoptimizer.module.workspace.service.ResumeDocumentConverter;
 import com.winter.airesumeoptimizer.module.workspace.service.WorkspaceContentService;
 import com.winter.airesumeoptimizer.module.workspace.service.WorkspaceSourceReferenceAssembler;
@@ -24,7 +25,12 @@ import com.winter.airesumeoptimizer.module.workspace.vo.WorkspaceContentSaveResu
 import com.winter.airesumeoptimizer.module.workspace.vo.WorkspaceContentVO;
 import com.winter.airesumeoptimizer.module.workspace.vo.WorkspaceSourcePdfVO;
 import com.winter.airesumeoptimizer.module.workspace.vo.WorkspaceSourceReferenceVO;
+import com.winter.airesumeoptimizer.module.workspace.vo.WorkspaceSourceReferenceVO.SourceBlock;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -160,7 +166,22 @@ public class WorkspaceContentServiceImpl implements WorkspaceContentService {
                 ? frozen : readPersistedDocument(context.target());
         ResumeDocumentDTO normalized = resumeDocumentConverter.normalizeWorkspaceSave(
                 request.getDocument(), current, frozen);
+        canonicalizeConfirmedOmissions(frozen, normalized);
         return writeTargetContent(context, normalized, request.getExpectedRevision());
+    }
+
+    @Override
+    @Transactional
+    public WorkspaceContentSaveResultVO confirmSourceOmissions(
+            Long userId, Long optimizationTaskId, WorkspaceSourceOmissionRequestDTO request) {
+        return mutateSourceOmissions(userId, optimizationTaskId, request, true);
+    }
+
+    @Override
+    @Transactional
+    public WorkspaceContentSaveResultVO unconfirmSourceOmissions(
+            Long userId, Long optimizationTaskId, WorkspaceSourceOmissionRequestDTO request) {
+        return mutateSourceOmissions(userId, optimizationTaskId, request, false);
     }
 
     @Override
@@ -174,7 +195,140 @@ public class WorkspaceContentServiceImpl implements WorkspaceContentService {
         EditableTaskContext context = resolveEditableTarget(userId, optimizationTaskId);
         // 恢复只读取任务冻结快照重新生成文档；SOURCE、快照与证据分析不被回写。
         ResumeDocumentDTO restored = documentFromFrozenSnapshot(resolveFrozenSnapshot(context));
+        restored.setConfirmedSourceOmissionIds(List.of());
         return writeTargetContent(context, restored, expectedRevision);
+    }
+
+    private WorkspaceContentSaveResultVO mutateSourceOmissions(
+            Long userId,
+            Long optimizationTaskId,
+            WorkspaceSourceOmissionRequestDTO request,
+            boolean confirm) {
+        if (request == null || request.expectedRevision() == null) {
+            throw new BusinessException(400, "缺少内容版本号");
+        }
+        validateExpectedRevision(request.expectedRevision());
+        List<String> requested = validateRequestedOccurrenceIds(request.sourceOccurrenceIds());
+        EditableTaskContext context = resolveEditableTarget(userId, optimizationTaskId);
+        long currentRevision = revisionOf(context.target());
+        if (currentRevision != request.expectedRevision()) {
+            return conflictResult(currentRevision);
+        }
+        ResumeDocumentDTO frozen = documentFromFrozenSnapshot(resolveFrozenSnapshot(context));
+        ResumeDocumentDTO current = currentRevision == PRISTINE_REVISION
+                ? frozen : readPersistedDocument(context.target());
+        canonicalizeConfirmedOmissions(frozen, current);
+        Set<String> frozenIds = new LinkedHashSet<>(safeStrings(frozen.getSourceOccurrenceIds()));
+        if (!frozenIds.containsAll(requested)) {
+            throw new BusinessException(400, "来源 occurrence 不属于当前冻结简历");
+        }
+
+        WorkspaceSourceReferenceVO fidelity = sourceReferenceAssembler.assemble(
+                context.task().getId(), context.source().getId(), context.target().getId(), currentRevision,
+                context.resume().getOriginalFilename(), isPdf(context.resume()), frozen, current);
+        if (fidelity.fidelityIssues().stream().anyMatch(issue ->
+                "SOURCE_MANIFEST_INVALID".equals(issue.code())
+                        || "SOURCE_MANIFEST_UNAVAILABLE".equals(issue.code())
+                        || "CONFIRMED_OMISSION_INVALID".equals(issue.code()))) {
+            throw new BusinessException(400, "冻结原文清单不允许确认省略");
+        }
+        LinkedHashSet<SourceBlock> boundaryBlocks = new LinkedHashSet<>();
+        for (String requestedId : requested) {
+            SourceBlock requestedBlock = fidelity.sourceBlocks().stream()
+                    .filter(candidate -> candidate.occurrenceIds().contains(requestedId))
+                    .findFirst().orElseThrow(() -> new BusinessException(400, "来源 occurrence 不属于当前冻结简历"));
+            if (confirm && !isConfirmableOmission(requestedBlock)) {
+                throw new BusinessException(400, "来源 occurrence 当前不能确认为省略");
+            }
+            if (!confirm && !requestedBlock.omissionConfirmed()) {
+                throw new BusinessException(400, "来源 occurrence 当前未确认省略");
+            }
+            boundaryBlocks.addAll(omissionBoundary(requestedBlock, fidelity.sourceBlocks()));
+        }
+        if (confirm && boundaryBlocks.stream().anyMatch(block -> !isConfirmableOmission(block))) {
+            throw new BusinessException(400, "来源边界未完整省略，当前不能确认");
+        }
+        LinkedHashSet<String> authoritativeIds = boundaryBlocks.stream()
+                .flatMap(block -> block.occurrenceIds().stream())
+                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+
+        LinkedHashSet<String> next = new LinkedHashSet<>(safeStrings(current.getConfirmedSourceOmissionIds()));
+        if (confirm) next.addAll(authoritativeIds);
+        else next.removeAll(authoritativeIds);
+        current.setConfirmedSourceOmissionIds(frozen.getSourceOccurrenceIds().stream()
+                .filter(next::contains).toList());
+        return writeTargetContent(context, current, request.expectedRevision());
+    }
+
+    private List<String> validateRequestedOccurrenceIds(List<String> ids) {
+        if (ids == null || ids.isEmpty() || ids.size() > 500) {
+            throw new BusinessException(400, "来源 occurrence ID 不能为空或数量超出上限");
+        }
+        List<String> normalized = new ArrayList<>();
+        Set<String> unique = new LinkedHashSet<>();
+        for (String id : ids) {
+            if (id == null || id.isBlank() || !unique.add(id.strip())) {
+                throw new BusinessException(400, "来源 occurrence ID 无效或重复");
+            }
+            normalized.add(id.strip());
+        }
+        return normalized;
+    }
+
+    private void canonicalizeConfirmedOmissions(ResumeDocumentDTO frozen, ResumeDocumentDTO target) {
+        Set<String> existing = new LinkedHashSet<>(safeStrings(target.getConfirmedSourceOmissionIds()));
+        WorkspaceSourceReferenceVO fidelity = sourceReferenceAssembler.assemble(
+                null, null, null, 0L, null, false, frozen, target);
+        Set<String> canonical = new LinkedHashSet<>();
+        for (SourceBlock block : fidelity.sourceBlocks()) {
+            if (!block.omissionEligible()) continue;
+            List<SourceBlock> boundary = omissionBoundary(block, fidelity.sourceBlocks());
+            boolean complete = boundary.stream().allMatch(candidate -> candidate.omissionEligible()
+                    && existing.containsAll(candidate.occurrenceIds()));
+            if (complete) {
+                boundary.stream().flatMap(candidate -> candidate.occurrenceIds().stream())
+                        .forEach(canonical::add);
+            }
+        }
+        target.setConfirmedSourceOmissionIds(safeStrings(frozen.getSourceOccurrenceIds()).stream()
+                .filter(canonical::contains).toList());
+    }
+
+    private boolean isConfirmableOmission(SourceBlock block) {
+        return block.status()
+                == com.winter.airesumeoptimizer.module.workspace.enums.WorkspaceSourceMappingStatus.UNMAPPED
+                && block.omissionEligible();
+    }
+
+    /** Resolve omission units only from authenticated frozen-owner metadata returned by the server assembler. */
+    private List<SourceBlock> omissionBoundary(SourceBlock anchor, List<SourceBlock> allBlocks) {
+        if ("PROJECT".equalsIgnoreCase(anchor.sourceSectionKind())
+                && hasBoundaryId(anchor.sourceSectionId()) && hasBoundaryId(anchor.sourceEntryId())) {
+            return allBlocks.stream().filter(candidate ->
+                    "PROJECT".equalsIgnoreCase(candidate.sourceSectionKind())
+                            && anchor.sourceSectionId().equals(candidate.sourceSectionId())
+                            && anchor.sourceEntryId().equals(candidate.sourceEntryId()))
+                    .toList();
+        }
+        if ("BULLET".equals(anchor.sourceNodeType())
+                && hasBoundaryId(anchor.sourceSectionId()) && hasBoundaryId(anchor.sourceEntryId())
+                && hasBoundaryId(anchor.sourceBulletId())) {
+            return allBlocks.stream().filter(candidate ->
+                    "BULLET".equals(candidate.sourceNodeType())
+                            && anchor.sourceSectionId().equals(candidate.sourceSectionId())
+                            && anchor.sourceEntryId().equals(candidate.sourceEntryId())
+                            && anchor.sourceBulletId().equals(candidate.sourceBulletId()))
+                    .toList();
+        }
+        return List.of(anchor);
+    }
+
+    private boolean hasBoundaryId(String value) {
+        return value != null && !value.isBlank();
+    }
+
+    private List<String> safeStrings(List<String> values) {
+        return values == null ? List.of() : values;
     }
 
     /**

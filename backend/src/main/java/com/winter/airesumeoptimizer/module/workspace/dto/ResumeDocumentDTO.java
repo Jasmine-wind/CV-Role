@@ -44,6 +44,10 @@ public class ResumeDocumentDTO {
     @Schema(description = "来源 occurrence 到原始坐标与排版引用的只读映射")
     private Map<String, ResumeSourceRefDTO> sourceOccurrenceRefs;
 
+    /** Server-authored task-local decisions; ordinary Workspace saves cannot set this field. */
+    @Schema(description = "用户已明确确认可省略的冻结来源 occurrence ID；仅由专用服务端操作维护")
+    private List<String> confirmedSourceOmissionIds;
+
     @Schema(description = "基础信息")
     private ResumeDocumentBasicsDTO basics;
 

@@ -689,6 +689,12 @@ class Phase1ApiIntegrationTest {
             }
             return WorkspaceContentSaveResultVO.builder().saved(false).conflict(true).revision(1L).build();
         });
+        when(workspaceContentService.confirmSourceOmissions(eq(1L), eq(2000L), any()))
+                .thenReturn(WorkspaceContentSaveResultVO.builder()
+                        .saved(true).conflict(false).revision(2L).document(document).build());
+        when(workspaceContentService.unconfirmSourceOmissions(eq(1L), eq(2000L), any()))
+                .thenReturn(WorkspaceContentSaveResultVO.builder()
+                        .saved(true).conflict(false).revision(3L).document(document).build());
         when(workspaceContentService.restorePreOptimizationContent(eq(1L), eq(2000L), eq(1L)))
                 .thenReturn(WorkspaceContentSaveResultVO.builder()
                         .saved(true).conflict(false).revision(2L).document(document).build());
@@ -737,6 +743,32 @@ class Phase1ApiIntegrationTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(400))
                 .andExpect(jsonPath("$.message").value("缺少内容版本号"));
+
+        String omissionBody = objectMapper.writeValueAsString(Map.of(
+                "expectedRevision", 1,
+                "sourceOccurrenceIds", List.of("occ-project-entry", "occ-project-bullet")));
+        mockMvc.perform(post("/api/workspace/2000/source-omissions/confirm")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(omissionBody))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.saved").value(true))
+                .andExpect(jsonPath("$.data.revision").value(2));
+
+        mockMvc.perform(post("/api/workspace/2000/source-omissions/unconfirm")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(omissionBody))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.saved").value(true))
+                .andExpect(jsonPath("$.data.revision").value(3));
+
+        mockMvc.perform(post("/api/workspace/2000/source-omissions/confirm")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("expectedRevision", 1))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(400));
 
         mockMvc.perform(post("/api/workspace/2000/restore-pre-optimization")
                         .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION)

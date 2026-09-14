@@ -41,19 +41,22 @@ async function registerAndLogin(page: Page) {
   await page.getByLabel('API 密钥').fill('phase9-user-key')
   await page.getByLabel('模型').fill('phase9-fake')
   await page.getByRole('button', { name: '测试连接', exact: true }).click()
-  await expect(page.getByLabel('使用自己的 API').getByText('连接测试成功', { exact: true })).toBeVisible({ timeout: 15_000 })
+  await expect(
+    page.getByLabel('使用自己的 API').getByText('连接测试成功', { exact: true }),
+  ).toBeVisible({ timeout: 15_000 })
   await page.getByRole('button', { name: '保存配置', exact: true }).click()
   await expect(page.getByText('配置已保存，尚未启用', { exact: true })).toBeVisible()
-  await page.getByLabel('你的 API 已保存，尚未启用').getByRole('button', { name: '启用', exact: true }).click()
-  await expect(page.getByLabel('当前状态').getByText('你的 API 已启用', { exact: true })).toBeVisible()
+  await page
+    .getByLabel('你的 API 已保存，尚未启用')
+    .getByRole('button', { name: '启用', exact: true })
+    .click()
+  await expect(
+    page.getByLabel('当前状态').getByText('你的 API 已启用', { exact: true }),
+  ).toBeVisible()
   await page.goto('/app')
 }
 
-async function uploadAndStartAnalysis(
-  page: Page,
-  jobDescription: string,
-  fixture = mixedFixture,
-) {
+async function uploadAndStartAnalysis(page: Page, jobDescription: string, fixture = mixedFixture) {
   await page.getByTestId('home-resume-upload').setInputFiles(fixture)
   const uploadFinished = page.waitForResponse(
     (response) => response.request().method() === 'POST' && response.url().endsWith('/api/resumes'),
@@ -107,9 +110,7 @@ async function previewAndExportAll(
   const previewInspector = page.getByRole('complementary', { name: '导出检查器' })
   await expect(page.locator('.preview-document-toolbar strong')).toHaveText(/PDF 预览 · \d+ 页/)
   await expect(page.locator('.preview-document-toolbar')).not.toContainText('最终文档')
-  await expect(
-    page.getByRole('link', { name: '在新窗口打开完整 PDF', exact: true }),
-  ).toBeVisible()
+  await expect(page.getByRole('link', { name: '在新窗口打开完整 PDF', exact: true })).toBeVisible()
   await expect(previewInspector.locator('.preview-template-section h2')).toHaveText('模板')
   await expect(previewInspector.locator('.preview-template-section p')).toHaveText(
     '切换模板后需重新预览。',
@@ -194,7 +195,9 @@ test('happy path: upload, analysis, workspace, deterministic suggestion, preview
   await previewAndExportAll(page, testInfo, 'mixed')
 })
 
-test('delayed upload keeps the JD and blocks analysis until the selected resume is ready', async ({ page }) => {
+test('delayed upload keeps the JD and blocks analysis until the selected resume is ready', async ({
+  page,
+}) => {
   await registerAndLogin(page)
   await expect(page.locator('#home-jd')).toBeVisible({ timeout: 15_000 })
 
@@ -244,7 +247,10 @@ test('returning user can reopen the same optimization from recent tasks', async 
   await expect(page).toHaveURL(new RegExp(`/job-analysis/${taskId}$`))
 })
 
-test('standard and legal two-page fixtures export all templates', async ({ page, browser }, testInfo: TestInfo) => {
+test('standard and legal two-page fixtures export all templates', async ({
+  page,
+  browser,
+}, testInfo: TestInfo) => {
   await registerAndLogin(page)
   await uploadAndStartAnalysis(page, chineseJavaJobDescription, standardFixture)
   await waitForAnalysis(page)
@@ -412,10 +418,126 @@ test('workspace conflict preserves the local draft; stale Preview and Suggest ca
   await first.close()
 })
 
+test('intentional omission: a deleted source bullet blocks delivery until confirmed and can be unconfirmed', async ({
+  page,
+}) => {
+  await registerAndLogin(page)
+  await uploadAndStartAnalysis(page, chineseJavaJobDescription, standardFixture)
+  await waitForAnalysis(page)
+  await openWorkspaceWithoutEditing(page)
+
+  // Use one bullet from a multi-bullet work entry so deleting it exercises omission
+  // without independently triggering the EMPTY_ENTRY document-quality blocker.
+  const targetBullet = page
+    .getByRole('group', { name: /工作经历，第 \d+ 项/ })
+    .locator('.bullet-block')
+    .first()
+  await expect(targetBullet).toBeVisible({ timeout: 15_000 })
+  const targetNodeId = await targetBullet.getAttribute('data-target-node-id')
+  expect(targetNodeId).toBeTruthy()
+  const mappedSourceBlock = page.locator(
+    `.source-block[data-target-node-id="${targetNodeId}"]`,
+  )
+  await expect(mappedSourceBlock).toHaveCount(1)
+  const sourceBlockId = await mappedSourceBlock.getAttribute('data-source-block-id')
+  expect(sourceBlockId).toBeTruthy()
+
+  const sourceCard = page.locator(`.source-block[data-source-block-id="${sourceBlockId}"]`)
+  const targetText = targetBullet.locator('textarea')
+  const changedSave = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'PUT' &&
+      /\/api\/workspace\/\d+\/content$/.test(new URL(response.url()).pathname),
+  )
+  await targetText.fill(
+    '重新组织平台核心服务的故障隔离、容量治理与发布流程，并补充完全不同的交付说明。',
+  )
+  await changedSave
+  await expect(page.getByText('✓ 已保存', { exact: true })).toBeVisible({ timeout: 15_000 })
+  await expect(sourceCard.locator('.mapping-state')).toHaveText('已定位 · 内容已修改', {
+    timeout: 15_000,
+  })
+
+  const deletedSave = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'PUT' &&
+      /\/api\/workspace\/\d+\/content$/.test(new URL(response.url()).pathname),
+  )
+  await targetBullet.locator('.bullet-delete-action').click()
+  await deletedSave
+  await expect(page.getByText('✓ 已保存', { exact: true })).toBeVisible({ timeout: 15_000 })
+  await expect(sourceCard.locator('.mapping-state')).toHaveText('未映射', { timeout: 15_000 })
+  await expect(page.getByText(/结构保真：\d+ 项阻断/)).toBeVisible()
+
+  let previewRequestCount = 0
+  const countPreviewRequest = (request: { url: () => string }) => {
+    if (request.url().includes('/preview.pdf')) previewRequestCount += 1
+  }
+  page.on('request', countPreviewRequest)
+  const freshFidelityVerdict = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'GET' &&
+      /\/api\/workspace\/\d+\/source-reference$/.test(new URL(response.url()).pathname),
+  )
+  await page.getByRole('button', { name: '预览 →', exact: true }).click()
+  expect((await freshFidelityVerdict).ok()).toBe(true)
+  await expect(page.getByText('请先处理冻结原文中的结构保真问题，再预览或导出')).toBeVisible()
+  expect(previewRequestCount).toBe(0)
+  await expect(page.getByRole('button', { name: '导出 PDF', exact: true })).toHaveCount(0)
+  page.off('request', countPreviewRequest)
+
+  const confirmAction = page.getByRole('button', { name: /^确认省略/ }).first()
+  await expect(confirmAction).toBeEnabled()
+  const confirmResponse = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'POST' &&
+      response.url().endsWith('/source-omissions/confirm'),
+  )
+  await confirmAction.click()
+  const confirmed = await confirmResponse
+  const confirmBody = confirmed.request().postDataJSON() as {
+    expectedRevision: number
+    sourceOccurrenceIds: string[]
+  }
+  expect(Number.isInteger(confirmBody.expectedRevision)).toBe(true)
+  expect(confirmBody.sourceOccurrenceIds.length).toBeGreaterThan(0)
+  expect(confirmBody.sourceOccurrenceIds).toContain(sourceBlockId)
+  expect(new Set(confirmBody.sourceOccurrenceIds).size).toBe(confirmBody.sourceOccurrenceIds.length)
+  expect(confirmed.ok()).toBe(true)
+
+  await expect(sourceCard.locator('.mapping-state')).toHaveText('已确认省略', {
+    timeout: 15_000,
+  })
+  await expect(page.getByText('结构保真检查通过', { exact: true })).toBeVisible({
+    timeout: 15_000,
+  })
+
+  await page.getByRole('button', { name: '预览 →', exact: true }).click()
+  await expect(page.getByTitle('简历 PDF 预览')).toBeVisible({ timeout: 45_000 })
+  await expect(
+    page.locator('.preflight-section').getByText('可以导出', { exact: true }),
+  ).toBeVisible({ timeout: 45_000 })
+  await page.getByRole('button', { name: '返回编辑', exact: true }).click()
+
+  const unconfirmAction = page.getByRole('button', { name: /^取消省略/ }).first()
+  await expect(unconfirmAction).toBeEnabled({ timeout: 15_000 })
+  const unconfirmResponse = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'POST' &&
+      response.url().endsWith('/source-omissions/unconfirm'),
+  )
+  await unconfirmAction.click()
+  expect((await unconfirmResponse).ok()).toBe(true)
+  await expect(sourceCard.locator('.mapping-state')).toHaveText('未映射', { timeout: 15_000 })
+  await expect(page.getByText(/结构保真：\d+ 项阻断/)).toBeVisible({ timeout: 15_000 })
+})
+
 test.describe('desktop preview viewport', () => {
   test.use({ viewport: { width: 1440, height: 900 } })
 
-  test('keeps the export action visible while the inspector scrolls', async ({ page }, testInfo) => {
+  test('keeps the export action visible while the inspector scrolls', async ({
+    page,
+  }, testInfo) => {
     await registerAndLogin(page)
     await uploadAndStartAnalysis(page, englishPlatformJobDescription, mixedFixture)
     await waitForAnalysis(page)

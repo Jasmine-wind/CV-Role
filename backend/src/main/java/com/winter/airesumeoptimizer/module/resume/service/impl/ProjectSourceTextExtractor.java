@@ -28,6 +28,8 @@ final class ProjectSourceTextExtractor {
     private static final Pattern PROJECT_ENV_LABEL_PATTERN = Pattern.compile("^(?:开发环境|开发工具|环境)\\s*[:：]\\s*(?<value>.*)$", Pattern.CASE_INSENSITIVE);
     private static final Pattern PROJECT_TIME_LABEL_PATTERN = Pattern.compile("^(?:开发时间|开发周期|项目周期|时间)\\s*[:：]\\s*(?<value>.*)$", Pattern.CASE_INSENSITIVE);
     private static final Pattern ROLE_PATTERN = Pattern.compile("(?<role>项目组组长|项目负责人|负责人|组长|核心成员|成员|开发者)");
+    private static final Pattern PROJECT_ROLE_METADATA_PATTERN = Pattern.compile(
+            "^(?:(?:独立|个人|团队)项目(?:\\s*[|｜·]\\s*[^，,。；;]{2,30})?)$", Pattern.CASE_INSENSITIVE);
     private static final Pattern MENTOR_PATTERN = Pattern.compile("导师\\s*[:：]\\s*(?<mentor>[\\u4e00-\\u9fa5A-Za-z .·-]{2,20})");
     private static final Map<String, List<String>> TECH_ALIASES = new LinkedHashMap<>();
 
@@ -209,8 +211,8 @@ final class ProjectSourceTextExtractor {
                 .environment(firstNonBlank(base.getEnvironment(), fallback.getEnvironment()))
                 .techStack(unique(concat(base.getTechStack(), fallback.getTechStack())))
                 .responsibilities(unique(concat(base.getResponsibilities(), fallback.getResponsibilities())))
-                .startDate(firstNonBlank(base.getStartDate(), fallback.getStartDate()))
-                .endDate(firstNonBlank(base.getEndDate(), fallback.getEndDate()))
+                .startDate(blankToNull(firstNonBlank(base.getStartDate(), fallback.getStartDate())))
+                .endDate(blankToNull(firstNonBlank(base.getEndDate(), fallback.getEndDate())))
                 .sourceType(firstNonBlank(base.getSourceType(), fallback.getSourceType(), "INDEPENDENT"))
                 .parentExperienceIndex(base.getParentExperienceIndex() == null ? fallback.getParentExperienceIndex() : base.getParentExperienceIndex())
                 .sourceSectionId(firstNonBlank(base.getSourceSectionId(), fallback.getSourceSectionId()))
@@ -440,6 +442,7 @@ final class ProjectSourceTextExtractor {
             boolean startsByIndex = indexMatcher.matches();
             boolean startsByDatedHeader = projectNameFromDatedHeader(line) != null;
             boolean startsByVisualHeader = !isProjectFieldLabel(line)
+                    && !isProjectRoleMetadata(line)
                     && hasVisualBoundarySignal(sourceLine, nextSourceLine)
                     && boundaryDetector.startsEntry(asRawBlock(sourceLine), asRawBlock(nextSourceLine));
             boolean startsByRepeatedName = projectNameLabel != null
@@ -448,12 +451,14 @@ final class ProjectSourceTextExtractor {
                     && current.hasProjectFieldContent();
             boolean startsByStandaloneName = current != null
                     && current.hasProjectFieldContent()
+                    && !isProjectRoleMetadata(line)
                     && looksLikeStandaloneProjectName(line)
                     && !startsByDatedHeader;
             // A visual layout commonly emits a title row followed by a date/role row. Keep
             // that pair in one segment; the dated row is a header signal, not a new project.
             if (startsByDatedHeader && current != null && current.canPairWithDatedHeader()
                     && isMetadataOnlyDatedHeader(line)) {
+                current.setExplicitTitle(cleanProjectName(current.lines().get(0).text()));
                 current.add(sourceLine);
                 continue;
             }
@@ -550,11 +555,15 @@ final class ProjectSourceTextExtractor {
             evidence.add(name);
         }
         List<String> responsibilities = normalizeResponsibilities(firstNonEmpty(fields.responsibilities(), extractResponsibilityLines(evidence)));
-        String summary = firstNonBlank(firstSentenceSummary(fields.description()), fallbackSummary(evidence, name, responsibilities));
+        String fieldDescription = fields.description();
+        if (hasText(name) && hasText(fieldDescription) && fieldDescription.startsWith(name + " ")) {
+            fieldDescription = fieldDescription.substring(name.length()).strip();
+        }
+        String summary = firstNonBlank(firstSentenceSummary(fieldDescription), fallbackSummary(evidence, name, responsibilities));
         Set<String> techStack = new LinkedHashSet<>();
         addSkills(fields.techText(), techStack);
         addSkills(fields.environment(), techStack);
-        addSkills(fields.description(), techStack);
+        addSkills(fieldDescription, techStack);
         responsibilities.forEach(line -> addSkills(line, techStack));
         addSkills(sourceText, techStack);
         boolean hasReliableTitle = hasText(name);
@@ -605,6 +614,11 @@ final class ProjectSourceTextExtractor {
             if (datedName != null) {
                 name = firstNonBlank(name, datedName);
                 timeRange = firstNonBlank(timeRange, extractTimeRange(line));
+                continue;
+            }
+            // “独立项目”以及“团队项目｜…负责人”是当前项目的类型/角色元数据，
+            // 不是下一条无日期项目标题，也不能混入项目描述。
+            if (isProjectRoleMetadata(line)) {
                 continue;
             }
             LabelValue labelValue = parseLabel(line);
@@ -778,7 +792,7 @@ final class ProjectSourceTextExtractor {
     }
 
     private static boolean looksLikeStandaloneProjectName(String line) {
-        if (!hasText(line) || isProjectFieldLabel(line)) {
+        if (!hasText(line) || isProjectFieldLabel(line) || isProjectRoleMetadata(line)) {
             return false;
         }
         String cleaned = cleanProjectName(line);
@@ -822,7 +836,7 @@ final class ProjectSourceTextExtractor {
         if (cleaned.matches("^(负责|参与|使用|采用|通过|实现|开发|编写|维护|优化|设计|管理|完成|做|对|是一个|该系统|该项目|主要|为了|左右).*")) {
             return false;
         }
-        if (cleaned.matches(".*(?:是一个|该系统|该项目|采用|通过|使用|负责|参与|实现|开发|编写|维护|优化|设计|左右代码|其余代码|交给系统|自动生成).*")) {
+        if (cleaned.matches(".*(?:是一个|该系统|该项目|采用|通过|使用|负责|参与|实现|开发|编写|维护|设计|左右代码|其余代码|交给系统|自动生成).*")) {
             return false;
         }
         return !isSkillOnly(cleaned);
@@ -1102,8 +1116,26 @@ final class ProjectSourceTextExtractor {
         return List.of();
     }
 
+    private static boolean isProjectRoleMetadata(String value) {
+        return value != null && PROJECT_ROLE_METADATA_PATTERN.matcher(value.strip()).matches();
+    }
+
     private static String extractRole(String text) {
         String value = text == null ? "" : text;
+        String explicitProjectRole = value.lines()
+                .map(String::strip)
+                .filter(ProjectSourceTextExtractor::isProjectRoleMetadata)
+                .findFirst()
+                .orElse(null);
+        if (explicitProjectRole != null) {
+            Matcher explicitDate = DATE_RANGE_PATTERN.matcher(explicitProjectRole);
+            if (explicitDate.find()) {
+                return (explicitProjectRole.substring(0, explicitDate.start())
+                        + explicitProjectRole.substring(explicitDate.end()))
+                        .replaceFirst("\\s*[|｜·]\\s*$", "").strip();
+            }
+            return explicitProjectRole;
+        }
         Matcher dateMatcher = DATE_RANGE_PATTERN.matcher(value);
         if (dateMatcher.find()) {
             String suffix = value.substring(dateMatcher.end()).lines()

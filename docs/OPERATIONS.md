@@ -900,7 +900,9 @@ BASE_URL=http://localhost ./scripts/ops/smoke-check.sh
 # 生产环境显式指定：BASE_URL=https://resume.dawn04.xyz ./scripts/ops/smoke-check.sh
 ```
 
-Restart contract：fresh startup 时 `minio-init` 必须完成并以 exit code 0 退出；之后只重启长期运行服务。Backend、Redis、Nginx 重启后必须重新达到 healthy 并通过 smoke。MinIO 或 PostgreSQL 重启属于数据服务维护，除 health 外还要验证应用恢复与 synthetic/维护窗口内的数据持久性；不要重启 `minio-init` 或 certbot one-shot command。
+生产 profile 明确禁用 Springdoc，因此 `/v3/api-docs`（Springdoc canonical path）不能作为生产 readiness probe。Smoke 仍通过无副作用的 `/api/auth/login` 请求确认 Nginx → Backend route；CI restart gate 另在 Compose 内直接、限时轮询 Backend `/actuator/health/liveness` 与 `/actuator/health/readiness`。
+
+Restart contract：fresh startup 时 `minio-init` 必须完成并以 exit code 0 退出；之后只重启长期运行服务。Backend、Redis、Nginx 重启后必须重新达到 healthy、Backend probes 必须恢复，并通过 smoke。MinIO gate 必须先在 marker 不存在时重启并确认 Backend 恢复，再写入 synthetic object、校验 checksum、再次重启 MinIO 并复验 checksum。PostgreSQL gate 必须在写入 synthetic marker 后显式重启 PostgreSQL，确认 Backend readiness 恢复并重新读取 marker。MinIO 或 PostgreSQL 重启属于数据服务维护；不要重启 `minio-init` 或 certbot one-shot command。
 
 检查服务、日志和容量：
 
