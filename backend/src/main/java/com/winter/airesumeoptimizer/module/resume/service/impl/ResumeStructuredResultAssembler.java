@@ -15,6 +15,7 @@ import com.winter.airesumeoptimizer.module.resume.dto.ResumeStructuredDataDTO;
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeTextSectionDTO;
 import com.winter.airesumeoptimizer.module.resume.dto.SourceSectionConfidence;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -31,7 +32,7 @@ final class ResumeStructuredResultAssembler {
             "(?<start>(?:19|20)\\d{2}(?:\\s*[./年-]\\s*\\d{1,2}\\s*月?)?)\\s*(?:[-~—–至到]+)\\s*(?<end>(?:19|20)\\d{2}(?:\\s*[./年-]\\s*\\d{1,2}\\s*月?)?|至今|Present)",
             Pattern.CASE_INSENSITIVE);
     private static final Pattern DATE_ONLY_PATTERN = Pattern.compile(
-            "(?<!\\d)(?<date>(?:19|20)\\d{2}(?:[./-]\\d{1,2}(?:[./-]\\d{1,2})?|年\\s*\\d{1,2}月(?:\\s*\\d{1,2}日)?|年))(?!\\d)",
+            "(?<!\\d)(?<date>(?:19|20)\\d{2}(?:[./—–-]\\d{1,2}(?:[./—–-]\\d{1,2})?|年\\s*\\d{1,2}月(?:\\s*\\d{1,2}日)?|年))(?!\\d)",
             Pattern.CASE_INSENSITIVE);
     private static final Pattern PROJECT_NAME_PATTERN = Pattern.compile("^(?:项目(?:名称)?|项目名|系统名称|Project)\\s*[:：-]?\\s*(?<name>.+)$|^(?<research>SRTP\\s*\\([^)]*\\)|SRTP（[^）]*）|[A-Za-z0-9_ -]{2,30}(?:项目|系统|平台|研究))",
             Pattern.CASE_INSENSITIVE);
@@ -333,12 +334,14 @@ final class ResumeStructuredResultAssembler {
                 addSkillsFromLine(line, keywords);
             }
         }
-        // Header-side and legacy flat skills can be source-backed even when a dedicated section
-        // was also recovered. Add only keywords not already represented by a source row so this
-        // compatibility supplement cannot manufacture duplicate occurrences.
-        for (String skill : preserve(content.getSkills())) {
-            if (!keywords.contains(skill)) {
-                keywords.add(skill);
+        // The legacy flat list is assembled by scanning broad compatibility evidence and may
+        // include technologies mentioned only in work or projects. It is a fallback only: once a
+        // dedicated Skills section yielded technical terms, that section owns canonical skills.
+        if (!foundSkillSource) {
+            for (String skill : preserve(content.getSkills())) {
+                if (!keywords.contains(skill)) {
+                    keywords.add(skill);
+                }
             }
         }
         return List.copyOf(keywords);
@@ -1309,7 +1312,135 @@ final class ResumeStructuredResultAssembler {
                         match.sourceRef()));
             }
         }
-        return achievements;
+        return mergeEquivalentAchievements(achievements);
+    }
+
+    private static List<ResumeAchievementDTO> mergeEquivalentAchievements(List<ResumeAchievementDTO> achievements) {
+        List<ResumeAchievementDTO> merged = new ArrayList<>();
+        Map<String, Integer> indexesByKey = new LinkedHashMap<>();
+        for (ResumeAchievementDTO achievement : safeList(achievements)) {
+            if (achievement == null) {
+                continue;
+            }
+            String key = achievementSemanticKey(achievement);
+            Integer existingIndex = indexesByKey.get(key);
+            if (existingIndex == null) {
+                indexesByKey.put(key, merged.size());
+                merged.add(achievement);
+                continue;
+            }
+            ResumeAchievementDTO existing = merged.get(existingIndex);
+            if (!punctuationEquivalentDateDuplicate(existing, achievement)) {
+                // Identical source rows remain distinct occurrences. Collapse only the known
+                // extraction artifact where the same dated award differs by dash typography.
+                merged.add(achievement);
+                continue;
+            }
+            merged.set(existingIndex, ResumeAchievementDTO.builder()
+                    .title(existing.getTitle())
+                    .level(existing.getLevel())
+                    .competition(existing.getCompetition())
+                    .ranking(existing.getRanking())
+                    .timeRange(existing.getTimeRange())
+                    .date(existing.getDate())
+                    .parentExperienceIndex(existing.getParentExperienceIndex())
+                    .sourceSectionId(existing.getSourceSectionId())
+                    .evidence(preserve(concat(existing.getEvidence(), achievement.getEvidence())))
+                    .sourceRef(mergeSourceRefs(existing.getSourceRef(), achievement.getSourceRef()))
+                    .confidence(existing.getConfidence())
+                    .build());
+        }
+        return List.copyOf(merged);
+    }
+
+    private static boolean punctuationEquivalentDateDuplicate(
+            ResumeAchievementDTO left, ResumeAchievementDTO right) {
+        String leftDate = firstNonBlank(left.getDate(), left.getTimeRange());
+        String rightDate = firstNonBlank(right.getDate(), right.getTimeRange());
+        if (!hasText(leftDate) || !normalizeAchievementDate(leftDate).equals(normalizeAchievementDate(rightDate))) {
+            return false;
+        }
+        String leftEvidence = safeList(left.getEvidence()).stream().findFirst().orElse("");
+        String rightEvidence = safeList(right.getEvidence()).stream().findFirst().orElse("");
+        return !normalizeSource(leftEvidence).equals(normalizeSource(rightEvidence))
+                && normalizeAchievementDate(normalizeSource(leftEvidence))
+                .equals(normalizeAchievementDate(normalizeSource(rightEvidence)));
+    }
+
+    private static List<String> concat(List<String> left, List<String> right) {
+        List<String> values = new ArrayList<>(left == null ? List.of() : left);
+        values.addAll(right == null ? List.of() : right);
+        return values;
+    }
+
+    private static String achievementSemanticKey(ResumeAchievementDTO achievement) {
+        return normalizeSource(achievement.getTitle()).toLowerCase()
+                + "|" + normalizeAchievementDate(firstNonBlank(achievement.getDate(), achievement.getTimeRange()));
+    }
+
+    private static String normalizeAchievementDate(String value) {
+        return value == null ? "" : value.replaceAll("[—–]", "-").replaceAll("\\s+", "").toLowerCase();
+    }
+
+    private static ResumeSourceRefDTO mergeSourceRefs(ResumeSourceRefDTO left, ResumeSourceRefDTO right) {
+        if (left == null) {
+            return right;
+        }
+        if (right == null) {
+            return left;
+        }
+        List<String> occurrenceIds = preserve(concat(left.getSourceOccurrenceIds(), right.getSourceOccurrenceIds()));
+        List<String> blockIds = preserve(concat(left.getSourceBlockIds(), right.getSourceBlockIds()));
+        boolean samePage = Objects.equals(left.getPage(), right.getPage());
+        Double x = samePage ? minCoordinate(Arrays.asList(left.getX(), right.getX())) : null;
+        Double y = samePage ? minCoordinate(Arrays.asList(left.getY(), right.getY())) : null;
+        Double rightEdge = samePage ? maxCoordinate(Arrays.asList(edge(left.getX(), left.getWidth()), edge(right.getX(), right.getWidth()))) : null;
+        Double bottomEdge = samePage ? maxCoordinate(Arrays.asList(edge(left.getY(), left.getHeight()), edge(right.getY(), right.getHeight()))) : null;
+        return ResumeSourceRefDTO.builder()
+                .startLine(minInteger(left.getStartLine(), right.getStartLine()))
+                .endLine(maxInteger(left.getEndLine(), right.getEndLine()))
+                .text(joinDistinctLines(left.getText(), right.getText()))
+                .sourceBlockIds(blockIds)
+                .sourceOccurrenceIds(occurrenceIds)
+                .page(samePage ? left.getPage() : null)
+                .x(x)
+                .y(y)
+                .width(x == null || rightEdge == null ? null : rightEdge - x)
+                .height(y == null || bottomEdge == null ? null : bottomEdge - y)
+                .fontSize(left.getFontSize())
+                .fontName(left.getFontName())
+                .boldHint(Boolean.TRUE.equals(left.getBoldHint()) || Boolean.TRUE.equals(right.getBoldHint()))
+                .indent(left.getIndent())
+                .bulletHint(Boolean.TRUE.equals(left.getBulletHint()) || Boolean.TRUE.equals(right.getBulletHint()))
+                .role(left.getRole())
+                .sourceType(left.getSourceType())
+                .build();
+    }
+
+    private static Double edge(Double origin, Double size) {
+        return origin == null || size == null ? null : origin + size;
+    }
+
+    private static Double maxCoordinate(List<Double> values) {
+        return values.stream().filter(Objects::nonNull).max(Double::compareTo).orElse(null);
+    }
+
+    private static Integer minInteger(Integer left, Integer right) {
+        return left == null ? right : right == null ? left : Math.min(left, right);
+    }
+
+    private static Integer maxInteger(Integer left, Integer right) {
+        return left == null ? right : right == null ? left : Math.max(left, right);
+    }
+
+    private static String joinDistinctLines(String left, String right) {
+        if (!hasText(left)) {
+            return right;
+        }
+        if (!hasText(right) || left.equals(right)) {
+            return left;
+        }
+        return left + "\n" + right;
     }
 
     private static SourceOccurrenceMatch allocateSourceOccurrence(
@@ -1423,7 +1554,9 @@ final class ResumeStructuredResultAssembler {
         String date = null;
         if (timeRange == null) {
             Matcher dateMatcher = DATE_ONLY_PATTERN.matcher(cleaned);
-            date = dateMatcher.find() ? dateMatcher.group("date").replaceAll("\\s+", "") : null;
+            date = dateMatcher.find()
+                    ? normalizeAchievementDate(dateMatcher.group("date"))
+                    : null;
         }
         String withoutDate = DATE_RANGE_PATTERN.matcher(cleaned).replaceAll("").strip();
         if (date != null) {

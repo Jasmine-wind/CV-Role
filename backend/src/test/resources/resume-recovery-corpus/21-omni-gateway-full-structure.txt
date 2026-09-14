@@ -1,0 +1,15 @@
+Synthetic Candidate O
+个人信息
+所在地：North Harbor
+目标岗位：AI Platform Engineer
+项目经历
+AI 简历优化 2024.01 - 2024.06
+构建冻结原文与结构化简历之间的审阅链路
+OmniGateway 2024.07 - 2025.01
+实现模型请求路由、限流和审计追踪
+技能
+后端：Java、Spring Boot、PostgreSQL
+前端：Vue、TypeScript
+荣誉奖项
+2025年合成系统可靠性实践奖
+完成结构恢复质量验证

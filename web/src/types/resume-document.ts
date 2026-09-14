@@ -110,4 +110,5 @@ export interface ResumeDocument {
   sourceOccurrenceIds?: string[] | null
   sourceOccurrenceTexts?: Record<string, string> | null
   sourceOccurrencePrimaryIds?: Record<string, string> | null
+  sourceOccurrenceRefs?: Record<string, ResumeSourceRef> | null
 }

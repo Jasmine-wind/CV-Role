@@ -424,17 +424,24 @@ final class ProjectSourceTextExtractor {
     }
 
     private static List<ProjectSegment> splitSegments(List<SourceLine> sourceLines, String sourceSectionId, Integer sourceStartLine) {
+        List<SourceLine> lines = sourceLines == null ? List.of() : sourceLines;
         List<ProjectSegment> segments = new ArrayList<>();
+        ResumeEntryBoundaryDetector boundaryDetector = new ResumeEntryBoundaryDetector();
         ProjectSegment current = null;
-        for (SourceLine sourceLine : sourceLines == null ? List.<SourceLine>of() : sourceLines) {
+        for (int lineIndex = 0; lineIndex < lines.size(); lineIndex++) {
+            SourceLine sourceLine = lines.get(lineIndex);
             String line = sourceLine.text();
             if (!hasText(line) || isProjectSectionHeading(line)) {
                 continue;
             }
+            SourceLine nextSourceLine = lineIndex + 1 < lines.size() ? lines.get(lineIndex + 1) : null;
             Matcher indexMatcher = PROJECT_INDEX_PATTERN.matcher(line);
             LabelValue projectNameLabel = parseProjectNameLabel(line);
             boolean startsByIndex = indexMatcher.matches();
             boolean startsByDatedHeader = projectNameFromDatedHeader(line) != null;
+            boolean startsByVisualHeader = !isProjectFieldLabel(line)
+                    && hasVisualBoundarySignal(sourceLine, nextSourceLine)
+                    && boundaryDetector.startsEntry(asRawBlock(sourceLine), asRawBlock(nextSourceLine));
             boolean startsByRepeatedName = projectNameLabel != null
                     && hasText(cleanProjectName(projectNameLabel.value()))
                     && current != null
@@ -450,19 +457,25 @@ final class ProjectSourceTextExtractor {
                 current.add(sourceLine);
                 continue;
             }
-            if (startsByIndex || startsByDatedHeader || startsByRepeatedName || startsByStandaloneName) {
+            if (startsByIndex || startsByDatedHeader || startsByVisualHeader
+                    || startsByRepeatedName || startsByStandaloneName) {
                 if (current != null && current.hasMeaningfulContent()) {
                     segments.add(current);
                 }
                 current = new ProjectSegment(sourceSectionId, sourceStartLine);
                 if (startsByIndex) {
                     String tail = indexMatcher.group("tail");
-                    if (hasText(tail) && !isProjectFieldLabel(tail)) {
+                    String explicitTitle = cleanProjectName(tail);
+                    if (hasText(explicitTitle) && !isProjectFieldLabel(tail)) {
+                        current.setExplicitTitle(explicitTitle);
                         current.add(new SourceLine(
                                 tail.strip(), sourceLine.lineId(), sourceLine.order(),
                                 sourceLine.sourceBlockIds(), sourceLine.metadata()));
                     }
                 } else {
+                    if (startsByVisualHeader && !startsByDatedHeader) {
+                        current.setExplicitTitle(cleanProjectName(line));
+                    }
                     current.add(sourceLine);
                 }
                 continue;
@@ -478,6 +491,37 @@ final class ProjectSourceTextExtractor {
         return segments;
     }
 
+    private static boolean hasVisualBoundarySignal(SourceLine sourceLine, SourceLine nextSourceLine) {
+        ResumeSourceRefDTO metadata = sourceLine == null ? null : sourceLine.metadata();
+        ResumeSourceRefDTO next = nextSourceLine == null ? null : nextSourceLine.metadata();
+        if (metadata == null) {
+            return false;
+        }
+        boolean largerFont = next != null && metadata.getFontSize() != null && next.getFontSize() != null
+                && metadata.getFontSize() >= next.getFontSize() + 0.75d;
+        boolean shallowerIndent = next != null && metadata.getIndent() != null && next.getIndent() != null
+                && metadata.getIndent() < next.getIndent();
+        return metadata.getRole() == com.winter.airesumeoptimizer.module.resume.dto.ResumeSourceBlockRole.ENTRY_HEADER
+                || Boolean.TRUE.equals(metadata.getBoldHint()) || largerFont || shallowerIndent;
+    }
+
+    private static ResumeRawSectionBlockDTO asRawBlock(SourceLine sourceLine) {
+        if (sourceLine == null) {
+            return null;
+        }
+        ResumeSourceRefDTO metadata = sourceLine.metadata();
+        return ResumeRawSectionBlockDTO.builder()
+                .text(sourceLine.text())
+                .page(metadata == null ? null : metadata.getPage())
+                .y(metadata == null ? null : metadata.getY())
+                .fontSize(metadata == null ? null : metadata.getFontSize())
+                .boldHint(metadata == null ? null : metadata.getBoldHint())
+                .indent(metadata == null ? null : metadata.getIndent())
+                .bulletHint(metadata == null ? null : metadata.getBulletHint())
+                .role(metadata == null ? null : metadata.getRole())
+                .build();
+    }
+
     private static ResumeProjectDTO buildProject(ProjectSegment segment, int index, ResumeSourceRefDTO parentSourceRef) {
         ProjectFields fields = parseFields(segment.lines());
         // Source rows, including identical text rows, are separate evidence occurrences. Do not
@@ -488,6 +532,7 @@ final class ProjectSourceTextExtractor {
         }
         String sourceText = String.join("\n", evidence);
         String name = cleanProjectName(firstNonBlank(
+                segment.explicitTitle(),
                 fields.name(),
                 evidence.stream().filter(ProjectSourceTextExtractor::looksLikeStandaloneProjectName).findFirst().orElse(null)));
         boolean nameAlreadyInEvidence = false;
@@ -765,7 +810,10 @@ final class ProjectSourceTextExtractor {
         if (!hasText(cleaned) || isProjectFieldLabel(cleaned)) {
             return false;
         }
-        if (cleaned.matches("^项目经历\\s*\\d*$")) {
+        if (cleaned.matches("^项目经历\\s*\\d*$")
+                || cleaned.matches("^[一二三四五六七八九十]+[.、:：-]*$")
+                || cleaned.matches("^\\d[.、:：-]*$")
+                || cleaned.matches("^[\\p{Punct}，。；：、—–…]+$")) {
             return false;
         }
         if (cleaned.length() > 36 || cleaned.matches(".*[。！？!?；;].*")) {
@@ -1235,6 +1283,7 @@ final class ProjectSourceTextExtractor {
         private final String sourceSectionId;
         private final Integer sourceStartLine;
         private final List<SourceLine> lines = new ArrayList<>();
+        private String explicitTitle;
 
         private ProjectSegment(String sourceSectionId, Integer sourceStartLine) {
             this.sourceSectionId = sourceSectionId;
@@ -1245,6 +1294,16 @@ final class ProjectSourceTextExtractor {
             if (line != null && hasText(line.text())) {
                 lines.add(line);
             }
+        }
+
+        private void setExplicitTitle(String explicitTitle) {
+            if (hasText(explicitTitle)) {
+                this.explicitTitle = explicitTitle;
+            }
+        }
+
+        private String explicitTitle() {
+            return explicitTitle;
         }
 
         private void prepend(List<SourceLine> prefixLines) {

@@ -23,6 +23,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Matcher;
@@ -51,6 +52,10 @@ public class ResumeDocumentConverterImpl implements ResumeDocumentConverter {
     private static final int ENTRY_FIELD_MAX_LENGTH = 200;
     private static final int SKILL_ITEM_MAX_LENGTH = 200;
     private static final int BULLET_MAX_LENGTH = 4000;
+    private static final Set<String> PROVENANCE_FIELDS = Set.of(
+            "sourceRef", "sourceOccurrenceIds", "sourceOccurrenceTexts",
+            "sourceOccurrencePrimaryIds", "sourceOccurrenceRefs", "fieldSourceRefs",
+            "techStackSourceRefs", "skillItemSourceRefs", "skillDescriptionSourceRefs");
 
     private static final Pattern EMAIL_VALUE = Pattern.compile("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$");
     private static final Pattern PHONE_VALUE = Pattern.compile("^\\+?[0-9][0-9\\s\\-()]{5,19}$");
@@ -90,10 +95,225 @@ public class ResumeDocumentConverterImpl implements ResumeDocumentConverter {
                 .sourceOccurrenceIds(copyStrings(document.getSourceOccurrenceIds()))
                 .sourceOccurrenceTexts(copySourceOccurrenceTexts(document.getSourceOccurrenceTexts()))
                 .sourceOccurrencePrimaryIds(copySourceOccurrenceTexts(document.getSourceOccurrencePrimaryIds()))
+                .sourceOccurrenceRefs(copySourceOccurrenceRefs(document.getSourceOccurrenceRefs()))
                 .basics(normalizeBasics(document.getBasics(), idAllocator))
                 .sections(normalizeSections(document.getSections(), idAllocator))
                 .build();
     }
+
+    @Override
+    public ResumeDocumentDTO normalizeWorkspaceSave(
+            ResumeDocumentDTO submitted,
+            ResumeDocumentDTO currentTarget,
+            ResumeDocumentDTO frozenSource) {
+        if (submitted == null || currentTarget == null || frozenSource == null) {
+            throw new BusinessException(400, "简历内容不能为空");
+        }
+        ResumeDocumentDTO candidate = withoutSubmittedProvenance(submitted);
+        Map<String, NodeLocation> currentTopology = topology(currentTarget);
+        FrozenNodes frozen = frozenNodes(frozenSource);
+
+        restoreRootProvenance(candidate, frozenSource);
+        restoreBasicsProvenance(candidate.getBasics(), frozenSource.getBasics());
+        for (ResumeDocumentContactDTO contact : safeList(candidate.getBasics() == null
+                ? null : candidate.getBasics().getContacts())) {
+            NodeLocation contactLocation = new NodeLocation("CONTACT", "BASICS");
+            if (existingAt(contact.getId(), contactLocation, currentTopology)
+                    && frozenAt(contact.getId(), contactLocation, frozen.topology())) {
+                restoreContactProvenance(contact, frozen.contacts().get(contact.getId()));
+            }
+        }
+        for (ResumeDocumentSectionDTO section : safeList(candidate.getSections())) {
+            NodeLocation sectionLocation = new NodeLocation("SECTION", "ROOT:" + section.getKind());
+            boolean existingSection = existingAt(section.getId(), sectionLocation, currentTopology);
+            ResumeDocumentSectionDTO frozenSection = existingSection
+                    && frozenAt(section.getId(), sectionLocation, frozen.topology())
+                    ? frozen.sections().get(section.getId()) : null;
+            restoreSectionProvenance(section, frozenSection);
+            for (ResumeDocumentEntryDTO entry : safeList(section.getEntries())) {
+                NodeLocation entryLocation = new NodeLocation("ENTRY", "SECTION:" + section.getId());
+                boolean existingEntry = existingAt(entry.getId(), entryLocation, currentTopology);
+                ResumeDocumentEntryDTO frozenEntry = existingEntry
+                        && frozenAt(entry.getId(), entryLocation, frozen.topology())
+                        ? frozen.entries().get(entry.getId()) : null;
+                restoreEntryProvenance(entry, frozenEntry);
+                for (ResumeDocumentBulletDTO bullet : safeList(entry.getBullets())) {
+                    NodeLocation bulletLocation = new NodeLocation(
+                            "BULLET", "SECTION:" + section.getId() + "/ENTRY:" + entry.getId());
+                    if (existingAt(bullet.getId(), bulletLocation, currentTopology)
+                            && frozenAt(bullet.getId(), bulletLocation, frozen.topology())) {
+                        restoreBulletProvenance(bullet, frozen.bullets().get(bullet.getId()));
+                    }
+                }
+            }
+        }
+        return normalize(candidate);
+    }
+
+    private ResumeDocumentDTO withoutSubmittedProvenance(ResumeDocumentDTO submitted) {
+        try {
+            JsonNode tree = objectMapper.valueToTree(submitted);
+            removeProvenance(tree);
+            return strictObjectMapper.treeToValue(tree, ResumeDocumentDTO.class);
+        } catch (JsonProcessingException | IllegalArgumentException exception) {
+            throw new BusinessException(400, "简历内容格式不正确");
+        }
+    }
+
+    private void removeProvenance(JsonNode node) {
+        if (node == null) {
+            return;
+        }
+        if (node instanceof ObjectNode object) {
+            PROVENANCE_FIELDS.forEach(object::remove);
+            object.elements().forEachRemaining(this::removeProvenance);
+            return;
+        }
+        if (node.isArray()) {
+            node.elements().forEachRemaining(this::removeProvenance);
+        }
+    }
+
+    private Map<String, NodeLocation> topology(ResumeDocumentDTO document) {
+        Map<String, NodeLocation> result = new LinkedHashMap<>();
+        for (ResumeDocumentContactDTO contact : safeList(document == null || document.getBasics() == null
+                ? null : document.getBasics().getContacts())) {
+            addLocation(result, contact == null ? null : contact.getId(), new NodeLocation("CONTACT", "BASICS"));
+        }
+        for (ResumeDocumentSectionDTO section : safeList(document == null ? null : document.getSections())) {
+            if (section == null) {
+                continue;
+            }
+            addLocation(result, section.getId(), new NodeLocation("SECTION", "ROOT:" + section.getKind()));
+            for (ResumeDocumentEntryDTO entry : safeList(section.getEntries())) {
+                if (entry == null) {
+                    continue;
+                }
+                addLocation(result, entry.getId(), new NodeLocation("ENTRY", "SECTION:" + section.getId()));
+                for (ResumeDocumentBulletDTO bullet : safeList(entry.getBullets())) {
+                    addLocation(result, bullet == null ? null : bullet.getId(), new NodeLocation(
+                            "BULLET", "SECTION:" + section.getId() + "/ENTRY:" + entry.getId()));
+                }
+            }
+        }
+        return result;
+    }
+
+    private void addLocation(Map<String, NodeLocation> locations, String id, NodeLocation location) {
+        if (id == null || id.isBlank()) {
+            return;
+        }
+        NodeLocation previous = locations.putIfAbsent(id, location);
+        if (previous != null) {
+            throw new BusinessException(400, "简历节点 ID 重复");
+        }
+    }
+
+    private boolean existingAt(String id, NodeLocation submitted, Map<String, NodeLocation> current) {
+        if (id == null || id.isBlank()) {
+            return false;
+        }
+        NodeLocation server = current.get(id);
+        if (server == null) {
+            return false;
+        }
+        if (!server.equals(submitted)) {
+            throw new BusinessException(400, "简历节点不能改变原有归属");
+        }
+        return true;
+    }
+
+    private boolean frozenAt(String id, NodeLocation expected, Map<String, NodeLocation> frozenTopology) {
+        NodeLocation frozen = id == null ? null : frozenTopology.get(id);
+        if (frozen == null) {
+            return false;
+        }
+        if (!frozen.equals(expected)) {
+            throw new BusinessException(400, "简历节点来源归属不一致");
+        }
+        return true;
+    }
+
+    private FrozenNodes frozenNodes(ResumeDocumentDTO source) {
+        Map<String, ResumeDocumentContactDTO> contacts = new LinkedHashMap<>();
+        Map<String, ResumeDocumentSectionDTO> sections = new LinkedHashMap<>();
+        Map<String, ResumeDocumentEntryDTO> entries = new LinkedHashMap<>();
+        Map<String, ResumeDocumentBulletDTO> bullets = new LinkedHashMap<>();
+        for (ResumeDocumentContactDTO contact : safeList(source == null || source.getBasics() == null
+                ? null : source.getBasics().getContacts())) {
+            if (contact != null && contact.getId() != null) contacts.put(contact.getId(), contact);
+        }
+        for (ResumeDocumentSectionDTO section : safeList(source == null ? null : source.getSections())) {
+            if (section == null) continue;
+            if (section.getId() != null) sections.put(section.getId(), section);
+            for (ResumeDocumentEntryDTO entry : safeList(section.getEntries())) {
+                if (entry == null) continue;
+                if (entry.getId() != null) entries.put(entry.getId(), entry);
+                for (ResumeDocumentBulletDTO bullet : safeList(entry.getBullets())) {
+                    if (bullet != null && bullet.getId() != null) bullets.put(bullet.getId(), bullet);
+                }
+            }
+        }
+        return new FrozenNodes(contacts, sections, entries, bullets, topology(source));
+    }
+
+    private void restoreRootProvenance(ResumeDocumentDTO target, ResumeDocumentDTO source) {
+        target.setSourceRef(copySourceRef(source.getSourceRef()));
+        target.setSourceOccurrenceIds(copyStrings(source.getSourceOccurrenceIds()));
+        target.setSourceOccurrenceTexts(copySourceOccurrenceTexts(source.getSourceOccurrenceTexts()));
+        target.setSourceOccurrencePrimaryIds(copySourceOccurrenceTexts(source.getSourceOccurrencePrimaryIds()));
+        target.setSourceOccurrenceRefs(copySourceOccurrenceRefs(source.getSourceOccurrenceRefs()));
+    }
+
+    private void restoreBasicsProvenance(ResumeDocumentBasicsDTO target, ResumeDocumentBasicsDTO source) {
+        if (target == null || source == null) return;
+        target.setSourceRef(copySourceRef(source.getSourceRef()));
+        target.setSourceOccurrenceIds(copyStrings(source.getSourceOccurrenceIds()));
+        target.setFieldSourceRefs(copyFieldSourceRefs(source.getFieldSourceRefs()));
+    }
+
+    private void restoreContactProvenance(ResumeDocumentContactDTO target, ResumeDocumentContactDTO source) {
+        if (target == null || source == null) return;
+        target.setSourceRef(copySourceRef(source.getSourceRef()));
+        target.setSourceOccurrenceIds(copyStrings(source.getSourceOccurrenceIds()));
+    }
+
+    private void restoreSectionProvenance(ResumeDocumentSectionDTO target, ResumeDocumentSectionDTO source) {
+        if (target == null || source == null) return;
+        target.setSourceRef(copySourceRef(source.getSourceRef()));
+        target.setSourceOccurrenceIds(copyStrings(source.getSourceOccurrenceIds()));
+    }
+
+    private void restoreEntryProvenance(ResumeDocumentEntryDTO target, ResumeDocumentEntryDTO source) {
+        if (target == null || source == null) return;
+        target.setSourceRef(copySourceRef(source.getSourceRef()));
+        target.setSourceOccurrenceIds(copyStrings(source.getSourceOccurrenceIds()));
+        target.setFieldSourceRefs(copyFieldSourceRefs(source.getFieldSourceRefs()));
+        target.setTechStackSourceRefs(Objects.equals(target.getTechStack(), source.getTechStack())
+                ? copySourceRefs(source.getTechStackSourceRefs()) : null);
+        target.setSkillItemSourceRefs(Objects.equals(target.getSkillItems(), source.getSkillItems())
+                ? copySourceRefs(source.getSkillItemSourceRefs()) : null);
+        target.setSkillDescriptionSourceRefs(Objects.equals(target.getSkillDescriptions(), source.getSkillDescriptions())
+                ? copySourceRefs(source.getSkillDescriptionSourceRefs()) : null);
+    }
+
+    private void restoreBulletProvenance(ResumeDocumentBulletDTO target, ResumeDocumentBulletDTO source) {
+        if (target == null || source == null) return;
+        target.setSourceRef(copySourceRef(source.getSourceRef()));
+        target.setSourceOccurrenceIds(copyStrings(source.getSourceOccurrenceIds()));
+    }
+
+    private <T> List<T> safeList(List<T> values) {
+        return values == null ? List.of() : values;
+    }
+
+    private record NodeLocation(String type, String parent) {}
+    private record FrozenNodes(
+            Map<String, ResumeDocumentContactDTO> contacts,
+            Map<String, ResumeDocumentSectionDTO> sections,
+            Map<String, ResumeDocumentEntryDTO> entries,
+            Map<String, ResumeDocumentBulletDTO> bullets,
+            Map<String, NodeLocation> topology) {}
 
     @Override
     public ResumeDocumentDTO upgradeLegacyDocument(String legacyJson) {
@@ -133,6 +353,7 @@ public class ResumeDocumentConverterImpl implements ResumeDocumentConverter {
                         "简历来源 occurrence 格式不正确，请重新解析"))
                 .sourceOccurrenceTexts(readSourceOccurrenceTexts(root.path("sourceOccurrenceTexts")))
                 .sourceOccurrencePrimaryIds(readSourceOccurrenceTexts(root.path("sourceOccurrencePrimaryIds")))
+                .sourceOccurrenceRefs(readSourceOccurrenceRefs(root.path("sourceOccurrenceRefs")))
                 .basics(upgradeBasics(root))
                 .sections(upgradeSections(root.path("sections")))
                 .build();
@@ -1131,6 +1352,32 @@ public class ResumeDocumentConverterImpl implements ResumeDocumentConverter {
 
     private Map<String, String> copySourceOccurrenceTexts(Map<String, String> values) {
         return values == null ? null : new LinkedHashMap<>(values);
+    }
+
+    private Map<String, ResumeSourceRefDTO> copySourceOccurrenceRefs(Map<String, ResumeSourceRefDTO> values) {
+        if (values == null) {
+            return null;
+        }
+        Map<String, ResumeSourceRefDTO> copied = new LinkedHashMap<>();
+        values.forEach((key, value) -> copied.put(key, copySourceRef(value)));
+        return copied;
+    }
+
+    private Map<String, ResumeSourceRefDTO> readSourceOccurrenceRefs(JsonNode node) {
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return null;
+        }
+        if (!node.isObject()) {
+            throw new BusinessException(500, "简历来源 occurrence 坐标清单格式不正确，请重新解析");
+        }
+        Map<String, ResumeSourceRefDTO> values = new LinkedHashMap<>();
+        node.fields().forEachRemaining(entry -> {
+            if (entry.getKey() == null || entry.getKey().isBlank()) {
+                throw new BusinessException(500, "简历来源 occurrence 坐标清单格式不正确，请重新解析");
+            }
+            values.put(entry.getKey(), readSourceRef(entry.getValue()));
+        });
+        return values;
     }
 
     private Map<String, String> readSourceOccurrenceTexts(JsonNode node) {

@@ -40,6 +40,10 @@ public class ResumeDocumentDTO {
     @Schema(description = "来源 occurrence 到逻辑 occurrence 的只读映射")
     private Map<String, String> sourceOccurrencePrimaryIds;
 
+    /** Optional frozen geometry/typography sidecar for newly parsed SOURCE versions. */
+    @Schema(description = "来源 occurrence 到原始坐标与排版引用的只读映射")
+    private Map<String, ResumeSourceRefDTO> sourceOccurrenceRefs;
+
     @Schema(description = "基础信息")
     private ResumeDocumentBasicsDTO basics;
 

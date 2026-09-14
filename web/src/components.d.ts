@@ -42,6 +42,7 @@ declare module 'vue' {
     WorkspacePanel: typeof import('./components/workspace/WorkspacePanel.vue')['default']
     WorkspacePreviewExport: typeof import('./components/workspace/WorkspacePreviewExport.vue')['default']
     WorkspaceRequirements: typeof import('./components/workspace/WorkspaceRequirements.vue')['default']
+    WorkspaceSourcePane: typeof import('./components/workspace/WorkspaceSourcePane.vue')['default']
     WorkspaceSuggestions: typeof import('./components/workspace/WorkspaceSuggestions.vue')['default']
   }
 }

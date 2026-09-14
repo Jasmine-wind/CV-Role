@@ -45,7 +45,7 @@ scripts/  生产运维脚本
 - `job`：预置岗位、用户目标 JD、岗位解析和旧匹配。
 - `analysis`：诊断、优化建议、局部改写和聚合报告；旧 AI 匹配仍在其中，公开写入口已停用，仅服务历史兼容读取，不再是主链路正式结果。
 - `optimization`：`ResumeVersion`、`JobTarget`、`OptimizationTask`，负责版本派生、输入与配置快照、任务归属和正式结果入口。
-- `workspace`：Phase 4 优化工作区与 Phase 5 单 Bullet AI Suggest；以 `optimizationTaskId` 为唯一入口解析任务版本链，提供 TARGET 岗位版本的结构化简历文档读取、基于 `content_revision` 乐观并发的条件保存与恢复优化前版本，以及只读生成、技术安全校验、事实审查 advisory 和会话内显式采纳。
+- `workspace`：Phase 4 优化工作区与 Phase 5 单 Bullet AI Suggest；以 `optimizationTaskId` 为唯一入口解析任务版本链，提供 TARGET 岗位版本的结构化简历文档读取、基于 `content_revision` 乐观并发的条件保存与恢复优化前版本，以及只读生成、技术安全校验、事实审查 advisory 和会话内显式采纳。工作区同时按任务绑定的 `sourceResumeVersionId` 提供冻结 SOURCE occurrence blocks 与经根 manifest 校验的双向 provenance；原始 PDF 只通过 task-scoped 鉴权端点读取，不暴露 storage key。
 - `export`：Phase 6 PDF Preview / Export；只读取至少完成一次 CAS Save 的 TARGET `RESUME_DOCUMENT_V1`（Slice A 为其增加语义字段，历史 generic 形态只读升级），生成带实际 preflight 和签名 receipt 的 PDF Preview；Export 验证 receipt 完整绑定并通过文档 / PDF 两层质量门后创建私有 `ExportArtifact`，并维护 READY / DELETE_PENDING 可重试生命周期。
 - `evidence`：Phase 3 正式 Evidence Matching 与 Gap Analysis；岗位要求、简历证据与匹配结论的正式 Source of Truth。
 - `embedding`：文本分块、向量生成、相似度与 RAG 上下文；当前不进入正式证据匹配主链路。
@@ -56,7 +56,7 @@ scripts/  生产运维脚本
 - `ai/usage`：Provider attempt ledger、独立事务写入和 90 天 retention；不是产品漏斗 Source of Truth。
 - `demo`：只在明确 `demo` profile + property 下创建合成普通 User 数据，不参与生产域模型或授权。
 
-前端按 `api/`、`components/`、`layout/`、`router/`、`stores/`、`types/`、`utils/`、`views/` 分层。页面包含 Landing、首页、我的简历、按正式优化任务访问的岗位分析结果、按正式优化任务访问的优化工作区、达到样本门槛后从首页进入的岗位方向洞察、账户设置（个人资料 / AI 设置）、登录和注册；一级导航仍只有首页和我的简历，设置与洞察都不进入首次使用步骤。全局壳只承担 navigation / account / 窄屏菜单（窄屏 sidebar 为 Drawer），账号菜单提供账户设置和 AI 设置快捷入口；Settings shell 在桌面使用窄侧栏，在窄屏使用横向 tabs。页面标题与任务操作由各页面自身承担。Preview / Export 以 Workspace 内的“编辑 / 预览”模式集成，Preview 使用完整文档阅读区域，仅保存成功状态可用；Workspace 当前采用岗位要求导航 / 简历编辑器 / contextual inspector 的三栏任务壳，检查器只展示当前岗位要求上下文，完整分析仍留在 Analysis 页面，窄屏转为要求横向条 + 编辑 / 建议切换。Element Plus 由 unplugin-vue-components 按需解析，路由懒加载；视觉变量集中在 `styles/tokens.scss`（近白背景、弱边框、少阴影、克制圆角、单一主色），状态色只用于真实反馈。
+前端按 `api/`、`components/`、`layout/`、`router/`、`stores/`、`types/`、`utils/`、`views/` 分层。页面包含 Landing、首页、我的简历、按正式优化任务访问的岗位分析结果、按正式优化任务访问的优化工作区、达到样本门槛后从首页进入的岗位方向洞察、账户设置（个人资料 / AI 设置）、登录和注册；一级导航仍只有首页和我的简历，设置与洞察都不进入首次使用步骤。全局壳只承担 navigation / account / 窄屏菜单（窄屏 sidebar 为 Drawer），账号菜单提供账户设置和 AI 设置快捷入口；Settings shell 在桌面使用窄侧栏，在窄屏使用横向 tabs。页面标题与任务操作由各页面自身承担。Preview / Export 以 Workspace 内的“编辑 / 预览”模式集成，Preview 使用完整文档阅读区域，仅保存成功状态可用；Workspace 桌面默认约 40/60 同时展示冻结 SOURCE 与当前 TARGET，窄屏使用 focused Source / Current / Context tabs。Requirement / Evidence 与 AI Suggestion 进入临时 context drawer，不取代两份文档；AI 候选仍保留 request/base revision/hash stale guard 与显式 Apply。Element Plus 由 unplugin-vue-components 按需解析，路由懒加载；视觉变量集中在 `styles/tokens.scss`（近白背景、弱边框、少阴影、克制圆角、单一主色），状态色只用于真实反馈。
 
 ## 3. 当前主链路
 
@@ -68,12 +68,12 @@ scripts/  生产运维脚本
 → JobAnalysisService 以 OptimizationTask 为业务主键，在后台确保简历可用并冻结输入快照，再解析 JD，随后由 EvidenceMatchService 生成正式证据分析
 → 失败时按 OptimizationTask 重试，复用已保存输入且不创建新版本；成功任务不可重试改写；重试会整体替换旧的正式分析行
 → 岗位分析结果页只通过 OptimizationTask 读取正式证据分析；历史任务无正式分析时兼容读取旧匹配结果
-→ 任务成功后可进入优化工作区：服务端把冻结解析快照转换为结构化简历文档，用户对 TARGET 岗位版本做 Section / Bullet 编辑、排序与恢复优化前版本，自动保存以 content_revision 条件更新落库
+→ 任务成功后可进入优化工作区：服务端把冻结解析快照转换为结构化简历文档，同时展示 task-bound SOURCE 原文/PDF 与 occurrence provenance；用户对 TARGET 岗位版本做 Section / Bullet 编辑、排序与恢复优化前版本，自动保存以 content_revision 条件更新落库
 → 用户可对明确选中的单个 Bullet 请求只读 AI Suggest；候选经严格解析与技术安全校验后展示代码 Diff，事实变化以 review advisory 提醒，显式 Apply 才进入既有 Undo / Auto Save / CAS
-→ 保存成功后可在 Preview / Export 中选择内置模板，同步渲染服务端已保存内容得到 PDF；导出成功后生成带归属与生命周期记录的导出物
+→ 保存成功后可在 Preview / Export 中选择内置模板；Structure Fidelity Gate 先检查未映射原文、歧义/重复映射、项目边界、标题存活关系与重复联系方式等确定性阻断项，再同步渲染服务端已保存内容得到 PDF；导出成功后生成带归属与生命周期记录的导出物
 ```
 
-`ResumeIntakeService`、`JobAnalysisService` 与 `OptimizationTaskService` 是默认用户流的深模块 seam：前者负责上传与准备，第二个负责后台分析编排，第三个负责正式业务身份、版本关系和快照。调用方不需要编排 Parse、Embedding、Prompt 或供应商步骤。`WorkspaceContentService` 是 Phase 4 的编辑 seam：只接受 optimizationTaskId，内部解析并校验 Task → SOURCE / TARGET / JobTarget / Resume / User 完整版本链，把规则候选经确定性验证与未决候选裁决后物化为 `resume_versions.structured_content` 中的 RESUME_DOCUMENT_V1 SOURCE：`READY` 为可交付快照，`NEEDS_REVIEW` 为 `PENDING` 的 source-backed 审查草稿；审查确认通过后发布新的 SOURCE 并移动当前指针，旧快照保留。解析表只保存当前 SOURCE 指针和审查 sidecar。任务引用该冻结 SOURCE 并把 canonical 文档写入 task 的 SOURCE/TARGET 快照，以单条条件 UPDATE 实现 expectedRevision 乐观并发；Workspace 不回写当前解析结果、任务输入快照或证据分析。Phase 3 已建立正式 Evidence / Gap 模型：正式分析结果是每个任务一条 `evidence_analyses` 及其 `evidence_requirements` / `requirement_evidences` 行，每条岗位要求只按当前冻结材料的支持强度判定为足够支持（MATCHED）、存在相关但不完整证据（PARTIAL_EVIDENCE）或未找到支持证据（NO_EVIDENCE）。具体匹配实现位于 `EvidenceMatchingStrategy` interface 之后（当前为单次 AI 结构化输出 + Requirement / quote / ResumeVersion 代码校核），后续可在不改动编排的情况下替换。该模型不判断用户现实世界中的完整能力，也不保留 EXPRESSION_GAP 兼容语义。
+`ResumeIntakeService`、`JobAnalysisService` 与 `OptimizationTaskService` 是默认用户流的深模块 seam：前者负责上传与准备，第二个负责后台分析编排，第三个负责正式业务身份、版本关系和快照。调用方不需要编排 Parse、Embedding、Prompt 或供应商步骤。`WorkspaceContentService` 是 Phase 4 的编辑 seam：只接受 optimizationTaskId，内部解析并校验 Task → SOURCE / TARGET / JobTarget / Resume / User 完整版本链，把规则候选经确定性验证与未决候选裁决后物化为 `resume_versions.structured_content` 中的 RESUME_DOCUMENT_V1 SOURCE：`READY` 为可交付快照，`NEEDS_REVIEW` 为 `PENDING` 的 source-backed 审查草稿；审查确认通过后发布新的 SOURCE 并移动当前指针，旧快照保留。解析表只保存当前 SOURCE 指针和审查 sidecar。任务引用该冻结 SOURCE 并把 canonical 文档写入 task 的 SOURCE/TARGET 快照；新解析的 SOURCE 在同一 `RESUME_DOCUMENT_V1` JSON 中以可选 `sourceOccurrenceRefs` sidecar 冻结每个 occurrence 的页码、坐标与排版引用，历史快照缺失该字段时不猜测坐标、仍以 order/text/primary alias 做 provenance 鉴权。TARGET 保存先按 expectedRevision 判定冲突，再由服务端丢弃请求中的全部 provenance 字段，并只按冻结 SOURCE 与当前持久化 TARGET 的稳定节点拓扑恢复可信引用；已知节点 ID 被重挂、拓扑 ID 重复时拒绝保存，新节点保持无引用。最终仍以单条条件 UPDATE 实现乐观并发；Workspace 不回写当前解析结果、任务输入快照或证据分析。解析投影对无边界的重复显式 occurrence 不选择“第一条”，只有唯一 occurrence、可信 preferred boundary 或唯一连续 span 才建立引用，否则保留为未决内容并 fail closed。Phase 3 已建立正式 Evidence / Gap 模型：正式分析结果是每个任务一条 `evidence_analyses` 及其 `evidence_requirements` / `requirement_evidences` 行，每条岗位要求只按当前冻结材料的支持强度判定为足够支持（MATCHED）、存在相关但不完整证据（PARTIAL_EVIDENCE）或未找到支持证据（NO_EVIDENCE）。具体匹配实现位于 `EvidenceMatchingStrategy` interface 之后（当前为单次 AI 结构化输出 + Requirement / quote / ResumeVersion 代码校核），后续可在不改动编排的情况下替换。该模型不判断用户现实世界中的完整能力，也不保留 EXPRESSION_GAP 兼容语义。
 
 `ResumePdfRenderer` 是 Phase 6 的渲染 seam：把结构化简历文档确定性映射为转义后的 Typst 数据文件，在隔离临时目录中用内置版本化模板（Classic 当前 v5、Modern / Minimal 当前 v3，历史版本保留供导出物解释；按章节类型分支；渲染器版本仍为 `typst-resume-renderer/3`）同步编译为 PDF；固定创建时间戳与文档 metadata 使相同输入逐字节确定，PDFBox 随后解析真实页数、字号、末页 glyph 占用并检查文字是否超出页面 CropBox。渲染进程以 `--root` 限制文件读取，内置模板不引用外部包且用户内容无法触发 Typst 语法；生产镜像通过 `APP_RENDER_FONT_PATH` 指向只含审核过的静态 Noto CJK Regular/Bold 字体目录，并让 Typst 忽略宿主机字体，避免 Thin/variable fallback；当前没有 OS 级网络沙箱，该防御深度限制记录为残余风险。
 

@@ -169,6 +169,7 @@ public class ResumeCanonicalDocumentServiceImpl implements ResumeCanonicalDocume
                 .sourceOccurrenceIds(provenance.occurrenceIds(provenance.occurrences))
                 .sourceOccurrenceTexts(provenance.occurrenceTexts())
                 .sourceOccurrencePrimaryIds(provenance.occurrencePrimaryIds())
+                .sourceOccurrenceRefs(provenance.occurrenceRefs())
                 .basics(basics)
                 .sections(sections)
                 .build();
@@ -299,6 +300,18 @@ public class ResumeCanonicalDocumentServiceImpl implements ResumeCanonicalDocume
         // malformed nested text value must not be hidden behind `debug`.
         if ("sourceRef".equals(fieldName)) {
             validateHistoricalSourceReference(node);
+            return;
+        }
+        if ("sourceOccurrenceRefs".equals(fieldName)) {
+            if (!node.isObject()) {
+                throw new BusinessException(500, "简历来源 occurrence 坐标清单格式不正确");
+            }
+            node.fields().forEachRemaining(entry -> {
+                if (entry.getKey() == null || entry.getKey().isBlank()) {
+                    throw new BusinessException(500, "简历来源 occurrence 坐标清单格式不正确");
+                }
+                validateHistoricalSourceReference(entry.getValue());
+            });
             return;
         }
         if ("sourceOccurrenceTexts".equals(fieldName)
@@ -3574,13 +3587,10 @@ public class ResumeCanonicalDocumentServiceImpl implements ResumeCanonicalDocume
         if (trimmed == null || provenance == null) {
             return null;
         }
-        String key = normalize(trimmed) + "\\u0000" + (section == null ? "" : section);
-        Set<String> consumed = allocatedValues.computeIfAbsent(key, ignored -> new LinkedHashSet<>());
-        SourceMatch match = provenance.matchNext(trimmed, section, preferred, consumed);
-        if (match != null) {
-            provenance.consume(consumed, match);
-        }
-        return match;
+        // Basics are scalar claims, not a source-ordered sibling list. Repeated explicit text
+        // without a preferred occurrence boundary is ambiguous and must not consume "the next"
+        // matching row merely because it appears first.
+        return provenance.match(trimmed, section, preferred);
     }
 
     private void addReferenceIfPresent(List<ResumeSourceRefDTO> target, SourceMatch match) {
@@ -4130,7 +4140,7 @@ public class ResumeCanonicalDocumentServiceImpl implements ResumeCanonicalDocume
         List<String> result = new ArrayList<>();
         for (String value : values == null ? List.<String>of() : values) {
             String trimmed = trimToNull(value);
-            if (trimmed != null && provenance.match(trimmed, section, preferred) != null) {
+            if (trimmed != null && provenance.hasCandidate(trimmed, section, preferred)) {
                 result.add(trimmed);
             }
         }
@@ -6191,6 +6201,23 @@ public class ResumeCanonicalDocumentServiceImpl implements ResumeCanonicalDocume
                     .orElse("");
         }
 
+        private boolean hasCandidate(String value, String section, ResumeSourceRefDTO preferred) {
+            if (value == null || value.isBlank()) {
+                return false;
+            }
+            Set<String> allowed = section == null || section.isBlank() ? Set.of() : Set.of(section);
+            if (preferred != null) {
+                return ResumeSourceEvidenceMatcher.isValidReference(
+                        preferred, occurrences, allowed, allowUnscopedSections)
+                        && ResumeSourceEvidenceMatcher.referenceSupportsValue(
+                        value, preferred, occurrences, allowed);
+            }
+            return !ResumeSourceEvidenceMatcher.matchingOccurrences(
+                    value, occurrences, allowed, allowUnscopedSections).isEmpty()
+                    || "SUMMARY".equalsIgnoreCase(section)
+                    && !exactContiguousSpan(value, occurrences, allowed).isEmpty();
+        }
+
         private SourceMatch match(String value, String section, ResumeSourceRefDTO preferred) {
             if (value == null || value.isBlank()) {
                 return null;
@@ -6215,12 +6242,14 @@ public class ResumeCanonicalDocumentServiceImpl implements ResumeCanonicalDocume
                 List<ResumeSourceEvidenceMatcher.Occurrence> direct = preferredOccurrences.stream()
                         .filter(occurrence -> ResumeSourceEvidenceMatcher.matchesOccurrence(value, occurrence.text()))
                         .toList();
-                if (!direct.isEmpty()) {
-                    // One semantic value is proved by one source occurrence. Do not union every
-                    // identical row merely because a legacy reference listed all of them; the
-                    // remaining identical rows must stay independently representable.
-                    ResumeSourceEvidenceMatcher.Occurrence selected = direct.get(0);
-                    return new SourceMatch(reference(List.of(selected)), List.of(selected));
+                SourceMatch directMatch = boundedMatch(value, direct);
+                if (directMatch != null) {
+                    return directMatch;
+                }
+                if (distinctOccurrenceCount(direct) > 1) {
+                    // A broad preferred boundary containing several matching rows does not
+                    // identify which occurrence owns this field.
+                    return null;
                 }
                 List<ResumeSourceEvidenceMatcher.Occurrence> span = exactContiguousSpan(
                         value, preferredOccurrences, allowed);
@@ -6234,14 +6263,12 @@ public class ResumeCanonicalDocumentServiceImpl implements ResumeCanonicalDocume
             List<ResumeSourceEvidenceMatcher.Occurrence> matches =
                     ResumeSourceEvidenceMatcher.matchingOccurrences(
                             value, occurrences, allowed, allowUnscopedSections);
-            if (!matches.isEmpty()) {
-                ResumeSourceEvidenceMatcher.Occurrence selected = matches.stream()
-                        .sorted(java.util.Comparator.comparing(
-                                ResumeSourceEvidenceMatcher.Occurrence::order,
-                                java.util.Comparator.nullsLast(Integer::compareTo)))
-                        .findFirst()
-                        .orElse(matches.get(0));
-                return new SourceMatch(reference(List.of(selected)), List.of(selected));
+            SourceMatch unique = unscopedMatch(value, matches);
+            if (unique != null) {
+                return unique;
+            }
+            if (hasRepeatedExactText(value, matches)) {
+                return null;
             }
             if ("SUMMARY".equalsIgnoreCase(section)) {
                 List<ResumeSourceEvidenceMatcher.Occurrence> span = exactContiguousSpan(value, occurrences, allowed);
@@ -6258,14 +6285,10 @@ public class ResumeCanonicalDocumentServiceImpl implements ResumeCanonicalDocume
                                 range.group(1), occurrence.text()))
                         .filter(occurrence -> ResumeSourceEvidenceMatcher.matchesOccurrence(
                                 range.group(2), occurrence.text()))
-                        .sorted(java.util.Comparator.comparing(
-                                ResumeSourceEvidenceMatcher.Occurrence::order,
-                                java.util.Comparator.nullsLast(Integer::compareTo)))
-                        .findFirst()
-                        .map(List::of)
-                        .orElse(List.of());
-                if (!rangeMatches.isEmpty()) {
-                    return new SourceMatch(reference(rangeMatches), rangeMatches);
+                        .toList();
+                SourceMatch rangeMatch = unscopedMatch(value, rangeMatches);
+                if (rangeMatch != null) {
+                    return rangeMatch;
                 }
             }
             return null;
@@ -6394,15 +6417,8 @@ public class ResumeCanonicalDocumentServiceImpl implements ResumeCanonicalDocume
                             .filter(occurrence -> occurrence.sourceOccurrenceIds().stream()
                                     .anyMatch(allowed::contains))
                             .filter(occurrence -> !blocked.contains(occurrence.primaryId()))
-                            .sorted(java.util.Comparator.comparing(
-                                    ResumeSourceEvidenceMatcher.Occurrence::order,
-                                    java.util.Comparator.nullsLast(Integer::compareTo)))
                             .toList();
-            if (matches.isEmpty()) {
-                return null;
-            }
-            ResumeSourceEvidenceMatcher.Occurrence selected = matches.get(0);
-            return new SourceMatch(reference(List.of(selected)), List.of(selected));
+            return boundedMatch(value, matches);
         }
 
         /** Match a field inside an entry boundary, including one contiguous wrapped source span. */
@@ -6460,11 +6476,16 @@ public class ResumeCanonicalDocumentServiceImpl implements ResumeCanonicalDocume
                                 ResumeSourceEvidenceMatcher.Occurrence::order,
                                 java.util.Comparator.nullsLast(Integer::compareTo)))
                         .toList();
-                for (ResumeSourceEvidenceMatcher.Occurrence occurrence : preferredOccurrences) {
-                    if (ResumeSourceEvidenceMatcher.matchesOccurrence(value, occurrence.text())
-                            && (consumed == null || !consumed.contains(occurrence.primaryId()))) {
-                        return new SourceMatch(reference(List.of(occurrence)), List.of(occurrence));
-                    }
+                List<ResumeSourceEvidenceMatcher.Occurrence> direct = preferredOccurrences.stream()
+                        .filter(occurrence -> ResumeSourceEvidenceMatcher.matchesOccurrence(value, occurrence.text()))
+                        .filter(occurrence -> consumed == null || !consumed.contains(occurrence.primaryId()))
+                        .toList();
+                SourceMatch directMatch = boundedMatch(value, direct);
+                if (directMatch != null) {
+                    return directMatch;
+                }
+                if (distinctOccurrenceCount(direct) > 1) {
+                    return null;
                 }
                 List<ResumeSourceEvidenceMatcher.Occurrence> freshPreferred = preferredOccurrences.stream()
                         .filter(occurrence -> consumed == null
@@ -6493,6 +6514,88 @@ public class ResumeCanonicalDocumentServiceImpl implements ResumeCanonicalDocume
             }
             ResumeSourceEvidenceMatcher.Occurrence selected = matches.get(0);
             return new SourceMatch(reference(List.of(selected)), List.of(selected));
+        }
+
+        private SourceMatch unscopedMatch(
+                String value, List<ResumeSourceEvidenceMatcher.Occurrence> candidates) {
+            List<ResumeSourceEvidenceMatcher.Occurrence> ordered = distinctOrdered(candidates);
+            if (ordered.isEmpty()) {
+                return null;
+            }
+            List<ResumeSourceEvidenceMatcher.Occurrence> exact = exactTextMatches(value, ordered);
+            if (exact.size() > 1 && exact.stream()
+                    .anyMatch(occurrence -> !occurrence.syntheticId())) {
+                return null;
+            }
+            ResumeSourceEvidenceMatcher.Occurrence selected = exact.size() == 1
+                    ? exact.get(0) : ordered.get(0);
+            return new SourceMatch(reference(List.of(selected)), List.of(selected));
+        }
+
+        private SourceMatch boundedMatch(
+                String value, List<ResumeSourceEvidenceMatcher.Occurrence> candidates) {
+            List<ResumeSourceEvidenceMatcher.Occurrence> ordered = distinctOrdered(candidates);
+            List<ResumeSourceEvidenceMatcher.Occurrence> exact = exactTextMatches(value, ordered);
+            if (exact.size() == 1) {
+                ResumeSourceEvidenceMatcher.Occurrence selected = exact.get(0);
+                return new SourceMatch(reference(List.of(selected)), List.of(selected));
+            }
+            return exact.size() > 1 ? null : uniqueMatch(ordered);
+        }
+
+        private boolean hasRepeatedExactText(
+                String value, List<ResumeSourceEvidenceMatcher.Occurrence> candidates) {
+            List<ResumeSourceEvidenceMatcher.Occurrence> exact = exactTextMatches(value, distinctOrdered(candidates));
+            return exact.size() > 1 && exact.stream().anyMatch(occurrence -> !occurrence.syntheticId());
+        }
+
+        private List<ResumeSourceEvidenceMatcher.Occurrence> exactTextMatches(
+                String value, List<ResumeSourceEvidenceMatcher.Occurrence> candidates) {
+            String expected = normalize(value);
+            return candidates.stream()
+                    .filter(occurrence -> expected.equalsIgnoreCase(normalize(occurrence.text())))
+                    .toList();
+        }
+
+        private List<ResumeSourceEvidenceMatcher.Occurrence> distinctOrdered(
+                List<ResumeSourceEvidenceMatcher.Occurrence> candidates) {
+            return (candidates == null ? List.<ResumeSourceEvidenceMatcher.Occurrence>of() : candidates).stream()
+                    .filter(java.util.Objects::nonNull)
+                    .collect(java.util.stream.Collectors.toMap(
+                            ResumeSourceEvidenceMatcher.Occurrence::primaryId,
+                            java.util.function.Function.identity(),
+                            (left, right) -> left,
+                            LinkedHashMap::new))
+                    .values().stream()
+                    .sorted(java.util.Comparator.comparing(
+                            ResumeSourceEvidenceMatcher.Occurrence::order,
+                            java.util.Comparator.nullsLast(Integer::compareTo)))
+                    .toList();
+        }
+
+        private SourceMatch uniqueMatch(List<ResumeSourceEvidenceMatcher.Occurrence> candidates) {
+            List<ResumeSourceEvidenceMatcher.Occurrence> unique = (candidates == null
+                    ? List.<ResumeSourceEvidenceMatcher.Occurrence>of() : candidates).stream()
+                    .filter(java.util.Objects::nonNull)
+                    .collect(java.util.stream.Collectors.toMap(
+                            ResumeSourceEvidenceMatcher.Occurrence::primaryId,
+                            java.util.function.Function.identity(),
+                            (left, right) -> left,
+                            LinkedHashMap::new))
+                    .values().stream().toList();
+            if (unique.size() != 1) {
+                return null;
+            }
+            ResumeSourceEvidenceMatcher.Occurrence selected = unique.get(0);
+            return new SourceMatch(reference(List.of(selected)), List.of(selected));
+        }
+
+        private long distinctOccurrenceCount(List<ResumeSourceEvidenceMatcher.Occurrence> candidates) {
+            return (candidates == null ? List.<ResumeSourceEvidenceMatcher.Occurrence>of() : candidates).stream()
+                    .filter(java.util.Objects::nonNull)
+                    .map(ResumeSourceEvidenceMatcher.Occurrence::primaryId)
+                    .distinct()
+                    .count();
         }
 
         private void consume(
@@ -6583,6 +6686,7 @@ public class ResumeCanonicalDocumentServiceImpl implements ResumeCanonicalDocume
                                     ResumeSourceEvidenceMatcher.Occurrence::order,
                                     java.util.Comparator.nullsLast(Integer::compareTo)))
                             .toList());
+            Map<String, List<ResumeSourceEvidenceMatcher.Occurrence>> matchingSpans = new LinkedHashMap<>();
             for (int start = 0; start < ordered.size(); start++) {
                 StringBuilder joined = new StringBuilder();
                 List<ResumeSourceEvidenceMatcher.Occurrence> span = new ArrayList<>();
@@ -6602,14 +6706,19 @@ public class ResumeCanonicalDocumentServiceImpl implements ResumeCanonicalDocume
                     span.add(occurrence);
                     String normalized = normalize(joined.toString());
                     if (expected.equals(normalized)) {
-                        return span;
+                        String key = span.stream()
+                                .map(ResumeSourceEvidenceMatcher.Occurrence::primaryId)
+                                .collect(java.util.stream.Collectors.joining("\u0000"));
+                        matchingSpans.putIfAbsent(key, List.copyOf(span));
+                        break;
                     }
                     if (!expected.startsWith(normalized)) {
                         break;
                     }
                 }
             }
-            return List.of();
+            return matchingSpans.size() == 1
+                    ? matchingSpans.values().iterator().next() : List.of();
         }
 
         private ResumeSourceRefDTO reference(List<ResumeSourceEvidenceMatcher.Occurrence> selected) {
@@ -6639,6 +6748,18 @@ public class ResumeCanonicalDocumentServiceImpl implements ResumeCanonicalDocume
                     .filter(java.util.Objects::nonNull).max(Integer::compareTo).map(value -> value + 1).orElse(null);
             Integer page = ordered.stream().map(ResumeSourceEvidenceMatcher.Occurrence::page)
                     .filter(java.util.Objects::nonNull).distinct().count() == 1 ? first.page() : null;
+            boolean hasSinglePageGeometry = page != null && ordered.stream()
+                    .allMatch(occurrence -> page.equals(occurrence.page())
+                            && occurrence.x() != null && occurrence.y() != null
+                            && occurrence.width() != null && occurrence.height() != null);
+            Double x = hasSinglePageGeometry ? ordered.stream()
+                    .map(ResumeSourceEvidenceMatcher.Occurrence::x).min(Double::compareTo).orElse(null) : null;
+            Double y = hasSinglePageGeometry ? ordered.stream()
+                    .map(ResumeSourceEvidenceMatcher.Occurrence::y).min(Double::compareTo).orElse(null) : null;
+            Double rightEdge = hasSinglePageGeometry ? ordered.stream()
+                    .mapToDouble(occurrence -> occurrence.x() + occurrence.width()).max().orElse(Double.NaN) : null;
+            Double bottom = hasSinglePageGeometry ? ordered.stream()
+                    .mapToDouble(occurrence -> occurrence.y() + occurrence.height()).max().orElse(Double.NaN) : null;
             return ResumeSourceRefDTO.builder()
                     .startLine(start)
                     .endLine(end)
@@ -6647,7 +6768,17 @@ public class ResumeCanonicalDocumentServiceImpl implements ResumeCanonicalDocume
                     .sourceBlockIds(blockIds)
                     .sourceOccurrenceIds(occurrenceIds)
                     .page(page)
+                    .x(x)
+                    .y(y)
+                    .width(x == null || rightEdge == null ? null : rightEdge - x)
+                    .height(y == null || bottom == null ? null : bottom - y)
+                    .fontSize(first.fontSize())
+                    .fontName(first.fontName())
+                    .boldHint(first.boldHint())
+                    .indent(first.indent())
+                    .bulletHint(first.bulletHint())
                     .role(first.role())
+                    .sourceType(first.sourceType())
                     .build();
         }
 
@@ -6693,30 +6824,7 @@ public class ResumeCanonicalDocumentServiceImpl implements ResumeCanonicalDocume
             for (String value : values == null ? List.<String>of() : values) {
                 Set<String> consumed = consumedByValue.computeIfAbsent(normalize(value),
                         ignored -> new LinkedHashSet<>());
-                SourceMatch selected = null;
-                if (preferred == null) {
-                    List<ResumeSourceEvidenceMatcher.Occurrence> candidates =
-                            ResumeSourceEvidenceMatcher.matchingOccurrences(
-                                    value, occurrences,
-                                    section == null || section.isBlank() ? Set.of() : Set.of(section),
-                                    allowUnscopedSections).stream()
-                                    .sorted(java.util.Comparator.comparing(
-                                            ResumeSourceEvidenceMatcher.Occurrence::order,
-                                            java.util.Comparator.nullsLast(Integer::compareTo)))
-                                    .filter(candidate -> !consumed.contains(candidate.primaryId()))
-                                    .toList();
-                    if (!candidates.isEmpty()) {
-                        selected = new SourceMatch(reference(List.of(candidates.get(0))),
-                                List.of(candidates.get(0)));
-                    }
-                } else {
-                    SourceMatch constrained = match(value, section, preferred);
-                    if (constrained != null && constrained.occurrences().stream()
-                            .map(ResumeSourceEvidenceMatcher.Occurrence::primaryId)
-                            .noneMatch(consumed::contains)) {
-                        selected = constrained;
-                    }
-                }
+                SourceMatch selected = matchNext(value, section, preferred, consumed);
                 if (selected == null) {
                     // Preserve the value but do not attach the same source occurrence twice for
                     // a repeated claim. Distinct facts printed on one row may share the row.
@@ -6790,6 +6898,24 @@ public class ResumeCanonicalDocumentServiceImpl implements ResumeCanonicalDocume
                             && !"null".equalsIgnoreCase(id.strip())
                             && !"undefined".equalsIgnoreCase(id.strip())) {
                         result.putIfAbsent(id.strip(), occurrence.text());
+                    }
+                }
+            }
+            return result.isEmpty() ? null : result;
+        }
+
+        private Map<String, ResumeSourceRefDTO> occurrenceRefs() {
+            Map<String, ResumeSourceRefDTO> result = new LinkedHashMap<>();
+            for (ResumeSourceEvidenceMatcher.Occurrence occurrence : occurrences) {
+                if (occurrence == null) {
+                    continue;
+                }
+                ResumeSourceRefDTO ref = reference(List.of(occurrence));
+                for (String id : occurrence.sourceOccurrenceIds()) {
+                    if (id != null && !id.isBlank()
+                            && !"null".equalsIgnoreCase(id.strip())
+                            && !"undefined".equalsIgnoreCase(id.strip())) {
+                        result.putIfAbsent(id.strip(), ref);
                     }
                 }
             }

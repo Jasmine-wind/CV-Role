@@ -3,14 +3,17 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
 import { getOptimizationAnalysisResult } from '@/api/job-analysis'
+import { getWorkspaceSourceReference } from '@/api/workspace'
 import ErrorState from '@/components/common/ErrorState.vue'
 import SkeletonBlock from '@/components/common/SkeletonBlock.vue'
 import ResumeEditor from '@/components/workspace/ResumeEditor.vue'
 import WorkspacePreviewExport from '@/components/workspace/WorkspacePreviewExport.vue'
 import WorkspaceRequirements from '@/components/workspace/WorkspaceRequirements.vue'
+import WorkspaceSourcePane from '@/components/workspace/WorkspaceSourcePane.vue'
 import WorkspaceSuggestions from '@/components/workspace/WorkspaceSuggestions.vue'
 import TaskHeader from '@/components/task/TaskHeader.vue'
 import type { OptimizationAnalysisResult } from '@/types/job-analysis'
+import type { WorkspaceSourceReference } from '@/types/workspace'
 import { useBulletSuggest } from '@/utils/useBulletSuggest'
 import { useWorkspaceEditor } from '@/utils/useWorkspaceEditor'
 import type { WorkspaceEvidenceAnchor } from '@/views/workspaceEvidenceAnchor'
@@ -41,8 +44,15 @@ const previewComponentMounted = ref(false)
 const workspaceMode = ref<'edit' | 'preview'>('edit')
 const initialRequirementId = parsePositiveId(route.query.requirement)
 const inspectorOpen = ref(false)
-const mobilePanel = ref<'editor' | 'requirements' | 'suggestions'>('editor')
+const inspectorMode = ref<'requirements' | 'suggestions'>('requirements')
+const mobilePanel = ref<'source' | 'editor' | 'context'>('editor')
 const selectedRequirementId = ref<number | null>(initialRequirementId)
+const sourceReference = ref<WorkspaceSourceReference | null>(null)
+const sourceLoading = ref(false)
+const sourceError = ref<string | null>(null)
+const selectedTargetNodeId = ref<string | null>(null)
+const selectedSourceOccurrenceIds = ref<string[]>([])
+let sourceRequestSequence = 0
 
 // At 1120px, compact columns are 245px + 340px, leaving 535px for the Resume stage.
 // Below that threshold, the workspace becomes focused instead of preserving an unusable tri-column grid.
@@ -72,8 +82,10 @@ const effectiveSelectedRequirementId = computed(() => {
 
 const evidenceAnchor = ref<WorkspaceEvidenceAnchor | null>(null)
 const focusRequestKey = ref(0)
-const selectedWorkspaceSectionId = computed(() => evidenceAnchor.value?.sectionId ?? null)
-const selectedWorkspaceBulletId = computed(() => evidenceAnchor.value?.bulletId ?? null)
+const provenanceSectionId = ref<string | null>(null)
+const provenanceBulletId = ref<string | null>(null)
+const selectedWorkspaceSectionId = computed(() => provenanceSectionId.value ?? evidenceAnchor.value?.sectionId ?? null)
+const selectedWorkspaceBulletId = computed(() => provenanceBulletId.value ?? evidenceAnchor.value?.bulletId ?? null)
 
 const retainSelectedEvidenceAnchor = () => {
   const requirement = requirements.value.find(
@@ -158,6 +170,48 @@ const loadAnalysis = async () => {
 
 const handleEditorChange = (document: Parameters<typeof editor.applyDocument>[0]) => {
   editor.applyDocument(document)
+}
+
+const loadSourceReference = async () => {
+  const requestSequence = ++sourceRequestSequence
+  sourceLoading.value = true
+  sourceError.value = null
+  try {
+    const result = await getWorkspaceSourceReference(props.optimizationTaskId)
+    if (requestSequence === sourceRequestSequence) sourceReference.value = result
+  } catch (error) {
+    if (requestSequence === sourceRequestSequence) {
+      sourceError.value = error instanceof Error ? error.message : '冻结原文加载失败'
+    }
+  } finally {
+    if (requestSequence === sourceRequestSequence) sourceLoading.value = false
+  }
+}
+
+const focusTargetFromSource = (targetNodeId: string) => {
+  const mapping = sourceReference.value?.mappings.find((item) => item.targetNodeId === targetNodeId)
+  if (!mapping?.reliable) {
+    ElMessage.warning('尚未确认该原文对应位置，已停止自动跳转')
+    return
+  }
+  selectedTargetNodeId.value = targetNodeId
+  selectedSourceOccurrenceIds.value = mapping.sourceOccurrenceIds
+  provenanceSectionId.value = mapping.sectionId
+  provenanceBulletId.value = mapping.bulletId
+  focusRequestKey.value += 1
+  if (isNarrowScreen.value) mobilePanel.value = 'editor'
+}
+
+const viewSourceForTarget = (targetNodeId: string) => {
+  const mapping = sourceReference.value?.mappings.find((item) => item.targetNodeId === targetNodeId)
+  selectedTargetNodeId.value = targetNodeId
+  if (!mapping?.reliable || mapping.sourceOccurrenceIds.length === 0) {
+    selectedSourceOccurrenceIds.value = []
+    ElMessage.warning('当前内容没有唯一可靠的原文定位')
+    return
+  }
+  selectedSourceOccurrenceIds.value = mapping.sourceOccurrenceIds
+  if (isNarrowScreen.value) mobilePanel.value = 'source'
 }
 
 const goToAnalysis = () => {
@@ -285,9 +339,10 @@ const openPreviewMode = async () => {
   }
 }
 
-const openInspector = () => {
+const openInspector = (mode: 'requirements' | 'suggestions' = 'suggestions') => {
+  inspectorMode.value = mode
   inspectorOpen.value = true
-  if (isNarrowScreen.value) mobilePanel.value = 'suggestions'
+  if (isNarrowScreen.value) mobilePanel.value = 'context'
 }
 
 const closeInspector = () => {
@@ -295,16 +350,21 @@ const closeInspector = () => {
   if (isNarrowScreen.value) mobilePanel.value = 'editor'
 }
 
+watch(editor.revision, (revision) => {
+  if (revision !== null && sourceReference.value?.targetRevision !== revision) void loadSourceReference()
+})
+
 watch(bulletSuggest.activeBulletId, (bulletId) => {
   if (!bulletId) return
+  inspectorMode.value = 'suggestions'
   inspectorOpen.value = true
-  if (isNarrowScreen.value) mobilePanel.value = 'suggestions'
+  if (isNarrowScreen.value) mobilePanel.value = 'context'
 })
 
 const routeRequirementId = computed(() => parsePositiveId(route.query.requirement))
 watch(routeRequirementId, (requirementId) => {
   selectedRequirementId.value = requirementId
-  if (requirementId && isNarrowScreen.value && mobilePanel.value === 'requirements') {
+  if (requirementId && isNarrowScreen.value && mobilePanel.value === 'context') {
     mobilePanel.value = 'editor'
   }
 })
@@ -332,6 +392,7 @@ const beforeUnloadHandler = (event: BeforeUnloadEvent) => {
 onMounted(() => {
   void editor.load()
   void loadAnalysis()
+  void loadSourceReference()
   window.addEventListener('beforeunload', beforeUnloadHandler)
   if (typeof window.matchMedia === 'function') {
     narrowMediaQuery = window.matchMedia(WORKSPACE_FOCUSED_MEDIA_QUERY)
@@ -421,115 +482,44 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
 
     <template v-else-if="editor.draft.value">
       <div v-if="workspaceMode === 'edit'" class="workspace-edit-mode">
-        <div
-          v-if="isNarrowScreen"
-          class="workspace-mobile-switch"
-          role="tablist"
-          aria-label="工作区内容"
-        >
-          <button
-            type="button"
-            id="workspace-tab-editor"
-            role="tab"
-            aria-controls="workspace-panel-editor"
-            :aria-selected="mobilePanel === 'editor'"
-            :class="{ 'is-active': mobilePanel === 'editor' }"
-            @click="mobilePanel = 'editor'; inspectorOpen = false"
-          >
-            编辑简历
-          </button>
-          <button
-            type="button"
-            id="workspace-tab-requirements"
-            role="tab"
-            aria-controls="workspace-panel-requirements"
-            :aria-selected="mobilePanel === 'requirements'"
-            :class="{ 'is-active': mobilePanel === 'requirements' }"
-            @click="mobilePanel = 'requirements'; inspectorOpen = false"
-          >
-            岗位要求
-          </button>
-          <button
-            type="button"
-            id="workspace-tab-suggestions"
-            role="tab"
-            aria-controls="workspace-panel-suggestions"
-            :aria-selected="mobilePanel === 'suggestions'"
-            :class="{ 'is-active': mobilePanel === 'suggestions' }"
-            @click="openInspector"
-          >
-            分析详情
-          </button>
+        <div v-if="isNarrowScreen" class="workspace-mobile-switch" role="tablist" aria-label="工作区内容">
+          <button id="workspace-tab-source" type="button" role="tab" aria-controls="workspace-panel-source" :aria-selected="mobilePanel === 'source'" :class="{ 'is-active': mobilePanel === 'source' }" @click="mobilePanel = 'source'; inspectorOpen = false">冻结原文</button>
+          <button id="workspace-tab-editor" type="button" role="tab" aria-controls="workspace-panel-editor" :aria-selected="mobilePanel === 'editor'" :class="{ 'is-active': mobilePanel === 'editor' }" @click="mobilePanel = 'editor'; inspectorOpen = false">当前简历</button>
+          <button id="workspace-tab-context" type="button" role="tab" aria-controls="workspace-panel-context" :aria-selected="mobilePanel === 'context'" :class="{ 'is-active': mobilePanel === 'context' }" @click="openInspector('requirements')">岗位 / AI</button>
           <details class="workspace-mobile-more">
             <summary>更多</summary>
             <div class="workspace-more-menu">
-              <button type="button" :disabled="!editor.canUndo.value || editor.status.value === 'saving'" @click="editor.undo()">
-                撤销
-              </button>
-              <button type="button" :disabled="!editor.canRedo.value || editor.status.value === 'saving'" @click="editor.redo()">
-                重做
-              </button>
-              <button type="button" :disabled="editor.status.value === 'saving'" @click="confirmRestore">
-                {{ restoring ? '正在恢复…' : '恢复优化前版本' }}
-              </button>
+              <button type="button" :disabled="!editor.canUndo.value || editor.status.value === 'saving'" @click="editor.undo()">撤销</button>
+              <button type="button" :disabled="!editor.canRedo.value || editor.status.value === 'saving'" @click="editor.redo()">重做</button>
+              <button type="button" :disabled="editor.status.value === 'saving'" @click="confirmRestore">{{ restoring ? '正在恢复…' : '恢复优化前版本' }}</button>
             </div>
           </details>
         </div>
 
         <div class="workspace-layout" :class="{ 'is-inspector-open': inspectorOpen }">
-          <WorkspaceRequirements
-            v-if="!isNarrowScreen || mobilePanel === 'requirements'"
-            id="workspace-panel-requirements"
+          <WorkspaceSourcePane
+            v-show="!isNarrowScreen || mobilePanel === 'source'"
+            id="workspace-panel-source"
+            :optimization-task-id="optimizationTaskId"
+            :source="sourceReference"
+            :loading="sourceLoading"
+            :error="sourceError"
             role="tabpanel"
-            aria-labelledby="workspace-tab-requirements"
-            :requirements="requirements"
-            :selected-requirement-id="effectiveSelectedRequirementId"
-            @select="selectRequirement"
+            aria-labelledby="workspace-tab-source"
+            :selected-occurrence-ids="selectedSourceOccurrenceIds"
+            @retry="loadSourceReference"
+            @focus-target="focusTargetFromSource"
           />
 
-          <section
-            v-show="!isNarrowScreen || mobilePanel === 'editor'"
-            id="workspace-panel-editor"
-            class="resume-stage"
-            role="tabpanel"
-            aria-labelledby="workspace-tab-editor"
-            aria-label="简历编辑器"
-          >
+          <section v-show="!isNarrowScreen || mobilePanel === 'editor'" id="workspace-panel-editor" class="resume-stage" role="tabpanel" aria-labelledby="workspace-tab-editor" aria-label="当前结构化简历">
             <div class="workspace-document-toolbar" aria-label="文档工具">
-              <span class="document-toolbar-label">简历正文</span>
+              <span class="document-toolbar-label">TARGET · 当前简历</span>
               <div class="document-toolbar-actions">
-                <button
-                  type="button"
-                  class="toolbar-button"
-                  :disabled="!editor.canUndo.value"
-                  @click="editor.undo()"
-                >
-                  撤销
-                </button>
-                <button
-                  type="button"
-                  class="toolbar-button"
-                  :disabled="!editor.canRedo.value"
-                  @click="editor.redo()"
-                >
-                  重做
-                </button>
-                <button
-                  v-if="!inspectorOpen"
-                  type="button"
-                  class="toolbar-button toolbar-button-accent"
-                  @click="openInspector"
-                >
-                  分析详情
-                </button>
-                <button
-                  type="button"
-                  class="toolbar-button toolbar-button-restore"
-                  :disabled="editor.status.value === 'saving'"
-                  @click="confirmRestore"
-                >
-                  {{ restoring ? '正在恢复…' : '恢复版本' }}
-                </button>
+                <button type="button" class="toolbar-button" :disabled="!editor.canUndo.value" @click="editor.undo()">撤销</button>
+                <button type="button" class="toolbar-button" :disabled="!editor.canRedo.value" @click="editor.redo()">重做</button>
+                <button type="button" class="toolbar-button" @click="openInspector('requirements')">岗位证据</button>
+                <button type="button" class="toolbar-button toolbar-button-accent" @click="openInspector('suggestions')">AI 建议</button>
+                <button type="button" class="toolbar-button toolbar-button-restore" :disabled="editor.status.value === 'saving'" @click="confirmRestore">{{ restoring ? '正在恢复…' : '恢复版本' }}</button>
               </div>
             </div>
             <div class="resume-stage-scroll">
@@ -541,27 +531,41 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
                 :selected-section-id="selectedWorkspaceSectionId"
                 :focused-bullet-id="selectedWorkspaceBulletId"
                 :focus-request-key="focusRequestKey"
+                :selected-target-node-id="selectedTargetNodeId"
                 @change="handleEditorChange"
-                @reopen-inspector="openInspector"
+                @reopen-inspector="openInspector('suggestions')"
+                @view-source="viewSourceForTarget"
               />
             </div>
           </section>
 
-          <WorkspaceSuggestions
-            v-if="(!isNarrowScreen && inspectorOpen) || (isNarrowScreen && mobilePanel === 'suggestions')"
-            id="workspace-panel-suggestions"
-            role="tabpanel"
-            aria-labelledby="workspace-tab-suggestions"
-            :result="analysisResult"
-            :loading="analysisLoading"
-            :error="analysisError"
-            :selected-requirement-id="effectiveSelectedRequirementId"
-            :document="editor.draft.value"
-            :suggest="bulletSuggest"
-            @retry-load="loadAnalysis"
-            @focus-context="focusCurrentContext"
-            @close="closeInspector"
-          />
+          <aside v-if="inspectorOpen" v-show="!isNarrowScreen || mobilePanel === 'context'" id="workspace-panel-context" class="workspace-context-drawer" role="tabpanel" aria-labelledby="workspace-tab-context" aria-label="岗位证据与 AI 建议">
+            <header class="context-drawer-header">
+              <div role="tablist" aria-label="临时上下文">
+                <button type="button" :class="{ 'is-active': inspectorMode === 'requirements' }" @click="inspectorMode = 'requirements'">岗位与证据</button>
+                <button type="button" :class="{ 'is-active': inspectorMode === 'suggestions' }" @click="inspectorMode = 'suggestions'">AI 建议</button>
+              </div>
+              <button type="button" class="context-close" aria-label="关闭临时上下文" @click="closeInspector">×</button>
+            </header>
+            <WorkspaceRequirements
+              v-if="inspectorMode === 'requirements'"
+              :requirements="requirements"
+              :selected-requirement-id="effectiveSelectedRequirementId"
+              @select="selectRequirement"
+            />
+            <WorkspaceSuggestions
+              v-else
+              :result="analysisResult"
+              :loading="analysisLoading"
+              :error="analysisError"
+              :selected-requirement-id="effectiveSelectedRequirementId"
+              :document="editor.draft.value"
+              :suggest="bulletSuggest"
+              @retry-load="loadAnalysis"
+              @focus-context="focusCurrentContext"
+              @close="closeInspector"
+            />
+          </aside>
         </div>
       </div>
 
@@ -937,72 +941,55 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
   gap: var(--app-space-1);
 }
 
-.workspace-layout {
-  grid-template-columns: var(--app-workspace-requirements-width) minmax(0, 1fr);
-}
-
+.workspace-layout,
 .workspace-layout.is-inspector-open {
-  grid-template-columns: minmax(0, 1fr) minmax(300px, 34%);
+  position: relative;
+  grid-template-columns: minmax(320px, 40%) minmax(0, 60%);
 }
 
-.workspace-layout.is-inspector-open > .workspace-requirements {
-  display: none;
+.resume-stage,
+.resume-stage-scroll { min-width: 0; }
+
+.workspace-context-drawer {
+  position: absolute;
+  z-index: 20;
+  inset: 12px 12px 12px auto;
+  display: flex;
+  width: min(420px, calc(100% - 24px));
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--app-border-strong);
+  border-radius: var(--app-radius-md);
+  background: var(--app-surface);
+  box-shadow: 0 18px 55px color-mix(in srgb, var(--app-text) 22%, transparent);
 }
 
-.workspace-layout.is-inspector-open .resume-stage {
-  border-right: 1px solid var(--app-border-strong);
+.context-drawer-header {
+  display: flex;
+  min-height: 46px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 8px 6px 12px;
+  border-bottom: 1px solid var(--app-border-strong);
 }
-
-.resume-stage {
-  min-width: 0;
-}
-
-.resume-stage-scroll {
-  min-width: 0;
-}
-
-/* The old form remains in the template for the same mutation handlers, but the default surface is a document. */
-@media (min-width: 1120px) {
-  .workspace-layout.is-inspector-open {
-    grid-template-columns: minmax(0, 1fr) minmax(300px, 34%);
-  }
-}
+.context-drawer-header > div { display: flex; gap: 4px; }
+.context-drawer-header button { min-height: 30px; border: 0; border-radius: 4px; padding: 0 9px; color: var(--app-text-muted); font: inherit; font-size: 11px; font-weight: 750; background: transparent; cursor: pointer; }
+.context-drawer-header button.is-active { color: var(--app-text); background: var(--app-bg-soft); }
+.context-drawer-header .context-close { padding: 0 10px; font-size: 20px; }
+.workspace-context-drawer > .workspace-requirements,
+.workspace-context-drawer > :deep(.workspace-inspector) { height: 0; min-height: 0; flex: 1 1 0; }
 
 @media (max-width: 1119px) {
-  .workspace-mobile-switch {
-    gap: 2px;
-  }
-
-  .workspace-mobile-switch button {
-    min-width: 0;
-    padding: 0 8px;
-    font-size: 10px;
-  }
-
+  .workspace-mobile-switch { gap: 2px; }
+  .workspace-mobile-switch button { min-width: 0; padding: 0 8px; font-size: 10px; }
   .workspace-layout,
-  .workspace-layout.is-inspector-open {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(0, 1fr);
-  }
-
-  .workspace-layout > .workspace-requirements,
-  .workspace-layout > .workspace-requirements :deep(.requirements-rail) {
-    height: 100%;
-  }
-
-  .workspace-layout.is-inspector-open > .workspace-requirements {
-    display: none;
-  }
-
-  .workspace-layout.is-inspector-open .resume-stage {
-    border-right: 0;
-  }
-
-  .workspace-document-toolbar {
-    min-height: 38px;
-    padding: 0 var(--app-space-3);
-  }
-
+  .workspace-layout.is-inspector-open { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
+  .workspace-document-toolbar { min-height: 38px; padding: 0 var(--app-space-3); }
+  .workspace-context-drawer { position: static; width: auto; height: 100%; border: 0; border-radius: 0; box-shadow: none; }
+  .workspace-context-drawer > .workspace-requirements,
+  .workspace-context-drawer > .workspace-requirements :deep(.requirements-rail) { height: 100%; }
 }
 
 </style>

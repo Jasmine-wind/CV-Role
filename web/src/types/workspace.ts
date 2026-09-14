@@ -6,6 +6,72 @@ export interface WorkspaceContent {
   document: ResumeDocument
 }
 
+export type WorkspaceSourceMappingStatus =
+  | 'EXACT'
+  | 'MERGED'
+  | 'SPLIT'
+  | 'UNMAPPED'
+  | 'AMBIGUOUS'
+
+export interface WorkspaceSourceGeometry {
+  page?: number | null
+  x?: number | null
+  y?: number | null
+  width?: number | null
+  height?: number | null
+  fontSize?: number | null
+  fontName?: string | null
+  boldHint?: boolean | null
+  indent?: number | null
+  bulletHint?: boolean | null
+}
+
+export interface WorkspaceSourceBlock {
+  id: string
+  order: number
+  text: string
+  occurrenceIds: string[]
+  sourceGeometry?: WorkspaceSourceGeometry | null
+  targetNodeIds: string[]
+  status: WorkspaceSourceMappingStatus
+  reliable: boolean
+}
+
+export interface WorkspaceTargetMapping {
+  targetNodeId: string
+  nodeType: 'BASICS' | 'CONTACT' | 'SECTION' | 'ENTRY' | 'BULLET' | string
+  sectionId: string | null
+  entryId: string | null
+  bulletId: string | null
+  targetText: string | null
+  sourceOccurrenceIds: string[]
+  status: WorkspaceSourceMappingStatus
+  reliable: boolean
+  textChanged: boolean
+}
+
+export interface WorkspaceFidelityIssue {
+  code: string
+  severity: 'BLOCKER' | 'WARNING'
+  message: string
+  sourceOccurrenceIds: string[]
+  targetNodeIds: string[]
+}
+
+export interface WorkspaceSourceReference {
+  optimizationTaskId: number
+  sourceResumeVersionId: number
+  targetResumeVersionId: number
+  targetRevision: number
+  sourceFilename: string | null
+  sourcePdfAvailable: boolean
+  sourceBlocks: WorkspaceSourceBlock[]
+  mappings: WorkspaceTargetMapping[]
+  fidelityIssues: WorkspaceFidelityIssue[]
+  statusCounts: Record<WorkspaceSourceMappingStatus, number>
+  exportBlocked: boolean
+}
+
 export interface WorkspaceSaveRequest {
   expectedRevision: number
   document: ResumeDocument

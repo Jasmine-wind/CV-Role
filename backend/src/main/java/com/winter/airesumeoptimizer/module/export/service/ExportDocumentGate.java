@@ -13,11 +13,15 @@ import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentContactDT
 import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentDTO;
 import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentSectionDTO;
 import com.winter.airesumeoptimizer.module.workspace.enums.ResumeDocumentContactType;
+import com.winter.airesumeoptimizer.module.workspace.service.ResumeDocumentConverter;
+import com.winter.airesumeoptimizer.module.workspace.service.WorkspaceSourceReferenceAssembler;
+import com.winter.airesumeoptimizer.module.workspace.vo.WorkspaceSourceReferenceVO;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 /**
@@ -38,6 +42,7 @@ public class ExportDocumentGate {
     public static final String CODE_DUPLICATE_SECTION = "DUPLICATE_SECTION";
     public static final String CODE_SYSTEM_ARTIFACT_PRESENT = "SYSTEM_ARTIFACT_PRESENT";
     public static final String CODE_MISSING_TYPED_CONTACT = "MISSING_TYPED_CONTACT";
+    public static final String CODE_STRUCTURE_FIDELITY_FAILED = "STRUCTURE_FIDELITY_FAILED";
 
     private static final Set<String> SYSTEM_SECTION_TITLES = Set.of(
             "未识别章节", "其他原始内容", "原始简历内容");
@@ -45,14 +50,29 @@ public class ExportDocumentGate {
     private final ResumeVersionMapper resumeVersionMapper;
     private final ResumeParseResultMapper resumeParseResultMapper;
     private final ResumeDocumentQualityValidator qualityValidator;
+    private final ResumeDocumentConverter resumeDocumentConverter;
+    private final WorkspaceSourceReferenceAssembler sourceReferenceAssembler;
 
+    @Autowired
     public ExportDocumentGate(
             ResumeVersionMapper resumeVersionMapper,
             ResumeParseResultMapper resumeParseResultMapper,
-            ResumeDocumentQualityValidator qualityValidator) {
+            ResumeDocumentQualityValidator qualityValidator,
+            ResumeDocumentConverter resumeDocumentConverter,
+            WorkspaceSourceReferenceAssembler sourceReferenceAssembler) {
         this.resumeVersionMapper = resumeVersionMapper;
         this.resumeParseResultMapper = resumeParseResultMapper;
         this.qualityValidator = qualityValidator;
+        this.resumeDocumentConverter = resumeDocumentConverter;
+        this.sourceReferenceAssembler = sourceReferenceAssembler;
+    }
+
+    /** Narrow constructor retained for isolated legacy gate tests. */
+    ExportDocumentGate(
+            ResumeVersionMapper resumeVersionMapper,
+            ResumeParseResultMapper resumeParseResultMapper,
+            ResumeDocumentQualityValidator qualityValidator) {
+        this(resumeVersionMapper, resumeParseResultMapper, qualityValidator, null, null);
     }
 
     /** 检查结果：是否阻断、阻断机器码、解析质量状态与是否处于待确认。 */
@@ -93,6 +113,9 @@ public class ExportDocumentGate {
                 .orElse(null);
         if (validatorBlocker != null) {
             return new GateResult(STATUS_BLOCK, validatorBlocker, qualityStatus, false);
+        }
+        if (structureFidelityBlocked(userId, task, document)) {
+            return new GateResult(STATUS_BLOCK, CODE_STRUCTURE_FIDELITY_FAILED, qualityStatus, true);
         }
         return new GateResult(STATUS_PASS, null, qualityStatus, false);
     }
@@ -190,6 +213,28 @@ public class ExportDocumentGate {
             }
         }
         return false;
+    }
+
+    private boolean structureFidelityBlocked(Long userId, OptimizationTask task, ResumeDocumentDTO target) {
+        if (resumeDocumentConverter == null || sourceReferenceAssembler == null
+                || task == null || task.getSourceResumeVersionId() == null) {
+            return false;
+        }
+        ResumeVersion source = resumeVersionMapper.selectOne(new LambdaQueryWrapper<ResumeVersion>()
+                .eq(ResumeVersion::getId, task.getSourceResumeVersionId())
+                .eq(ResumeVersion::getUserId, userId));
+        if (source == null || source.getStructuredContent() == null || source.getStructuredContent().isBlank()) {
+            return true;
+        }
+        try {
+            ResumeDocumentDTO frozen = resumeDocumentConverter.upgradeLegacyDocument(source.getStructuredContent());
+            WorkspaceSourceReferenceVO fidelity = sourceReferenceAssembler.assemble(
+                    task.getId(), source.getId(), task.getTargetResumeVersionId(), 0L,
+                    null, false, frozen, target);
+            return fidelity.exportBlocked();
+        } catch (RuntimeException exception) {
+            return true;
+        }
     }
 
     /** 生成供日志/响应使用的告警机器码列表（非阻断）。 */

@@ -66,6 +66,48 @@ class ResumeCanonicalDocumentServiceImplTest {
     }
 
     @Test
+    void buildShouldFreezePerOccurrenceGeometryInTheCanonicalSourceManifest() {
+        ResumeStructuredContentDTO content = ResumeStructuredContentDTO.builder()
+                .indexedLines(List.of(ResumeIndexedLineDTO.builder()
+                        .lineId(1)
+                        .originalIndex(0)
+                        .text("证书甲")
+                        .page(2)
+                        .x(42.5)
+                        .y(128.0)
+                        .width(86.0)
+                        .height(14.0)
+                        .fontSize(11.0)
+                        .fontName("Synthetic Sans")
+                        .boldHint(true)
+                        .indent(1)
+                        .sourceBlockId("certificate-block")
+                        .sourceOccurrenceIds(List.of("certificate-occurrence"))
+                        .sectionHint("CERTIFICATES")
+                        .build()))
+                .structuredData(ResumeStructuredDataDTO.builder()
+                        .certificates(List.of("证书甲"))
+                        .build())
+                .build();
+
+        ResumeDocumentDTO document = service.build(content).document();
+
+        assertThat(document.getSourceOccurrenceRefs()).containsKey("certificate-occurrence");
+        ResumeSourceRefDTO frozen = document.getSourceOccurrenceRefs().get("certificate-occurrence");
+        assertThat(frozen.getText()).isEqualTo("证书甲");
+        assertThat(frozen.getSourceOccurrenceIds()).containsExactly("certificate-occurrence");
+        assertThat(frozen.getPage()).isEqualTo(2);
+        assertThat(frozen.getX()).isEqualTo(42.5);
+        assertThat(frozen.getY()).isEqualTo(128.0);
+        assertThat(frozen.getWidth()).isEqualTo(86.0);
+        assertThat(frozen.getHeight()).isEqualTo(14.0);
+        assertThat(frozen.getFontSize()).isEqualTo(11.0);
+        assertThat(frozen.getFontName()).isEqualTo("Synthetic Sans");
+        assertThat(frozen.getBoldHint()).isTrue();
+        assertThat(frozen.getIndent()).isEqualTo(1);
+    }
+
+    @Test
     void buildShouldProjectTypedContactsAndStructuredSections() {
         ResumeStructuredContentDTO content = realisticContent();
 
@@ -538,7 +580,8 @@ class ResumeCanonicalDocumentServiceImplTest {
         ResumeCanonicalDocumentService.BuildResult result = service.build(content);
 
         assertThat(result.unresolvedItems())
-                .filteredOn(item -> item.getCanonicalDraft() != null
+                .filteredOn(item -> ResumeUnresolvedItemDTO.KIND_TEXT_FRAGMENT.equals(item.getKind())
+                        && item.getCanonicalDraft() != null
                         && item.getCanonicalDraft().contains("候选人"))
                 .extracting(ResumeUnresolvedItemDTO::getSourceRef)
                 .containsExactly("raw-line-1-occurrence", "raw-line-2-occurrence");
@@ -562,6 +605,110 @@ class ResumeCanonicalDocumentServiceImplTest {
                         && item.getCanonicalDraft().contains(line))
                 .extracting(ResumeUnresolvedItemDTO::getSourceRef)
                 .containsExactly("raw-line-1-occurrence", "raw-line-2-occurrence");
+    }
+
+    @Test
+    void buildShouldRejectRepeatedSummaryWithoutAnOccurrenceBoundary() {
+        String summary = "负责核心平台建设";
+        ResumeStructuredContentDTO content = ResumeStructuredContentDTO.builder()
+                .rawSections(List.of(ResumeRawSectionDTO.builder()
+                        .normalizedSection("SUMMARY")
+                        .blocks(List.of(
+                                ResumeRawSectionBlockDTO.builder().id("summary-1").originalIndex(0)
+                                        .text(summary).sourceOccurrenceIds(List.of("summary-occ-1")).build(),
+                                ResumeRawSectionBlockDTO.builder().id("summary-2").originalIndex(1)
+                                        .text(summary).sourceOccurrenceIds(List.of("summary-occ-2")).build()))
+                        .build()))
+                .structuredData(ResumeStructuredDataDTO.builder().summary(summary).build())
+                .build();
+
+        ResumeCanonicalDocumentService.BuildResult result = service.build(content);
+
+        assertThat(result.document().getSections())
+                .filteredOn(section -> "SUMMARY".equals(section.getKind()))
+                .isEmpty();
+        assertThat(result.unresolvedItems())
+                .filteredOn(item -> ResumeUnresolvedItemDTO.KIND_TEXT_FRAGMENT.equals(item.getKind())
+                        && item.getCanonicalDraft() != null
+                        && item.getCanonicalDraft().contains(summary))
+                .extracting(ResumeUnresolvedItemDTO::getSourceRef)
+                .containsExactly("summary-occ-1", "summary-occ-2");
+    }
+
+    @Test
+    void buildShouldNotAttachAnUnboundedRepeatedContactToTheFirstOccurrence() {
+        String email = "same@example.com";
+        ResumeStructuredContentDTO content = ResumeStructuredContentDTO.builder()
+                .rawSections(List.of(ResumeRawSectionDTO.builder()
+                        .normalizedSection("BASIC")
+                        .blocks(List.of(
+                                ResumeRawSectionBlockDTO.builder().originalIndex(0).text(email)
+                                        .sourceOccurrenceIds(List.of("email-occ-1")).build(),
+                                ResumeRawSectionBlockDTO.builder().originalIndex(1).text(email)
+                                        .sourceOccurrenceIds(List.of("email-occ-2")).build()))
+                        .build()))
+                .email(email)
+                .build();
+
+        ResumeCanonicalDocumentService.BuildResult result = service.build(content);
+
+        assertThat(result.document().getBasics().getContacts())
+                .noneMatch(contact -> email.equals(contact.getValue()));
+        assertThat(result.unresolvedItems())
+                .filteredOn(item -> ResumeUnresolvedItemDTO.KIND_TEXT_FRAGMENT.equals(item.getKind()))
+                .extracting(ResumeUnresolvedItemDTO::getSourceRef)
+                .contains("email-occ-1", "email-occ-2");
+    }
+
+    @Test
+    void buildShouldResolveRepeatedSummaryWithAnExplicitOccurrenceBoundary() {
+        String summary = "负责核心平台建设";
+        ResumeStructuredContentDTO content = ResumeStructuredContentDTO.builder()
+                .rawSections(List.of(ResumeRawSectionDTO.builder()
+                        .normalizedSection("SUMMARY")
+                        .blocks(List.of(
+                                ResumeRawSectionBlockDTO.builder().id("summary-1").originalIndex(0)
+                                        .text(summary).sourceOccurrenceIds(List.of("summary-occ-1")).build(),
+                                ResumeRawSectionBlockDTO.builder().id("summary-2").originalIndex(1)
+                                        .text(summary).sourceOccurrenceIds(List.of("summary-occ-2")).build()))
+                        .build()))
+                .structuredData(ResumeStructuredDataDTO.builder()
+                        .summary(summary)
+                        .summarySourceRef(sourceRef(summary, "summary-occ-2"))
+                        .build())
+                .build();
+
+        ResumeDocumentSectionDTO section = sectionOf(service.build(content).document(), "SUMMARY");
+
+        assertThat(section.getSourceOccurrenceIds()).containsExactly("summary-occ-2");
+        assertThat(section.getEntries()).singleElement()
+                .satisfies(entry -> assertThat(entry.getSourceOccurrenceIds())
+                        .containsExactly("summary-occ-2"));
+    }
+
+    @Test
+    void buildShouldRejectRepeatedWrappedSummaryWithoutAnOccurrenceBoundary() {
+        ResumeStructuredContentDTO content = ResumeStructuredContentDTO.builder()
+                .rawSections(List.of(ResumeRawSectionDTO.builder()
+                        .normalizedSection("SUMMARY")
+                        .blocks(List.of(
+                                ResumeRawSectionBlockDTO.builder().originalIndex(0).text("负责核心")
+                                        .sourceOccurrenceIds(List.of("span-1-a")).build(),
+                                ResumeRawSectionBlockDTO.builder().originalIndex(1).text("平台建设")
+                                        .sourceOccurrenceIds(List.of("span-1-b")).build(),
+                                ResumeRawSectionBlockDTO.builder().originalIndex(2).text("负责核心")
+                                        .sourceOccurrenceIds(List.of("span-2-a")).build(),
+                                ResumeRawSectionBlockDTO.builder().originalIndex(3).text("平台建设")
+                                        .sourceOccurrenceIds(List.of("span-2-b")).build()))
+                        .build()))
+                .structuredData(ResumeStructuredDataDTO.builder().summary("负责核心平台建设").build())
+                .build();
+
+        ResumeCanonicalDocumentService.BuildResult result = service.build(content);
+
+        assertThat(result.document().getSections())
+                .filteredOn(section -> "SUMMARY".equals(section.getKind()))
+                .isEmpty();
     }
 
     @Test
@@ -1913,6 +2060,13 @@ class ResumeCanonicalDocumentServiceImplTest {
                 .filter(section -> kind.equals(section.getKind()))
                 .findFirst()
                 .orElseThrow();
+    }
+
+    private ResumeSourceRefDTO sourceRef(String text, String occurrenceId) {
+        return ResumeSourceRefDTO.builder()
+                .text(text)
+                .sourceOccurrenceIds(List.of(occurrenceId))
+                .build();
     }
 
     private ResumeStructuredContentDTO realisticContent() {

@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.winter.airesumeoptimizer.common.exception.BusinessException;
+import com.winter.airesumeoptimizer.module.resume.dto.ResumeSourceRefDTO;
 import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentBasicsDTO;
 import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentBulletDTO;
 import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentContactDTO;
@@ -13,6 +14,7 @@ import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentEntryDTO;
 import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentSectionDTO;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -47,6 +49,80 @@ class ResumeDocumentConverterImplTest {
         assertThat(normalized.getSections().get(0).getId()).isEqualTo("s-1");
         assertThat(normalized.getSections().get(0).getEntries().get(0).getId()).isEqualTo("s-1-e-1");
         assertThat(normalized.getSections().get(0).getEntries().get(0).getBullets().get(0).getId()).isNotBlank();
+    }
+
+    @Test
+    void normalizeShouldCopyFrozenOccurrenceGeometryWithoutAliasingTheInput() {
+        ResumeDocumentDTO document = validDocument();
+        ResumeSourceRefDTO sourceRef = ResumeSourceRefDTO.builder()
+                .text("原文")
+                .sourceOccurrenceIds(List.of("occ-1"))
+                .page(2).x(10.0).y(20.0).width(100.0).height(12.0)
+                .build();
+        document.setSourceOccurrenceRefs(Map.of("occ-1", sourceRef));
+
+        ResumeDocumentDTO normalized = converter.normalize(document);
+        sourceRef.setX(999.0);
+
+        assertThat(normalized.getSourceOccurrenceRefs().get("occ-1").getX()).isEqualTo(10.0);
+        assertThat(normalized.getSourceOccurrenceRefs().get("occ-1").getPage()).isEqualTo(2);
+    }
+
+    @Test
+    void normalizeWorkspaceSaveShouldUseOnlyFrozenProvenance() {
+        ResumeDocumentDTO frozen = documentWithProvenance();
+        ResumeDocumentDTO current = converter.normalize(frozen);
+        ResumeDocumentDTO submitted = converter.normalize(frozen);
+        submitted.setSourceOccurrenceIds(List.of("forged-root"));
+        submitted.setSourceOccurrenceTexts(Map.of("forged-root", "伪造原文"));
+        ResumeDocumentBulletDTO bullet = submitted.getSections().get(0).getEntries().get(0).getBullets().get(0);
+        bullet.setText("编辑后的职责");
+        bullet.setSourceOccurrenceIds(List.of("forged-child"));
+        bullet.setSourceRef(sourceRef("forged-child", "伪造原文"));
+
+        ResumeDocumentDTO saved = converter.normalizeWorkspaceSave(submitted, current, frozen);
+
+        assertThat(saved.getSourceOccurrenceIds()).containsExactly("occ-root", "occ-bullet");
+        assertThat(saved.getSourceOccurrenceTexts()).containsEntry("occ-bullet", "负责订单服务开发");
+        ResumeDocumentBulletDTO savedBullet = saved.getSections().get(0).getEntries().get(0).getBullets().get(0);
+        assertThat(savedBullet.getText()).isEqualTo("编辑后的职责");
+        assertThat(savedBullet.getSourceOccurrenceIds()).containsExactly("occ-bullet");
+        assertThat(savedBullet.getSourceRef().getSourceOccurrenceIds()).containsExactly("occ-bullet");
+    }
+
+    @Test
+    void normalizeWorkspaceSaveShouldLeaveNewNodesUnreferenced() {
+        ResumeDocumentDTO frozen = documentWithProvenance();
+        ResumeDocumentDTO submitted = converter.normalize(frozen);
+        submitted.getSections().get(0).getEntries().get(0).getBullets().add(
+                ResumeDocumentBulletDTO.builder()
+                        .id("new-bullet")
+                        .text("用户新增内容")
+                        .sourceOccurrenceIds(List.of("occ-bullet"))
+                        .sourceRef(sourceRef("occ-bullet", "负责订单服务开发"))
+                        .build());
+
+        ResumeDocumentDTO saved = converter.normalizeWorkspaceSave(submitted, frozen, frozen);
+
+        ResumeDocumentBulletDTO added = saved.getSections().get(0).getEntries().get(0).getBullets().get(1);
+        assertThat(added.getSourceOccurrenceIds()).isNullOrEmpty();
+        assertThat(added.getSourceRef()).isNull();
+    }
+
+    @Test
+    void normalizeWorkspaceSaveShouldRejectBulletReparenting() {
+        ResumeDocumentDTO frozen = documentWithProvenance();
+        ResumeDocumentEntryDTO second = ResumeDocumentEntryDTO.builder()
+                .id("s-1-e-2").organization("另一家公司")
+                .bullets(new ArrayList<>()).build();
+        frozen.getSections().get(0).getEntries().add(second);
+        ResumeDocumentDTO submitted = converter.normalize(frozen);
+        ResumeDocumentBulletDTO moved = submitted.getSections().get(0).getEntries().get(0).getBullets().remove(0);
+        submitted.getSections().get(0).getEntries().get(1).getBullets().add(moved);
+
+        assertThatThrownBy(() -> converter.normalizeWorkspaceSave(submitted, frozen, frozen))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("不能改变原有归属");
     }
 
     @Test
@@ -383,6 +459,35 @@ class ResumeDocumentConverterImplTest {
         ResumeDocumentDTO reread = converter.upgradeLegacyDocument(json);
 
         assertThat(reread).usingRecursiveComparison().isEqualTo(converter.normalize(document));
+    }
+
+    private ResumeDocumentDTO documentWithProvenance() {
+        ResumeDocumentDTO document = validDocument();
+        document.setSourceOccurrenceIds(List.of("occ-root", "occ-bullet"));
+        document.setSourceOccurrenceTexts(Map.of(
+                "occ-root", "工作经历",
+                "occ-bullet", "负责订单服务开发"));
+        document.setSourceOccurrencePrimaryIds(Map.of(
+                "occ-root", "occ-root",
+                "occ-bullet", "occ-bullet"));
+        document.setSourceRef(sourceRef("occ-root", "工作经历"));
+        ResumeDocumentSectionDTO section = document.getSections().get(0);
+        section.setSourceOccurrenceIds(List.of("occ-root"));
+        section.setSourceRef(sourceRef("occ-root", "工作经历"));
+        ResumeDocumentEntryDTO entry = section.getEntries().get(0);
+        entry.setSourceOccurrenceIds(List.of("occ-bullet"));
+        entry.setSourceRef(sourceRef("occ-bullet", "负责订单服务开发"));
+        ResumeDocumentBulletDTO bullet = entry.getBullets().get(0);
+        bullet.setSourceOccurrenceIds(List.of("occ-bullet"));
+        bullet.setSourceRef(sourceRef("occ-bullet", "负责订单服务开发"));
+        return document;
+    }
+
+    private ResumeSourceRefDTO sourceRef(String occurrenceId, String text) {
+        return ResumeSourceRefDTO.builder()
+                .text(text)
+                .sourceOccurrenceIds(List.of(occurrenceId))
+                .build();
     }
 
     private ResumeDocumentDTO validDocument() {

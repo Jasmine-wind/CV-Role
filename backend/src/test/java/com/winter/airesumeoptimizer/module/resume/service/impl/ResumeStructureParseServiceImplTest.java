@@ -109,6 +109,76 @@ class ResumeStructureParseServiceImplTest {
     }
 
     @Test
+    void dedicatedSkillsSectionShouldOwnCanonicalSkillsWithoutWorkOrProjectLeakage() {
+        ResumeStructuredContentDTO result = service.parse("""
+                Synthetic Candidate
+                专业技能
+                Java
+                工作经历
+                示例公司 后端工程师
+                使用 Kafka 处理工作消息
+                项目经历
+                项目名称：缓存治理平台
+                技术栈：Redis
+                负责实现缓存一致性治理
+                """);
+
+        assertThat(result.getStructuredData().getSkills().getKeywords())
+                .containsExactly("Java");
+        assertThat(result.getStructuredData().getProjects())
+                .anySatisfy(project -> assertThat(project.getTechStack()).contains("Redis"));
+    }
+
+    @Test
+    void workAndProjectSkillsShouldRemainFallbackWhenNoDedicatedSkillsSectionExists() {
+        ResumeStructuredContentDTO result = service.parse("""
+                Synthetic Candidate
+                工作经历
+                示例公司 后端工程师
+                使用 Kafka 处理工作消息
+                项目经历
+                项目名称：缓存治理平台
+                技术栈：Redis
+                负责实现缓存一致性治理
+                """);
+
+        assertThat(result.getStructuredData().getSkills().getKeywords())
+                .contains("Kafka", "Redis");
+    }
+
+    @Test
+    void punctuationEquivalentAwardDatesShouldNotCreateDuplicateAchievements() {
+        ResumeStructuredContentDTO result = service.parse("""
+                Synthetic Candidate
+                荣誉奖项
+                2023-05 校级一等奖
+                2023—05 校级一等奖
+                """);
+
+        assertThat(result.getStructuredData().getAchievements())
+                .singleElement()
+                .satisfies(achievement -> {
+                    assertThat(achievement.getTitle()).isEqualTo("校级一等奖");
+                    assertThat(achievement.getDate()).isEqualTo("2023-05");
+                });
+    }
+
+    @Test
+    void identicalAwardRowsRemainDistinctSourceOccurrences() {
+        ResumeStructuredContentDTO result = service.parse("""
+                Synthetic Candidate
+                荣誉奖项
+                2023-05 校级一等奖
+                2023-05 校级一等奖
+                """);
+
+        assertThat(result.getStructuredData().getAchievements()).hasSize(2);
+        assertThat(result.getStructuredData().getAchievements())
+                .extracting(achievement -> achievement.getSourceRef().getSourceOccurrenceIds())
+                .doesNotHaveDuplicates();
+    }
+
+    @Test
     void parseShouldAllowMissingOptionalFields() {
         ResumeStructuredContentDTO result = service.parse("专业技能\nJava");
 
@@ -646,10 +716,12 @@ class ResumeStructureParseServiceImplTest {
                 .containsEntry("graduationDate", "2027年6月")
                 .containsEntry("gpa", "3.72/4.0");
         assertThat(result.getStructuredData().getSkills().getKeywords())
-                .contains("Python", "C++", "C", "Verilog", "Linux", "OpenCV", "YOLO", "DETR",
-                        "Transformer", "MATLAB", "Git", "Docker", "PyTorch", "TensorFlow", "Scikit-learn", "Pandas");
+                .contains("Python", "C++", "C", "Linux", "OpenCV", "YOLO", "Transformer",
+                        "Git", "Docker", "PyTorch", "TensorFlow", "Scikit-learn", "Pandas")
+                .doesNotContain("Verilog", "DETR", "MATLAB");
         assertThat(result.getStructuredData().getSkills().getGroups().get("cv"))
-                .contains("OpenCV", "YOLO", "DETR");
+                .contains("OpenCV", "YOLO")
+                .doesNotContain("DETR");
         assertThat(result.getStructuredData().getProjects())
                 .anySatisfy(project -> {
                     assertThat(project.getName()).contains("SRTP");

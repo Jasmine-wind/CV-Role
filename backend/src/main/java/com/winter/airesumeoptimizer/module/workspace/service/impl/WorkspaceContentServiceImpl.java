@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.winter.airesumeoptimizer.common.exception.BusinessException;
+import com.winter.airesumeoptimizer.infra.storage.FileStorageService;
 import com.winter.airesumeoptimizer.module.optimization.entity.JobTarget;
 import com.winter.airesumeoptimizer.module.optimization.entity.OptimizationTask;
 import com.winter.airesumeoptimizer.module.optimization.entity.ResumeVersion;
@@ -18,8 +19,11 @@ import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentDTO;
 import com.winter.airesumeoptimizer.module.workspace.dto.WorkspaceContentSaveRequestDTO;
 import com.winter.airesumeoptimizer.module.workspace.service.ResumeDocumentConverter;
 import com.winter.airesumeoptimizer.module.workspace.service.WorkspaceContentService;
+import com.winter.airesumeoptimizer.module.workspace.service.WorkspaceSourceReferenceAssembler;
 import com.winter.airesumeoptimizer.module.workspace.vo.WorkspaceContentSaveResultVO;
 import com.winter.airesumeoptimizer.module.workspace.vo.WorkspaceContentVO;
+import com.winter.airesumeoptimizer.module.workspace.vo.WorkspaceSourcePdfVO;
+import com.winter.airesumeoptimizer.module.workspace.vo.WorkspaceSourceReferenceVO;
 import java.time.LocalDateTime;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -39,6 +43,8 @@ public class WorkspaceContentServiceImpl implements WorkspaceContentService {
     private final ResumeMapper resumeMapper;
     private final ResumeDocumentConverter resumeDocumentConverter;
     private final ResumeCanonicalDocumentService resumeCanonicalDocumentService;
+    private final WorkspaceSourceReferenceAssembler sourceReferenceAssembler;
+    private final FileStorageService fileStorageService;
     private final ObjectMapper objectMapper;
 
     public WorkspaceContentServiceImpl(
@@ -48,6 +54,8 @@ public class WorkspaceContentServiceImpl implements WorkspaceContentService {
             ResumeMapper resumeMapper,
             ResumeDocumentConverter resumeDocumentConverter,
             ResumeCanonicalDocumentService resumeCanonicalDocumentService,
+            WorkspaceSourceReferenceAssembler sourceReferenceAssembler,
+            FileStorageService fileStorageService,
             ObjectMapper objectMapper) {
         this.optimizationTaskMapper = optimizationTaskMapper;
         this.resumeVersionMapper = resumeVersionMapper;
@@ -55,6 +63,8 @@ public class WorkspaceContentServiceImpl implements WorkspaceContentService {
         this.resumeMapper = resumeMapper;
         this.resumeDocumentConverter = resumeDocumentConverter;
         this.resumeCanonicalDocumentService = resumeCanonicalDocumentService;
+        this.sourceReferenceAssembler = sourceReferenceAssembler;
+        this.fileStorageService = fileStorageService;
         this.objectMapper = objectMapper;
     }
 
@@ -76,6 +86,42 @@ public class WorkspaceContentServiceImpl implements WorkspaceContentService {
                 .revision(revision)
                 .document(document)
                 .build();
+    }
+
+    @Override
+    public WorkspaceSourceReferenceVO getSourceReference(Long userId, Long optimizationTaskId) {
+        EditableTaskContext context = resolveEditableTarget(userId, optimizationTaskId);
+        long revision = revisionOf(context.target());
+        ResumeDocumentDTO source = documentFromFrozenSnapshot(resolveFrozenSnapshot(context));
+        ResumeDocumentDTO target = revision > PRISTINE_REVISION
+                ? readPersistedDocument(context.target()) : source;
+        Resume resume = context.resume();
+        return sourceReferenceAssembler.assemble(
+                context.task().getId(), context.source().getId(), context.target().getId(), revision,
+                resume.getOriginalFilename(), isPdf(resume), source, target);
+    }
+
+    @Override
+    public WorkspaceSourcePdfVO getSourcePdf(Long userId, Long optimizationTaskId) {
+        EditableTaskContext context = resolveEditableTarget(userId, optimizationTaskId);
+        Resume resume = context.resume();
+        if (!isPdf(resume)) {
+            throw new BusinessException(409, "原始文件不是 PDF，请使用原文视图核对");
+        }
+        if (resume.getObjectKey() == null || resume.getObjectKey().isBlank()) {
+            throw new BusinessException(404, "原始文件不存在");
+        }
+        byte[] bytes;
+        try {
+            bytes = fileStorageService.loadAsBytes(resume.getObjectKey());
+        } catch (RuntimeException exception) {
+            throw new BusinessException(500, "原始文件读取失败，请稍后重试");
+        }
+        if (bytes.length < 5 || bytes[0] != '%' || bytes[1] != 'P' || bytes[2] != 'D'
+                || bytes[3] != 'F' || bytes[4] != '-') {
+            throw new BusinessException(500, "原始 PDF 文件格式不正确");
+        }
+        return new WorkspaceSourcePdfVO(bytes, resume.getOriginalFilename());
     }
 
     @Override
@@ -105,7 +151,15 @@ public class WorkspaceContentServiceImpl implements WorkspaceContentService {
             throw new BusinessException(400, "简历内容不能为空");
         }
         EditableTaskContext context = resolveEditableTarget(userId, optimizationTaskId);
-        ResumeDocumentDTO normalized = resumeDocumentConverter.normalize(request.getDocument());
+        long currentRevision = revisionOf(context.target());
+        if (currentRevision != request.getExpectedRevision()) {
+            return conflictResult(currentRevision);
+        }
+        ResumeDocumentDTO frozen = documentFromFrozenSnapshot(resolveFrozenSnapshot(context));
+        ResumeDocumentDTO current = currentRevision == PRISTINE_REVISION
+                ? frozen : readPersistedDocument(context.target());
+        ResumeDocumentDTO normalized = resumeDocumentConverter.normalizeWorkspaceSave(
+                request.getDocument(), current, frozen);
         return writeTargetContent(context, normalized, request.getExpectedRevision());
     }
 
@@ -179,7 +233,7 @@ public class WorkspaceContentServiceImpl implements WorkspaceContentService {
         if (targetUseCount == null || targetUseCount != 1L) {
             throw new BusinessException(500, "岗位版本被多个优化任务引用，不能安全编辑");
         }
-        return new EditableTaskContext(task, source, target);
+        return new EditableTaskContext(task, source, target, resume);
     }
 
     private ResumeVersion getOwnedVersion(Long userId, Long versionId) {
@@ -225,6 +279,14 @@ public class WorkspaceContentServiceImpl implements WorkspaceContentService {
      * 仅当 expectedRevision 与服务端当前 revision 一致时原子写入并递增；
      * 条件更新保证同 revision 的并发保存只有一个成功。
      */
+    private WorkspaceContentSaveResultVO conflictResult(long currentRevision) {
+        return WorkspaceContentSaveResultVO.builder()
+                .saved(false)
+                .conflict(true)
+                .revision(currentRevision)
+                .build();
+    }
+
     private WorkspaceContentSaveResultVO writeTargetContent(
             EditableTaskContext context, ResumeDocumentDTO document, long expectedRevision) {
         ResumeVersion target = context.target();
@@ -256,11 +318,7 @@ public class WorkspaceContentServiceImpl implements WorkspaceContentService {
         if (current == null) {
             throw new BusinessException(404, "简历版本不存在");
         }
-        return WorkspaceContentSaveResultVO.builder()
-                .saved(false)
-                .conflict(true)
-                .revision(revisionOf(current))
-                .build();
+        return conflictResult(revisionOf(current));
     }
 
     private ResumeDocumentDTO readPersistedDocument(ResumeVersion target) {
@@ -324,12 +382,18 @@ public class WorkspaceContentServiceImpl implements WorkspaceContentService {
         }
     }
 
+    private boolean isPdf(Resume resume) {
+        return resume != null && resume.getFileType() != null
+                && "PDF".equalsIgnoreCase(resume.getFileType().strip());
+    }
+
     private void validateUserId(Long userId) {
         if (userId == null) {
             throw new BusinessException(401, "请先登录");
         }
     }
 
-    private record EditableTaskContext(OptimizationTask task, ResumeVersion source, ResumeVersion target) {
+    private record EditableTaskContext(
+            OptimizationTask task, ResumeVersion source, ResumeVersion target, Resume resume) {
     }
 }

@@ -74,6 +74,14 @@ public final class ResumeEntryBoundaryDetector {
         }
     }
 
+    /**
+     * Exposes the detector's conservative visual/header decision to other experience-like
+     * assemblers without duplicating its typography and adjacency rules.
+     */
+    boolean startsEntry(ResumeRawSectionBlockDTO line, ResumeRawSectionBlockDTO next) {
+        return isPairedHeader(line, next) || isEntryHeader(line, next);
+    }
+
     private boolean isPairedHeader(ResumeRawSectionBlockDTO first, ResumeRawSectionBlockDTO second) {
         if (first == null || second == null || isBullet(first) || isBullet(second)
                 || !headerLikeTitle(first.getText()) || !metadataRow(second.getText())) {
@@ -101,8 +109,19 @@ public final class ResumeEntryBoundaryDetector {
         }
         // Typography is only a supporting signal: a bold row must still look like metadata or
         // be followed by a plausible body row. Font size alone is never a heading boundary.
-        return Boolean.TRUE.equals(line.getBoldHint())
+        return (Boolean.TRUE.equals(line.getBoldHint()) || strongerTypography(line, next))
                 && (metadataRow(line.getText()) || next != null && !shortNonNarrative(next.getText()));
+    }
+
+    private boolean strongerTypography(ResumeRawSectionBlockDTO line, ResumeRawSectionBlockDTO next) {
+        if (line == null || next == null) {
+            return false;
+        }
+        boolean largerFont = line.getFontSize() != null && next.getFontSize() != null
+                && line.getFontSize() >= next.getFontSize() + 0.75d;
+        boolean shallowerIndent = line.getIndent() != null && next.getIndent() != null
+                && line.getIndent() < next.getIndent();
+        return largerFont || shallowerIndent;
     }
 
     private boolean metadataRow(String text) {

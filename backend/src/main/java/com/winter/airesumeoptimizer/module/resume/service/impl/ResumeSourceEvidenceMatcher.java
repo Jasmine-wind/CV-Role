@@ -91,7 +91,17 @@ final class ResumeSourceEvidenceMatcher {
                     block.getIndex(),
                     block.getIndex(),
                     block.getPage(),
+                    block.getX(),
+                    block.getY(),
+                    block.getWidth(),
+                    block.getHeight(),
+                    block.getFontSize(),
+                    block.getFontName(),
+                    block.getBoldHint(),
+                    block.getIndent(),
+                    block.getBulletHint(),
                     block.getRole(),
+                    block.getSourceType(),
                     syntheticId);
             occurrences.add(occurrence);
             for (String occurrenceId : occurrenceIds) {
@@ -431,7 +441,17 @@ final class ResumeSourceEvidenceMatcher {
                 lineOrder,
                 endLineOrder,
                 page,
+                firstNonNull(previous.x(), block.getX()),
+                firstNonNull(previous.y(), block.getY()),
+                firstNonNull(previous.width(), block.getWidth()),
+                firstNonNull(previous.height(), block.getHeight()),
+                firstNonNull(previous.fontSize(), block.getFontSize()),
+                firstNonNull(previous.fontName(), block.getFontName()),
+                firstNonNull(previous.boldHint(), block.getBoldHint()),
+                firstNonNull(previous.indent(), block.getIndent()),
+                firstNonNull(previous.bulletHint(), block.getBulletHint()),
                 previous.role() == null ? block.getRole() : previous.role(),
+                firstNonNull(previous.sourceType(), block.getSourceType()),
                 previous.syntheticId() && !hasConcreteSourceOccurrenceId(block));
     }
 
@@ -619,6 +639,10 @@ final class ResumeSourceEvidenceMatcher {
         return SEPARATOR.matcher(value == null ? "" : value).replaceAll("");
     }
 
+    private static <T> T firstNonNull(T first, T second) {
+        return first == null ? second : first;
+    }
+
     record Occurrence(
             String primaryId,
             List<String> ids,
@@ -631,7 +655,17 @@ final class ResumeSourceEvidenceMatcher {
             Integer lineOrder,
             Integer endLineOrder,
             Integer page,
+            Double x,
+            Double y,
+            Double width,
+            Double height,
+            Double fontSize,
+            String fontName,
+            Boolean boldHint,
+            Integer indent,
+            Boolean bulletHint,
             ResumeSourceBlockRole role,
+            String sourceType,
             boolean syntheticId) {
     }
 }

@@ -119,7 +119,7 @@ const submitCustom = () => {
 
     <template v-else-if="props.mode === 'ready' || props.mode === 'stale'">
       <div class="suggestion-copy-block">
-        <span class="suggestion-label">原文</span>
+        <span class="suggestion-label">当前版本</span>
         <p>{{ props.originalText }}</p>
       </div>
       <div class="suggestion-copy-block is-proposed">
@@ -128,7 +128,7 @@ const submitCustom = () => {
       </div>
       <div class="suggestion-copy-block is-diff">
         <span class="suggestion-label">差异</span>
-        <p aria-label="原文与建议表达的差异">
+        <p aria-label="当前版本与建议版本的差异">
           <span
             v-for="(segment, index) in diffSegments"
             :key="`${segment.type}-${index}`"

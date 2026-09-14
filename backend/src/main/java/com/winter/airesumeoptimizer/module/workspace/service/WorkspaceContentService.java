@@ -3,6 +3,8 @@ package com.winter.airesumeoptimizer.module.workspace.service;
 import com.winter.airesumeoptimizer.module.workspace.dto.WorkspaceContentSaveRequestDTO;
 import com.winter.airesumeoptimizer.module.workspace.vo.WorkspaceContentSaveResultVO;
 import com.winter.airesumeoptimizer.module.workspace.vo.WorkspaceContentVO;
+import com.winter.airesumeoptimizer.module.workspace.vo.WorkspaceSourcePdfVO;
+import com.winter.airesumeoptimizer.module.workspace.vo.WorkspaceSourceReferenceVO;
 
 /**
  * Optimization Workspace 内容边界。
@@ -20,6 +22,12 @@ public interface WorkspaceContentService {
      * revision 大于 0 时直接返回已持久化的编辑文档。刷新或重新进入只恢复最后成功持久化的服务端内容。
      */
     WorkspaceContentVO getContent(Long userId, Long optimizationTaskId);
+
+    /** Returns only the task-frozen SOURCE and mappings authenticated against its root manifest. */
+    WorkspaceSourceReferenceVO getSourceReference(Long userId, Long optimizationTaskId);
+
+    /** Loads the original PDF only after resolving the complete task ownership graph. */
+    WorkspaceSourcePdfVO getSourcePdf(Long userId, Long optimizationTaskId);
 
     /**
      * 读取可用于 Preview / Export 的已持久化 TARGET 编辑文档。

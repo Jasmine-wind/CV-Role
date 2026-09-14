@@ -25,11 +25,14 @@ const props = defineProps<{
   focusedBulletId?: string | null
   /** 同一目标再次点击时递增，确保仍能重新滚动到上下文。 */
   focusRequestKey?: number
+  /** Provenance selection shared with the frozen SOURCE pane. */
+  selectedTargetNodeId?: string | null
 }>()
 
 const emit = defineEmits<{
   change: [document: ResumeDocument]
   reopenInspector: []
+  viewSource: [targetNodeId: string]
 }>()
 
 const LIMITS = {
@@ -44,6 +47,22 @@ const LIMITS = {
 }
 
 const newId = () => crypto.randomUUID()
+
+/** Crossing a section boundary creates a new logical node; source lineage cannot cross with it. */
+const detachEntryFromSourceLineage = (entry: ResumeDocumentEntry) => {
+  entry.id = newId()
+  delete entry.sourceRef
+  delete entry.sourceOccurrenceIds
+  delete entry.fieldSourceRefs
+  delete entry.techStackSourceRefs
+  delete entry.skillItemSourceRefs
+  delete entry.skillDescriptionSourceRefs
+  for (const bullet of entry.bullets) {
+    bullet.id = newId()
+    delete bullet.sourceRef
+    delete bullet.sourceOccurrenceIds
+  }
+}
 
 const compactContactRows = (contacts: ResumeDocumentBasics['contacts']) => {
   const seen = new Set<string>()
@@ -557,7 +576,10 @@ const finishPointerDrag = () => {
           const nextTarget = doc.sections.find((item) => item.id === target.targetSectionId)
           if (!nextSource || !nextTarget) return
           const [entry] = nextSource.entries.splice(sourceIndex, 1)
-          if (entry) nextTarget.entries.splice(nextIndex, 0, entry)
+          if (entry) {
+            if (!sameArray) detachEntryFromSourceLineage(entry)
+            nextTarget.entries.splice(nextIndex, 0, entry)
+          }
         })
         clearDrag()
         const positionText = `第 ${nextIndex + 1} 项`
@@ -1003,7 +1025,9 @@ const handleSuggestCommand = (bulletId: string, command: BulletSuggestIntent | '
           'is-drop-before': sectionDropClass(section.id, 'before'),
           'is-drop-after': sectionDropClass(section.id, 'after'),
           'is-entry-drop-end': entryDropEndClass(section.id),
+          'is-source-selected': props.selectedTargetNodeId === `section:${section.id}`,
         }"
+        :data-target-node-id="`section:${section.id}`"
         :ref="(element) => setSectionRef(section.id, element)"
         role="group"
         tabindex="0"
@@ -1011,6 +1035,7 @@ const handleSuggestCommand = (bulletId: string, command: BulletSuggestIntent | '
         aria-describedby="resume-reorder-help"
         aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"
         @keydown="handleSectionKeydown(section.id, sectionIndex, $event)"
+        @click.self="emit('viewSource', `section:${section.id}`)"
       >
         <header class="editor-block-header">
           <button
@@ -1079,8 +1104,11 @@ const handleSuggestCommand = (bulletId: string, command: BulletSuggestIntent | '
               'is-entry-reorder-source': entryIsDragSource(section.id, entry.id),
               'is-entry-drop-before': entryDropClass(section.id, entry.id, 'before'),
               'is-entry-drop-after': entryDropClass(section.id, entry.id, 'after'),
+              'is-source-selected': props.selectedTargetNodeId === `section:${section.id}/entry:${entry.id}`,
             }"
             :data-entry-id="entry.id"
+            :data-target-node-id="`section:${section.id}/entry:${entry.id}`"
+            @click.stop="emit('viewSource', `section:${section.id}/entry:${entry.id}`)"
           >
             <div v-if="isStructuredSection(section.kind)" class="entry-document-heading">
               <button
@@ -1456,8 +1484,11 @@ const handleSuggestCommand = (bulletId: string, command: BulletSuggestIntent | '
                 :class="{
                   'is-evidence-focus': props.focusedBulletId === bullet.id,
                   'is-suggest-active': suggestActive(bullet.id),
+                  'is-source-selected': props.selectedTargetNodeId === `section:${section.id}/entry:${entry.id}/bullet:${bullet.id}`,
                 }"
                 :data-bullet-id="bullet.id"
+                :data-target-node-id="`section:${section.id}/entry:${entry.id}/bullet:${bullet.id}`"
+                @click.stop="emit('viewSource', `section:${section.id}/entry:${entry.id}/bullet:${bullet.id}`)"
               >
                 <div class="bullet-line">
                   <label class="bullet-field">
@@ -1762,6 +1793,12 @@ const handleSuggestCommand = (bulletId: string, command: BulletSuggestIntent | '
   display: grid;
   gap: 9px;
   min-width: 0;
+}
+
+.bullet-block.is-source-selected,
+.editor-entry.is-source-selected {
+  outline: 2px solid color-mix(in srgb, var(--app-focus) 58%, transparent);
+  outline-offset: 4px;
 }
 
 .bullet-block.is-evidence-focus {

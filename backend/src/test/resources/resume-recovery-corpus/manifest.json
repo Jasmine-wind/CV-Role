@@ -1,7 +1,7 @@
 {
   "schemaVersion": "resume-structure-recovery-v1",
   "piiPolicy": "synthetic-only-no-real-identifiers",
-  "caseCount": 20,
+  "caseCount": 21,
   "cases": [
     {"id":"C01_SINGLE_COLUMN","file":"01-single-column.txt","expectedFacts":["Orchid University","Northstar Labs","Signal Board"],"minSourceCoverage":90},
     {"id":"C02_SPLIT_ENTRY_HEADER","file":"02-split-entry-header.txt","expectedFacts":["River Lab","Platform Engineer","Event Ledger"],"minSourceCoverage":90},
@@ -22,6 +22,7 @@
     {"id":"C17_LABEL_VALUE","file":"17-label-value.txt","expectedFacts":["所在地：North Harbor","目标岗位：Platform Engineer"],"minSourceCoverage":90},
     {"id":"C18_NOISY_LAYOUT","file":"18-noisy-layout.txt","expectedFacts":["Telemetry Hub","p95","Kubernetes"],"minSourceCoverage":85},
     {"id":"C19_INTERN_CAMPUS","file":"19-intern-campus.txt","expectedFacts":["Internship","Campus Lab","最佳辩手"],"minSourceCoverage":90},
-    {"id":"C20_AMBIGUOUS_REVIEW","file":"20-ambiguous-review.txt","expectedFacts":["做过一些服务改造","若干奖励"],"minSourceCoverage":70}
+    {"id":"C20_AMBIGUOUS_REVIEW","file":"20-ambiguous-review.txt","expectedFacts":["做过一些服务改造","若干奖励"],"minSourceCoverage":70},
+    {"id":"C21_OMNI_GATEWAY_FULL_STRUCTURE","file":"21-omni-gateway-full-structure.txt","expectedFacts":["AI 简历优化","OmniGateway","Java、Spring Boot、PostgreSQL","合成系统可靠性实践奖"],"minSourceCoverage":90}
   ]
 }

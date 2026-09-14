@@ -9,6 +9,7 @@ import type {
   WorkspacePreviewPdf,
   WorkspaceSaveRequest,
   WorkspaceSaveResult,
+  WorkspaceSourceReference,
 } from '@/types/workspace'
 
 /** AI 生成可能超过默认请求超时，单独放宽；服务端自身有 AI 调用超时兜底。 */
@@ -16,6 +17,16 @@ const BULLET_SUGGESTION_TIMEOUT_MS = 65000
 
 export const getWorkspaceContent = (optimizationTaskId: number) => {
   return request.get<WorkspaceContent>(`/api/workspace/${optimizationTaskId}/content`)
+}
+
+export const getWorkspaceSourceReference = (optimizationTaskId: number) => {
+  return request.get<WorkspaceSourceReference>(
+    `/api/workspace/${optimizationTaskId}/source-reference`,
+  )
+}
+
+export const getWorkspaceSourcePdf = (optimizationTaskId: number) => {
+  return downloadBlob(`/api/workspace/${optimizationTaskId}/source.pdf`)
 }
 
 export const saveWorkspaceContent = (

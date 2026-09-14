@@ -5,6 +5,8 @@ import com.winter.airesumeoptimizer.module.workspace.dto.WorkspaceContentSaveReq
 import com.winter.airesumeoptimizer.module.workspace.service.WorkspaceContentService;
 import com.winter.airesumeoptimizer.module.workspace.vo.WorkspaceContentSaveResultVO;
 import com.winter.airesumeoptimizer.module.workspace.vo.WorkspaceContentVO;
+import com.winter.airesumeoptimizer.module.workspace.vo.WorkspaceSourcePdfVO;
+import com.winter.airesumeoptimizer.module.workspace.vo.WorkspaceSourceReferenceVO;
 import com.winter.airesumeoptimizer.security.AuthenticatedUser;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
@@ -13,6 +15,12 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.PositiveOrZero;
+import java.nio.charset.StandardCharsets;
+import org.springframework.http.CacheControl;
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -43,6 +51,34 @@ public class WorkspaceContentController {
             Authentication authentication) {
         AuthenticatedUser user = (AuthenticatedUser) authentication.getPrincipal();
         return Result.success(workspaceContentService.getContent(user.getUserId(), optimizationTaskId));
+    }
+
+    @GetMapping("/{optimizationTaskId}/source-reference")
+    @Operation(summary = "读取冻结原文与结构保真状态", description = "SOURCE 仅由任务绑定版本解析；所有映射按 occurrence ID fail closed")
+    public ResponseEntity<Result<WorkspaceSourceReferenceVO>> getSourceReference(
+            @PathVariable @Positive(message = "优化任务 ID 必须大于 0") Long optimizationTaskId,
+            Authentication authentication) {
+        AuthenticatedUser user = (AuthenticatedUser) authentication.getPrincipal();
+        WorkspaceSourceReferenceVO value = workspaceContentService.getSourceReference(
+                user.getUserId(), optimizationTaskId);
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(Result.success(value));
+    }
+
+    @GetMapping("/{optimizationTaskId}/source.pdf")
+    @Operation(summary = "读取任务冻结的原始 PDF", description = "先校验 task → SOURCE → resume 全链路所有权，不暴露存储键")
+    public ResponseEntity<byte[]> getSourcePdf(
+            @PathVariable @Positive(message = "优化任务 ID 必须大于 0") Long optimizationTaskId,
+            Authentication authentication) {
+        AuthenticatedUser user = (AuthenticatedUser) authentication.getPrincipal();
+        WorkspaceSourcePdfVO source = workspaceContentService.getSourcePdf(user.getUserId(), optimizationTaskId);
+        ContentDisposition disposition = ContentDisposition.inline()
+                .filename(source.filename(), StandardCharsets.UTF_8)
+                .build();
+        return ResponseEntity.ok()
+                .contentType(MediaType.APPLICATION_PDF)
+                .header(HttpHeaders.CONTENT_DISPOSITION, disposition.toString())
+                .cacheControl(CacheControl.noStore())
+                .body(source.bytes());
     }
 
     @PutMapping("/{optimizationTaskId}/content")

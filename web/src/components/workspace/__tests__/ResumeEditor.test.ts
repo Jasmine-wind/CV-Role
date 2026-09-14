@@ -817,7 +817,14 @@ describe('ResumeEditor', () => {
     const makeEntry = (id: string, bulletId: string) => ({
       id, organization: id, role: null, school: null, degree: null, major: null,
       startDate: null, endDate: null, location: null, group: null, skillItems: null,
-      bullets: [{ id: bulletId, text: id }],
+      sourceOccurrenceIds: [`occ-${id}`],
+      sourceRef: { text: id, sourceOccurrenceIds: [`occ-${id}`] },
+      bullets: [{
+        id: bulletId,
+        text: id,
+        sourceOccurrenceIds: [`occ-${bulletId}`],
+        sourceRef: { text: id, sourceOccurrenceIds: [`occ-${bulletId}`] },
+      }],
     })
     const makeCrossDocument = (targetKind: string, targetEntries: ResumeDocument['sections'][number]['entries']) => ({
       schemaVersion: 'RESUME_DOCUMENT_V1',
@@ -861,8 +868,14 @@ describe('ResumeEditor', () => {
     expect(compatibleChange).toHaveBeenCalledTimes(1)
     const moved = compatibleChange.mock.lastCall![0] as ResumeDocument
     expect(moved.sections[0]?.entries).toEqual([])
-    expect(moved.sections[1]?.entries.map((item) => item.id)).toEqual(['entry-b', 'entry-a'])
-    expect(moved.sections[1]?.entries[1]?.bullets[0]?.id).toBe('bullet-a')
+    expect(moved.sections[1]?.entries[0]?.id).toBe('entry-b')
+    const detached = moved.sections[1]?.entries[1]
+    expect(detached?.id).not.toBe('entry-a')
+    expect(detached?.sourceOccurrenceIds).toBeUndefined()
+    expect(detached?.sourceRef).toBeUndefined()
+    expect(detached?.bullets[0]?.id).not.toBe('bullet-a')
+    expect(detached?.bullets[0]?.sourceOccurrenceIds).toBeUndefined()
+    expect(detached?.bullets[0]?.sourceRef).toBeUndefined()
     compatible.unmount()
 
     const incompatibleChange = vi.fn()
@@ -882,7 +895,8 @@ describe('ResumeEditor', () => {
     expect(emptyChange).toHaveBeenCalledTimes(1)
     const emptyMoved = emptyChange.mock.lastCall![0] as ResumeDocument
     expect(emptyMoved.sections[0]?.entries).toHaveLength(0)
-    expect(emptyMoved.sections[1]?.entries[0]?.id).toBe('entry-a')
+    expect(emptyMoved.sections[1]?.entries[0]?.id).not.toBe('entry-a')
+    expect(emptyMoved.sections[1]?.entries[0]?.sourceOccurrenceIds).toBeUndefined()
     empty.unmount()
     vi.restoreAllMocks()
   })

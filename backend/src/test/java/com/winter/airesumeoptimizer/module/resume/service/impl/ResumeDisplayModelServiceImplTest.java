@@ -97,6 +97,26 @@ class ResumeDisplayModelServiceImplTest {
     }
 
     @Test
+    void buildRuleDisplayModelShouldKeepLegitimateNumericProjectName() {
+        ResumeDisplayModelServiceImpl service = new ResumeDisplayModelServiceImpl(
+                new CountingAiClient(""),
+                new ObjectMapper());
+        ResumeStructuredContentDTO content = sampleContent();
+        content.getStructuredData().setProjects(List.of(ResumeProjectDTO.builder()
+                .name("2048")
+                .description("实现棋盘状态、撤销与回放功能。")
+                .responsibilities(List.of("负责核心状态机实现"))
+                .sourceSectionId("section-projects")
+                .sourceRef(ResumeSourceRefDTO.builder().startLine(10).endLine(12).text("2048\n负责核心状态机实现").build())
+                .build()));
+
+        ResumeDisplayModelDTO model = service.buildRuleDisplayModel(1L, content);
+
+        assertThat(model.getProjectCards()).singleElement()
+                .satisfies(project -> assertThat(project.getName()).isEqualTo("2048"));
+    }
+
+    @Test
     void buildRuleDisplayModelShouldSplitAndFillProjectCardsFromSourceText() {
         ResumeDisplayModelServiceImpl service = new ResumeDisplayModelServiceImpl(
                 new CountingAiClient(""),

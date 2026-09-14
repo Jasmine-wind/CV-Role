@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
@@ -13,12 +14,14 @@ import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.winter.airesumeoptimizer.common.exception.BusinessException;
+import com.winter.airesumeoptimizer.infra.storage.FileStorageService;
 import com.winter.airesumeoptimizer.module.optimization.entity.JobTarget;
 import com.winter.airesumeoptimizer.module.optimization.entity.OptimizationTask;
 import com.winter.airesumeoptimizer.module.optimization.entity.ResumeVersion;
 import com.winter.airesumeoptimizer.module.optimization.mapper.JobTargetMapper;
 import com.winter.airesumeoptimizer.module.optimization.mapper.OptimizationTaskMapper;
 import com.winter.airesumeoptimizer.module.optimization.mapper.ResumeVersionMapper;
+import com.winter.airesumeoptimizer.module.resume.dto.ResumeSourceRefDTO;
 import com.winter.airesumeoptimizer.module.resume.entity.Resume;
 import com.winter.airesumeoptimizer.module.resume.mapper.ResumeMapper;
 import com.winter.airesumeoptimizer.module.resume.service.impl.ResumeCanonicalDocumentServiceImpl;
@@ -29,8 +32,10 @@ import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentSectionDT
 import com.winter.airesumeoptimizer.module.workspace.dto.WorkspaceContentSaveRequestDTO;
 import com.winter.airesumeoptimizer.module.workspace.vo.WorkspaceContentSaveResultVO;
 import com.winter.airesumeoptimizer.module.workspace.vo.WorkspaceContentVO;
+import java.nio.charset.StandardCharsets;
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
@@ -80,6 +85,7 @@ class WorkspaceContentServiceImplTest {
     private final OptimizationTaskMapper optimizationTaskMapper = mock(OptimizationTaskMapper.class);
     private final JobTargetMapper jobTargetMapper = mock(JobTargetMapper.class);
     private final ResumeMapper resumeMapper = mock(ResumeMapper.class);
+    private final FileStorageService fileStorageService = mock(FileStorageService.class);
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final WorkspaceContentServiceImpl service = new WorkspaceContentServiceImpl(
             optimizationTaskMapper,
@@ -88,6 +94,8 @@ class WorkspaceContentServiceImplTest {
             resumeMapper,
             new ResumeDocumentConverterImpl(objectMapper),
             new ResumeCanonicalDocumentServiceImpl(objectMapper),
+            new WorkspaceSourceReferenceAssemblerImpl(),
+            fileStorageService,
             objectMapper);
 
     private OptimizationTask task;
@@ -320,6 +328,50 @@ class WorkspaceContentServiceImplTest {
     }
 
     @Test
+    void sourceReferenceShouldUseTaskBoundVersionsAndFailClosedWithoutLegacyManifest() {
+        resume.setOriginalFilename("candidate.pdf");
+        resume.setFileType("PDF");
+
+        var result = service.getSourceReference(USER_ID, TASK_ID);
+
+        assertThat(result.optimizationTaskId()).isEqualTo(TASK_ID);
+        assertThat(result.sourceResumeVersionId()).isEqualTo(SOURCE_VERSION_ID);
+        assertThat(result.targetResumeVersionId()).isEqualTo(TARGET_VERSION_ID);
+        assertThat(result.sourceFilename()).isEqualTo("candidate.pdf");
+        assertThat(result.sourcePdfAvailable()).isTrue();
+        assertThat(result.exportBlocked()).isTrue();
+        assertThat(result.fidelityIssues()).extracting(issue -> issue.code())
+                .contains("SOURCE_MANIFEST_UNAVAILABLE");
+    }
+
+    @Test
+    void sourcePdfShouldAuthorizeThroughTaskAndHideStorageIdentity() {
+        resume.setOriginalFilename("candidate.pdf");
+        resume.setFileType("pdf");
+        resume.setObjectKey("private/user-1/source.pdf");
+        byte[] pdf = "%PDF-synthetic".getBytes(StandardCharsets.US_ASCII);
+        when(fileStorageService.loadAsBytes("private/user-1/source.pdf")).thenReturn(pdf);
+
+        var result = service.getSourcePdf(USER_ID, TASK_ID);
+
+        assertThat(result.filename()).isEqualTo("candidate.pdf");
+        assertThat(result.bytes()).isEqualTo(pdf);
+        verify(fileStorageService).loadAsBytes("private/user-1/source.pdf");
+    }
+
+    @Test
+    void sourceEndpointsShouldRejectCrossUserTaskBeforeStorageAccess() {
+        when(optimizationTaskMapper.selectOne(any())).thenReturn(null);
+
+        assertThatThrownBy(() -> service.getSourceReference(OTHER_USER_ID, TASK_ID))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("优化任务不存在");
+        assertThatThrownBy(() -> service.getSourcePdf(OTHER_USER_ID, TASK_ID))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("优化任务不存在");
+    }
+
+    @Test
     void getContentShouldFailClosedWhenFrozenContentMissing() {
         task.setResumeInputSnapshot(null);
         sourceVersion.setStructuredContent(" ");
@@ -379,6 +431,36 @@ class WorkspaceContentServiceImplTest {
     }
 
     @Test
+    void saveShouldReplaceForgedProvenanceWithTheFrozenServerManifest() throws Exception {
+        ResumeDocumentDTO frozen = canonicalFrozenDocument();
+        String frozenJson = objectMapper.writeValueAsString(frozen);
+        sourceVersion.setStructuredContent(frozenJson);
+        targetVersion.setStructuredContent(frozenJson);
+        task.setResumeInputSnapshot(frozenJson);
+        dbContent.set(frozenJson);
+
+        ResumeDocumentDTO submitted = objectMapper.readValue(frozenJson, ResumeDocumentDTO.class);
+        submitted.setSourceOccurrenceIds(List.of("forged-root"));
+        submitted.setSourceOccurrenceTexts(Map.of("forged-root", "伪造原文"));
+        ResumeDocumentBulletDTO bullet = submitted.getSections().get(0).getEntries().get(0).getBullets().get(0);
+        bullet.setText("编辑后的职责");
+        bullet.setSourceOccurrenceIds(List.of("forged-child"));
+        bullet.setSourceRef(ResumeSourceRefDTO.builder().text("伪造原文")
+                .sourceOccurrenceIds(List.of("forged-child")).build());
+
+        WorkspaceContentSaveResultVO result = service.saveContent(
+                USER_ID, TASK_ID, saveRequest(0L, submitted));
+
+        assertThat(result.getDocument().getSourceOccurrenceIds())
+                .containsExactly("occ-section", "occ-entry", "occ-bullet");
+        ResumeDocumentBulletDTO saved = result.getDocument().getSections().get(0)
+                .getEntries().get(0).getBullets().get(0);
+        assertThat(saved.getText()).isEqualTo("编辑后的职责");
+        assertThat(saved.getSourceOccurrenceIds()).containsExactly("occ-bullet");
+        assertThat(dbContent.get()).doesNotContain("forged-root", "forged-child", "伪造原文");
+    }
+
+    @Test
     void saveShouldWriteNormalizedDocumentAndIncrementRevision() {
         WorkspaceContentSaveResultVO result = service.saveContent(
                 USER_ID, TASK_ID, saveRequest(0L, editedDocument("第一次编辑")));
@@ -424,6 +506,28 @@ class WorkspaceContentServiceImplTest {
         assertThat(dbRevision.get()).isEqualTo(2L);
         assertThat(dbContent.get()).contains("另一端的第二次编辑");
         assertThat(dbContent.get()).doesNotContain("过期的草稿");
+    }
+
+    @Test
+    void staleSaveShouldReturnConflictBeforeValidatingSubmittedNodeTopology() {
+        service.saveContent(USER_ID, TASK_ID, saveRequest(0L, editedDocument("已保存内容")));
+        ResumeDocumentDTO stale = editedDocument("过期内容");
+        stale.setSections(new java.util.ArrayList<>(stale.getSections()));
+        ResumeDocumentBulletDTO moved = stale.getSections().get(0).getEntries().get(0).getBullets().get(0);
+        stale.getSections().add(ResumeDocumentSectionDTO.builder()
+                .id("s-2").kind("EXPERIENCE").title("另一段经历")
+                .entries(List.of(ResumeDocumentEntryDTO.builder()
+                        .id("s-2-e-1").organization("另一家公司")
+                        .bullets(List.of(moved)).build()))
+                .build());
+        stale.getSections().get(0).getEntries().get(0).setBullets(List.of());
+
+        WorkspaceContentSaveResultVO result = service.saveContent(
+                USER_ID, TASK_ID, saveRequest(0L, stale));
+
+        assertThat(result.isConflict()).isTrue();
+        assertThat(result.getRevision()).isEqualTo(1L);
+        assertThat(dbContent.get()).contains("已保存内容");
     }
 
     @Test
@@ -609,6 +713,41 @@ class WorkspaceContentServiceImplTest {
         assertThat(secondDbContent.get()).contains("任务B的编辑");
         assertThat(dbContent.get()).contains("任务A的编辑");
         assertThat(dbContent.get()).doesNotContain("任务B的编辑");
+    }
+
+    private ResumeDocumentDTO canonicalFrozenDocument() {
+        ResumeSourceRefDTO sectionRef = ResumeSourceRefDTO.builder().text("工作经历")
+                .sourceOccurrenceIds(List.of("occ-section")).build();
+        ResumeSourceRefDTO entryRef = ResumeSourceRefDTO.builder().text("某公司 Java 开发")
+                .sourceOccurrenceIds(List.of("occ-entry")).build();
+        ResumeSourceRefDTO bulletRef = ResumeSourceRefDTO.builder().text("负责订单服务开发")
+                .sourceOccurrenceIds(List.of("occ-bullet")).build();
+        return ResumeDocumentDTO.builder()
+                .schemaVersion(ResumeDocumentDTO.SCHEMA_VERSION)
+                .sourceOccurrenceIds(List.of("occ-section", "occ-entry", "occ-bullet"))
+                .sourceOccurrenceTexts(Map.of(
+                        "occ-section", "工作经历",
+                        "occ-entry", "某公司 Java 开发",
+                        "occ-bullet", "负责订单服务开发"))
+                .sourceOccurrencePrimaryIds(Map.of(
+                        "occ-section", "occ-section",
+                        "occ-entry", "occ-entry",
+                        "occ-bullet", "occ-bullet"))
+                .basics(com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentBasicsDTO.builder()
+                        .contacts(List.of()).build())
+                .sections(List.of(ResumeDocumentSectionDTO.builder()
+                        .id("s-1").kind("EXPERIENCE").title("工作经历")
+                        .sourceRef(sectionRef).sourceOccurrenceIds(List.of("occ-section"))
+                        .entries(List.of(ResumeDocumentEntryDTO.builder()
+                                .id("s-1-e-1").organization("某公司").role("Java 开发")
+                                .sourceRef(entryRef).sourceOccurrenceIds(List.of("occ-entry"))
+                                .bullets(List.of(ResumeDocumentBulletDTO.builder()
+                                        .id("s-1-e-1-b-1").text("负责订单服务开发")
+                                        .sourceRef(bulletRef).sourceOccurrenceIds(List.of("occ-bullet"))
+                                        .build()))
+                                .build()))
+                        .build()))
+                .build();
     }
 
     private WorkspaceContentSaveRequestDTO saveRequest(long expectedRevision, ResumeDocumentDTO document) {

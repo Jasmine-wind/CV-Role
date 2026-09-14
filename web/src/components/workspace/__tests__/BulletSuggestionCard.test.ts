@@ -102,7 +102,7 @@ describe('BulletSuggestionCard', () => {
       global: { stubs: { ElButton } },
     })
 
-    expect(wrapper.text()).toContain('原文')
+    expect(wrapper.text()).toContain('当前版本')
     expect(wrapper.text()).toContain('建议版本')
     expect(wrapper.text()).toContain('差异')
     expect(wrapper.find('.diff-added').text()).toContain('并')

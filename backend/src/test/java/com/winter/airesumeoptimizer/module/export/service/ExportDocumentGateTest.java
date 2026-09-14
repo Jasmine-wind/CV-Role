@@ -2,6 +2,8 @@ package com.winter.airesumeoptimizer.module.export.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -16,6 +18,9 @@ import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentContactDT
 import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentDTO;
 import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentEntryDTO;
 import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentSectionDTO;
+import com.winter.airesumeoptimizer.module.workspace.service.ResumeDocumentConverter;
+import com.winter.airesumeoptimizer.module.workspace.service.WorkspaceSourceReferenceAssembler;
+import com.winter.airesumeoptimizer.module.workspace.vo.WorkspaceSourceReferenceVO;
 import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
@@ -101,6 +106,36 @@ class ExportDocumentGateTest {
 
         assertThat(result.blocked()).isTrue();
         assertThat(result.blockCode()).isEqualTo(ExportDocumentGate.CODE_RESUME_PARSE_PENDING);
+    }
+
+    @Test
+    void structureFidelityBlockerStopsExportGate() {
+        givenQualityStatus("READY");
+        ResumeVersion source = new ResumeVersion();
+        source.setId(SOURCE_VERSION_ID);
+        source.setUserId(USER_ID);
+        source.setResumeId(RESUME_ID);
+        source.setStructuredContent("{}");
+        when(resumeVersionMapper.selectOne(any())).thenReturn(source);
+        ResumeDocumentConverter converter = mock(ResumeDocumentConverter.class);
+        WorkspaceSourceReferenceAssembler assembler = mock(WorkspaceSourceReferenceAssembler.class);
+        when(converter.upgradeLegacyDocument("{}")).thenReturn(validDocument());
+        when(assembler.assemble(any(), any(), any(), anyLong(), any(), anyBoolean(), any(), any()))
+                .thenReturn(new WorkspaceSourceReferenceVO(
+                        50L, SOURCE_VERSION_ID, null, 0L, null, false,
+                        List.of(), List.of(), List.of(), java.util.Map.of(), true));
+        gate = new ExportDocumentGate(
+                resumeVersionMapper,
+                resumeParseResultMapper,
+                new com.winter.airesumeoptimizer.module.resume.service.impl.ResumeDocumentQualityValidatorImpl(),
+                converter,
+                assembler);
+
+        ExportDocumentGate.GateResult result = gate.check(USER_ID, task, validDocument());
+
+        assertThat(result.blocked()).isTrue();
+        assertThat(result.blockCode()).isEqualTo(ExportDocumentGate.CODE_STRUCTURE_FIDELITY_FAILED);
+        assertThat(result.needsReview()).isTrue();
     }
 
     @Test
