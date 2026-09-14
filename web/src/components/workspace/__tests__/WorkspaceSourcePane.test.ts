@@ -391,6 +391,9 @@ describe('WorkspaceSourcePane', () => {
     expect(wrapper.text()).toContain('当前简历已有更新，本次操作未生效')
     expect(omissionConcurrent).toHaveBeenCalledTimes(1)
     expect(omissionSaved).not.toHaveBeenCalled()
+
+    await wrapper.setProps({ source: sourceWith(source.sourceBlocks, { targetRevision: 5 }) })
+    expect(wrapper.text()).toContain('当前简历已有更新，本次操作未生效')
   })
 
   it('treats a thrown HTTP 409 as a concurrent CAS loss and never reports success', async () => {

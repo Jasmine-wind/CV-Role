@@ -246,10 +246,19 @@ watch(
 )
 
 watch(
-  () => [props.optimizationTaskId, props.source?.targetRevision] as const,
+  () => props.optimizationTaskId,
   () => {
     omissionRequestSequence += 1
     omissionError.value = null
+  },
+)
+
+watch(
+  () => props.source?.targetRevision,
+  () => {
+    // Invalidate any response tied to the old revision, but keep a CAS-conflict
+    // explanation visible after the parent adopts and reloads the winning version.
+    omissionRequestSequence += 1
   },
 )
 
