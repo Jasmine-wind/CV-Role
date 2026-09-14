@@ -480,7 +480,15 @@ test('intentional omission: a deleted source bullet blocks delivery until confir
       /\/api\/workspace\/\d+\/source-reference$/.test(new URL(response.url()).pathname),
   )
   await page.getByRole('button', { name: '预览 →', exact: true }).click()
-  expect((await freshFidelityVerdict).ok()).toBe(true)
+  const fidelityResponse = await freshFidelityVerdict
+  expect(fidelityResponse.ok()).toBe(true)
+  const fidelityPayload = (await fidelityResponse.json()) as {
+    data: { sourceBlocks: Array<{ id: string; occurrenceIds: string[] }> }
+  }
+  const expectedOrdinaryOccurrenceIds = fidelityPayload.data.sourceBlocks.find(
+    (block) => block.id === sourceBlockId,
+  )?.occurrenceIds
+  expect(expectedOrdinaryOccurrenceIds).toBeTruthy()
   await expect(page.getByText('请先处理冻结原文中的结构保真问题，再预览或导出')).toBeVisible()
   expect(previewRequestCount).toBe(0)
   await expect(page.getByRole('button', { name: '导出 PDF', exact: true })).toHaveCount(0)
@@ -488,20 +496,113 @@ test('intentional omission: a deleted source bullet blocks delivery until confir
 
   const confirmAction = page.getByRole('button', { name: /^确认省略/ }).first()
   await expect(confirmAction).toBeEnabled()
+
+  // Dirty and saving states must disable omission and issue zero omission POSTs.
+  let omissionPostCount = 0
+  const countOmissionPost = (request: { method: () => string; url: () => string }) => {
+    if (request.method() === 'POST' && request.url().includes('/source-omissions/')) {
+      omissionPostCount += 1
+    }
+  }
+  page.on('request', countOmissionPost)
+  let releaseSave!: () => void
+  let markSaveStarted!: () => void
+  const saveStarted = new Promise<void>((resolve) => {
+    markSaveStarted = resolve
+  })
+  const saveRelease = new Promise<void>((resolve) => {
+    releaseSave = resolve
+  })
+  await page.route('**/api/workspace/*/content', async (route) => {
+    if (route.request().method() !== 'PUT') return route.continue()
+    markSaveStarted()
+    await saveRelease
+    await route.continue()
+  })
+  const remainingBullet = page.locator('.bullet-block textarea').first()
+  await remainingBullet.fill(`${await remainingBullet.inputValue()} 补充保存门禁验证`)
+  await expect(confirmAction).toBeDisabled()
+  await confirmAction.click({ force: true })
+  expect(omissionPostCount).toBe(0)
+  await saveStarted
+  await expect(confirmAction).toBeDisabled()
+  await confirmAction.click({ force: true })
+  expect(omissionPostCount).toBe(0)
+  const gateSaveResponse = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'PUT' &&
+      /\/api\/workspace\/\d+\/content$/.test(new URL(response.url()).pathname),
+  )
+  releaseSave()
+  expect((await gateSaveResponse).ok()).toBe(true)
+  await page.unroute('**/api/workspace/*/content')
+  await expect(page.getByText('✓ 已保存', { exact: true })).toBeVisible({ timeout: 15_000 })
+  await expect(confirmAction).toBeEnabled({ timeout: 15_000 })
+
+  // A failed save keeps the omission action disabled and cannot emit an omission POST.
+  await page.route('**/api/workspace/*/content', async (route) => {
+    if (route.request().method() === 'PUT') await route.abort('failed')
+    else await route.continue()
+  })
+  const failedSaveRequest = page.waitForRequest(
+    (request) =>
+      request.method() === 'PUT' &&
+      /\/api\/workspace\/\d+\/content$/.test(new URL(request.url()).pathname),
+  )
+  await remainingBullet.fill(`${await remainingBullet.inputValue()} failed-save gate`)
+  await failedSaveRequest
+  await expect(page.getByRole('button', { name: '重新保存', exact: true })).toBeVisible({
+    timeout: 15_000,
+  })
+  await expect(confirmAction).toBeDisabled()
+  await confirmAction.click({ force: true })
+  expect(omissionPostCount).toBe(0)
+  await page.unroute('**/api/workspace/*/content')
+  const retrySaveResponse = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'PUT' &&
+      /\/api\/workspace\/\d+\/content$/.test(new URL(response.url()).pathname),
+  )
+  await page.getByRole('button', { name: '重新保存', exact: true }).click()
+  expect((await retrySaveResponse).ok()).toBe(true)
+  await expect(page.getByText('✓ 已保存', { exact: true })).toBeVisible({ timeout: 15_000 })
+  await expect(confirmAction).toBeEnabled({ timeout: 15_000 })
+
+  // Keep the real confirm request pending and prove every TARGET mutation surface is locked.
+  let releaseConfirm!: () => void
+  let markConfirmStarted!: () => void
+  const confirmStarted = new Promise<void>((resolve) => {
+    markConfirmStarted = resolve
+  })
+  const confirmRelease = new Promise<void>((resolve) => {
+    releaseConfirm = resolve
+  })
+  await page.route('**/source-omissions/confirm', async (route) => {
+    if (route.request().method() !== 'POST') return route.continue()
+    markConfirmStarted()
+    await confirmRelease
+    await route.continue()
+  })
   const confirmResponse = page.waitForResponse(
     (response) =>
       response.request().method() === 'POST' &&
       response.url().endsWith('/source-omissions/confirm'),
   )
   await confirmAction.click()
+  await confirmStarted
+  await expect(page.locator('.resume-editor')).toHaveAttribute('aria-busy', 'true')
+  await expect(page.locator('.resume-editor')).toHaveAttribute('inert', /^(|true)$/)
+  await expect(page.getByRole('button', { name: '预览 →', exact: true })).toBeDisabled()
+  releaseConfirm()
   const confirmed = await confirmResponse
+  await page.unroute('**/source-omissions/confirm')
+  page.off('request', countOmissionPost)
   const confirmBody = confirmed.request().postDataJSON() as {
     expectedRevision: number
     sourceOccurrenceIds: string[]
   }
   expect(Number.isInteger(confirmBody.expectedRevision)).toBe(true)
-  expect(confirmBody.sourceOccurrenceIds.length).toBeGreaterThan(0)
-  expect(confirmBody.sourceOccurrenceIds).toContain(sourceBlockId)
+  expect(confirmBody.sourceOccurrenceIds).toEqual(expectedOrdinaryOccurrenceIds)
   expect(new Set(confirmBody.sourceOccurrenceIds).size).toBe(confirmBody.sourceOccurrenceIds.length)
   expect(confirmed.ok()).toBe(true)
 
@@ -511,6 +612,20 @@ test('intentional omission: a deleted source bullet blocks delivery until confir
   await expect(page.getByText('结构保真检查通过', { exact: true })).toBeVisible({
     timeout: 15_000,
   })
+
+  // A failed authoritative source-reference refresh must fail closed and issue no preview request.
+  let failedGatePreviewRequests = 0
+  const countFailedGatePreview = (request: { url: () => string }) => {
+    if (request.url().includes('/preview.pdf')) failedGatePreviewRequests += 1
+  }
+  page.on('request', countFailedGatePreview)
+  await page.route('**/api/workspace/*/source-reference', (route) => route.abort('failed'))
+  await page.getByRole('button', { name: '预览 →', exact: true }).click()
+  await expect(page.getByText('冻结原文检查尚未完成，请稍后重试')).toBeVisible()
+  expect(failedGatePreviewRequests).toBe(0)
+  await expect(page.getByTitle('简历 PDF 预览')).toHaveCount(0)
+  await page.unroute('**/api/workspace/*/source-reference')
+  page.off('request', countFailedGatePreview)
 
   await page.getByRole('button', { name: '预览 →', exact: true }).click()
   await expect(page.getByTitle('简历 PDF 预览')).toBeVisible({ timeout: 45_000 })
@@ -527,8 +642,147 @@ test('intentional omission: a deleted source bullet blocks delivery until confir
       response.url().endsWith('/source-omissions/unconfirm'),
   )
   await unconfirmAction.click()
-  expect((await unconfirmResponse).ok()).toBe(true)
+  const unconfirmed = await unconfirmResponse
+  expect(unconfirmed.ok()).toBe(true)
+  const unconfirmBody = unconfirmed.request().postDataJSON() as {
+    expectedRevision: number
+    sourceOccurrenceIds: string[]
+  }
+  expect(unconfirmBody.sourceOccurrenceIds).toEqual(expectedOrdinaryOccurrenceIds)
   await expect(sourceCard.locator('.mapping-state')).toHaveText('未映射', { timeout: 15_000 })
+  await expect(page.getByText(/结构保真：\d+ 项阻断/)).toBeVisible({ timeout: 15_000 })
+
+  // A second clean page keeps the old revision while the first page wins a save.
+  // Its omission POST must lose CAS, report conflict, adopt the server revision, and never claim success.
+  const stalePage = await page.context().newPage()
+  await stalePage.goto(page.url())
+  const staleConfirmAction = stalePage.getByRole('button', { name: /^确认省略/ }).first()
+  await expect(staleConfirmAction).toBeEnabled({ timeout: 15_000 })
+
+  const winnerSave = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'PUT' &&
+      /\/api\/workspace\/\d+\/content$/.test(new URL(response.url()).pathname),
+  )
+  await remainingBullet.fill(`${await remainingBullet.inputValue()} CAS winner`)
+  expect((await winnerSave).ok()).toBe(true)
+  await expect(page.getByText('✓ 已保存', { exact: true })).toBeVisible({ timeout: 15_000 })
+
+  const staleConfirmResponse = stalePage.waitForResponse(
+    (response) =>
+      response.request().method() === 'POST' &&
+      response.url().endsWith('/source-omissions/confirm'),
+  )
+  await staleConfirmAction.click()
+  const staleResponse = await staleConfirmResponse
+  expect(staleResponse.ok()).toBe(true)
+  const stalePayload = (await staleResponse.json()) as {
+    data: { saved: boolean; conflict: boolean; revision: number }
+  }
+  expect(stalePayload.data.saved).toBe(false)
+  expect(stalePayload.data.conflict).toBe(true)
+  await expect(stalePage.getByText(/当前简历已有更新，本次操作未生效/)).toBeVisible()
+  await expect(stalePage.getByText('已确认省略，可继续预览或导出')).toHaveCount(0)
+  await expect(stalePage.getByText('✓ 已保存', { exact: true })).toBeVisible({ timeout: 15_000 })
+  await stalePage.close()
+})
+
+test('intentional omission: a whole Project entry uses the authoritative server boundary', async ({
+  page,
+}) => {
+  await registerAndLogin(page)
+  await uploadAndStartAnalysis(page, chineseJavaJobDescription, standardFixture)
+  await waitForAnalysis(page)
+  await openWorkspaceWithoutEditing(page)
+
+  const sourceReferenceResponse = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'GET' &&
+      /\/api\/workspace\/\d+\/source-reference$/.test(new URL(response.url()).pathname),
+  )
+  await page.reload()
+  const sourcePayload = (await (await sourceReferenceResponse).json()) as {
+    data: {
+      sourceBlocks: Array<{
+        order: number
+        occurrenceIds: string[]
+        sourceSectionKind: string | null
+        sourceSectionId: string | null
+        sourceEntryId: string | null
+      }>
+    }
+  }
+
+  const projectSection = page.getByRole('group', { name: /项目经历，第 \d+ 项/ }).first()
+  await expect(projectSection).toBeVisible({ timeout: 15_000 })
+  const projectEntry = projectSection.locator('.editor-entry').first()
+  const sourceSectionId = await projectSection.getAttribute('data-section-id')
+  const sourceEntryId = await projectEntry.getAttribute('data-entry-id')
+  expect(sourceSectionId).toBeTruthy()
+  expect(sourceEntryId).toBeTruthy()
+
+  const projectBlocks = sourcePayload.data.sourceBlocks
+    .filter(
+      (block) =>
+        block.sourceSectionKind === 'PROJECT' &&
+        block.sourceSectionId === sourceSectionId &&
+        block.sourceEntryId === sourceEntryId,
+    )
+    .sort((left, right) => left.order - right.order)
+  const expectedProjectOccurrenceIds = [
+    ...new Set(projectBlocks.flatMap((block) => block.occurrenceIds)),
+  ]
+  expect(projectBlocks.length).toBeGreaterThan(1)
+  expect(expectedProjectOccurrenceIds.length).toBeGreaterThan(1)
+
+  const deletedSave = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'PUT' &&
+      /\/api\/workspace\/\d+\/content$/.test(new URL(response.url()).pathname),
+  )
+  await projectEntry.hover()
+  await projectEntry.locator('.entry-delete-action').click()
+  await page
+    .locator('.el-message-box__btns')
+    .getByRole('button', { name: '删除', exact: true })
+    .click()
+  expect((await deletedSave).ok()).toBe(true)
+  await expect(page.getByText('✓ 已保存', { exact: true })).toBeVisible({ timeout: 15_000 })
+
+  const projectConfirm = page.getByRole('button', { name: /^确认省略此项目对应的/ }).first()
+  await expect(projectConfirm).toBeEnabled({ timeout: 15_000 })
+  const confirmResponse = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'POST' &&
+      response.url().endsWith('/source-omissions/confirm'),
+  )
+  await projectConfirm.click()
+  const confirmed = await confirmResponse
+  expect(confirmed.ok()).toBe(true)
+  const confirmBody = confirmed.request().postDataJSON() as {
+    expectedRevision: number
+    sourceOccurrenceIds: string[]
+  }
+  expect(confirmBody.sourceOccurrenceIds).toEqual(expectedProjectOccurrenceIds)
+  await expect(page.getByText('结构保真检查通过', { exact: true })).toBeVisible({
+    timeout: 15_000,
+  })
+
+  const projectUnconfirm = page.getByRole('button', { name: /^取消省略此项目对应的/ }).first()
+  await expect(projectUnconfirm).toBeEnabled({ timeout: 15_000 })
+  const unconfirmResponse = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'POST' &&
+      response.url().endsWith('/source-omissions/unconfirm'),
+  )
+  await projectUnconfirm.click()
+  const unconfirmed = await unconfirmResponse
+  expect(unconfirmed.ok()).toBe(true)
+  const unconfirmBody = unconfirmed.request().postDataJSON() as {
+    expectedRevision: number
+    sourceOccurrenceIds: string[]
+  }
+  expect(unconfirmBody.sourceOccurrenceIds).toEqual(expectedProjectOccurrenceIds)
   await expect(page.getByText(/结构保真：\d+ 项阻断/)).toBeVisible({ timeout: 15_000 })
 })
 

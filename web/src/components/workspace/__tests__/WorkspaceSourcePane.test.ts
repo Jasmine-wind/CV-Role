@@ -173,15 +173,23 @@ describe('WorkspaceSourcePane', () => {
     }>()
     confirmMock.mockReturnValueOnce(pending.promise)
     const projectBoundary = {
-      sourceNodeType: 'ENTRY',
       sourceSectionKind: 'PROJECT',
       sourceSectionId: 'project-section',
       sourceEntryId: 'project-entry',
       omissionEligible: true,
     }
     const source = sourceWith([
-      block('occ-1', 'UNMAPPED', { ...projectBoundary, occurrenceIds: ['occ-1', 'occ-1b'] }),
-      block('occ-2', 'UNMAPPED', { ...projectBoundary, occurrenceIds: ['occ-2'] }),
+      block('occ-1', 'UNMAPPED', {
+        ...projectBoundary,
+        sourceNodeType: 'ENTRY',
+        occurrenceIds: ['occ-1', 'occ-1b'],
+      }),
+      block('occ-2', 'UNMAPPED', {
+        ...projectBoundary,
+        sourceNodeType: 'BULLET',
+        sourceBulletId: 'project-bullet',
+        occurrenceIds: ['occ-2'],
+      }),
     ])
     const omissionSaved = vi.fn()
     const omissionBusy = vi.fn()
@@ -227,6 +235,53 @@ describe('WorkspaceSourcePane', () => {
     const wrapper = mountPane(source)
 
     expect(wrapper.findAll('button.omission-action')).toHaveLength(0)
+  })
+
+  it('does not merge different project entries or non-project bullets into one action', async () => {
+    confirmMock.mockResolvedValue({ saved: true, conflict: false, revision: 5, document: null })
+    const source = sourceWith([
+      block('project-a', 'UNMAPPED', {
+        sourceNodeType: 'BULLET',
+        sourceSectionKind: 'PROJECT',
+        sourceSectionId: 'project-section',
+        sourceEntryId: 'project-a-entry',
+        sourceBulletId: 'a-bullet',
+        omissionEligible: true,
+      }),
+      block('project-b', 'UNMAPPED', {
+        sourceNodeType: 'ENTRY',
+        sourceSectionKind: 'PROJECT',
+        sourceSectionId: 'project-section',
+        sourceEntryId: 'project-b-entry',
+        omissionEligible: true,
+      }),
+      block('summary-a', 'UNMAPPED', {
+        sourceNodeType: 'BULLET',
+        sourceSectionKind: 'SUMMARY',
+        sourceSectionId: 'summary-section',
+        sourceEntryId: 'summary-entry',
+        sourceBulletId: 'summary-a-bullet',
+        omissionEligible: true,
+      }),
+      block('summary-b', 'UNMAPPED', {
+        sourceNodeType: 'BULLET',
+        sourceSectionKind: 'SUMMARY',
+        sourceSectionId: 'summary-section',
+        sourceEntryId: 'summary-entry',
+        sourceBulletId: 'summary-b-bullet',
+        omissionEligible: true,
+      }),
+    ])
+    const wrapper = mountPane(source)
+
+    expect(wrapper.findAll('button.omission-action')).toHaveLength(4)
+    await wrapper.get('[data-source-block-id="project-a"] button.omission-action').trigger('click')
+    await flushPromises()
+
+    expect(confirmMock).toHaveBeenCalledWith(1, {
+      expectedRevision: 4,
+      sourceOccurrenceIds: ['project-a'],
+    })
   })
 
   it('reconciles a partially confirmed project as one whole-entry confirmation', async () => {
@@ -322,6 +377,24 @@ describe('WorkspaceSourcePane', () => {
       revision: 5,
       document: null,
     })
+    const source = sourceWith([block('occ-1', 'UNMAPPED', { omissionEligible: true })])
+    const omissionConcurrent = vi.fn()
+    const omissionSaved = vi.fn()
+    const wrapper = mountPane(source, {
+      onOmissionConcurrent: omissionConcurrent,
+      onOmissionSaved: omissionSaved,
+    })
+
+    await wrapper.get('button.omission-action').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('当前简历已有更新，本次操作未生效')
+    expect(omissionConcurrent).toHaveBeenCalledTimes(1)
+    expect(omissionSaved).not.toHaveBeenCalled()
+  })
+
+  it('treats a thrown HTTP 409 as a concurrent CAS loss and never reports success', async () => {
+    confirmMock.mockRejectedValueOnce(Object.assign(new Error('revision conflict'), { code: 409 }))
     const source = sourceWith([block('occ-1', 'UNMAPPED', { omissionEligible: true })])
     const omissionConcurrent = vi.fn()
     const omissionSaved = vi.fn()

@@ -80,6 +80,19 @@ const makeDocument = (): ResumeDocument => ({
 })
 
 describe('ResumeEditor', () => {
+  it('makes the complete TARGET editor inert while an omission CAS is in flight', async () => {
+    const wrapper = mount(ResumeEditor, {
+      props: { document: makeDocument(), interactionLocked: true },
+    })
+
+    expect(wrapper.get('.resume-editor').attributes('inert')).toBeDefined()
+    expect(wrapper.get('.resume-editor').attributes('aria-busy')).toBe('true')
+
+    await wrapper.setProps({ interactionLocked: false })
+    expect(wrapper.get('.resume-editor').attributes('inert')).toBeUndefined()
+    expect(wrapper.get('.resume-editor').attributes('aria-busy')).toBe('false')
+  })
+
   it('keeps the document focused by removing permanent editor microcopy and counts', () => {
     const wrapper = mount(ResumeEditor, { props: { document: makeDocument() } })
 

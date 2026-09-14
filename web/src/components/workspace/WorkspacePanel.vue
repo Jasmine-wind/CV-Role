@@ -177,8 +177,9 @@ const omissionDisabledReason = computed(() => {
   return null
 })
 
-// 未保存 / saving / failed / conflict 时不允许发起 Suggest，避免候选绑定到未落库内容。
-const suggestLocked = computed(() => editor.status.value !== 'saved')
+// 未保存 / saving / failed / conflict 或 omission CAS 期间不允许发起 Suggest，
+// 避免候选绑定到未落库内容或与另一条写路径竞争同一 revision。
+const suggestLocked = computed(() => editor.status.value !== 'saved' || omissionBusy.value)
 
 const loadAnalysis = async () => {
   analysisLoading.value = true
@@ -193,6 +194,7 @@ const loadAnalysis = async () => {
 }
 
 const handleEditorChange = (document: Parameters<typeof editor.applyDocument>[0]) => {
+  if (omissionBusy.value) return
   editor.applyDocument(document)
 }
 
@@ -320,7 +322,7 @@ const setReviewStep = (step: 'match' | 'evidence' | 'edit' | 'preview') => {
 }
 
 const confirmRestore = async () => {
-  if (restoring.value || editor.revision.value === null) return
+  if (restoring.value || omissionBusy.value || editor.revision.value === null) return
   try {
     await ElMessageBox.confirm(
       '将用本次优化开始前的简历内容覆盖当前编辑版本，并保存为新的版本。是否继续？',
@@ -346,6 +348,7 @@ const confirmRestore = async () => {
 }
 
 const handleOverwrite = async () => {
+  if (omissionBusy.value) return
   try {
     await editor.overwriteWithLocalDraft()
     if (editor.status.value === 'saved') {
@@ -361,6 +364,7 @@ const handleOverwrite = async () => {
 }
 
 const handleAdoptServer = async () => {
+  if (omissionBusy.value) return
   try {
     await editor.adoptServerVersion()
     ElMessage.success('已加载线上最新版本，本地草稿已被替换')
@@ -370,6 +374,7 @@ const handleAdoptServer = async () => {
 }
 
 const handleRetry = () => {
+  if (omissionBusy.value) return
   void editor.retrySave()
 }
 
@@ -601,21 +606,21 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
             <div class="workspace-more-menu">
               <button
                 type="button"
-                :disabled="!editor.canUndo.value || editor.status.value === 'saving'"
+                :disabled="omissionBusy || !editor.canUndo.value || editor.status.value === 'saving'"
                 @click="editor.undo()"
               >
                 撤销
               </button>
               <button
                 type="button"
-                :disabled="!editor.canRedo.value || editor.status.value === 'saving'"
+                :disabled="omissionBusy || !editor.canRedo.value || editor.status.value === 'saving'"
                 @click="editor.redo()"
               >
                 重做
               </button>
               <button
                 type="button"
-                :disabled="editor.status.value === 'saving'"
+                :disabled="omissionBusy || editor.status.value === 'saving'"
                 @click="confirmRestore"
               >
                 {{ restoring ? '正在恢复…' : '恢复优化前版本' }}
@@ -657,7 +662,7 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
                 <button
                   type="button"
                   class="toolbar-button"
-                  :disabled="!editor.canUndo.value"
+                  :disabled="omissionBusy || !editor.canUndo.value"
                   @click="editor.undo()"
                 >
                   撤销
@@ -665,7 +670,7 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
                 <button
                   type="button"
                   class="toolbar-button"
-                  :disabled="!editor.canRedo.value"
+                  :disabled="omissionBusy || !editor.canRedo.value"
                   @click="editor.redo()"
                 >
                   重做
@@ -683,7 +688,7 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
                 <button
                   type="button"
                   class="toolbar-button toolbar-button-restore"
-                  :disabled="editor.status.value === 'saving'"
+                  :disabled="omissionBusy || editor.status.value === 'saving'"
                   @click="confirmRestore"
                 >
                   {{ restoring ? '正在恢复…' : '恢复版本' }}
@@ -696,6 +701,7 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
                 :suggest="bulletSuggest"
                 :suggest-enabled="suggestEnabled"
                 :suggest-locked="suggestLocked"
+                :interaction-locked="omissionBusy"
                 :selected-section-id="selectedWorkspaceSectionId"
                 :focused-bullet-id="selectedWorkspaceBulletId"
                 :focus-request-key="focusRequestKey"
@@ -710,6 +716,8 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
           <aside
             v-if="inspectorOpen"
             v-show="!isNarrowScreen || mobilePanel === 'context'"
+            :inert="omissionBusy ? true : undefined"
+            :aria-busy="omissionBusy"
             id="workspace-panel-context"
             class="workspace-context-drawer"
             role="tabpanel"

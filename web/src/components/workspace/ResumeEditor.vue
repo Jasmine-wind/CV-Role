@@ -21,6 +21,8 @@ const props = defineProps<{
   suggestEnabled?: boolean
   /** 草稿未保存 / 保存中 / 失败 / 冲突时禁止发起 Suggest。 */
   suggestLocked?: boolean
+  /** 服务端 omission CAS 进行中时冻结全部 TARGET 编辑交互。 */
+  interactionLocked?: boolean
   selectedSectionId?: string | null
   focusedBulletId?: string | null
   /** 同一目标再次点击时递增，确保仍能重新滚动到上下文。 */
@@ -882,7 +884,16 @@ const handleSuggestCommand = (bulletId: string, command: BulletSuggestIntent | '
 </script>
 
 <template>
-  <div ref="editorRoot" class="resume-editor" :class="{ 'is-entry-drop-unavailable': entryDropUnavailable }">
+  <div
+    ref="editorRoot"
+    class="resume-editor"
+    :class="{
+      'is-entry-drop-unavailable': entryDropUnavailable,
+      'is-interaction-locked': interactionLocked,
+    }"
+    :inert="interactionLocked ? true : undefined"
+    :aria-busy="interactionLocked"
+  >
     <div class="resume-paper">
       <section class="editor-block editor-basics">
         <header class="editor-block-header editor-basics-header">
@@ -1591,6 +1602,11 @@ const handleSuggestCommand = (bulletId: string, command: BulletSuggestIntent | '
   display: grid;
   gap: 26px;
   min-width: 0;
+}
+
+.resume-editor.is-interaction-locked {
+  cursor: wait;
+  opacity: 0.72;
 }
 
 .editor-block {
