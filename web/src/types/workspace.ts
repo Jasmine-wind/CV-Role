@@ -25,6 +25,17 @@ export interface WorkspaceSourceGeometry {
   bulletHint?: boolean | null
 }
 
+/**
+ * 服务端解析出的可恢复单元类型；NONE 表示当前来源没有服务端授权的恢复边界。
+ * 客户端只根据这个 verdict 展示操作，不自行推导 provenance。
+ */
+export type WorkspaceSourceRestoreScope =
+  | 'NONE'
+  | 'BULLET'
+  | 'ENTRY'
+  | 'PROJECT_ENTRY'
+  | 'CONTACT'
+
 export interface WorkspaceSourceBlock {
   id: string
   order: number
@@ -44,6 +55,12 @@ export interface WorkspaceSourceBlock {
   omissionConfirmed: boolean
   /** 仅服务端可以判定该 occurrence 是否允许确认为有意省略。 */
   omissionEligible: boolean
+  /** 服务端解析出的恢复单元；NONE 表示不提供恢复操作。 */
+  restoreScope: WorkspaceSourceRestoreScope
+  /** 仅当整个边界通过服务端安全 verdict 时才为 true；按钮只是 UI，API 会重新验证。 */
+  restoreEligible: boolean
+  /** 服务端说明当前边界不可恢复的原因；eligible 或 NONE 时为 null。 */
+  restoreBlockedReason: string | null
 }
 
 export interface WorkspaceTargetMapping {
@@ -88,6 +105,12 @@ export interface WorkspaceSourceReference {
 }
 
 export interface WorkspaceSourceOmissionRequest {
+  expectedRevision: number
+  sourceOccurrenceIds: string[]
+}
+
+/** Restore 请求只命名 frozen SOURCE occurrence；恢复节点与边界由服务端重新解析。 */
+export interface WorkspaceSourceRestoreRequest {
   expectedRevision: number
   sourceOccurrenceIds: string[]
 }

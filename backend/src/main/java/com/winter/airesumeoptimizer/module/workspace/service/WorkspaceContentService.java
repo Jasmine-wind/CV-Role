@@ -2,6 +2,7 @@ package com.winter.airesumeoptimizer.module.workspace.service;
 
 import com.winter.airesumeoptimizer.module.workspace.dto.WorkspaceContentSaveRequestDTO;
 import com.winter.airesumeoptimizer.module.workspace.dto.WorkspaceSourceOmissionRequestDTO;
+import com.winter.airesumeoptimizer.module.workspace.dto.WorkspaceSourceRestoreRequestDTO;
 import com.winter.airesumeoptimizer.module.workspace.vo.WorkspaceContentSaveResultVO;
 import com.winter.airesumeoptimizer.module.workspace.vo.WorkspaceContentVO;
 import com.winter.airesumeoptimizer.module.workspace.vo.WorkspaceSourcePdfVO;
@@ -53,6 +54,15 @@ public interface WorkspaceContentService {
     /** Removes task-local omission confirmations without trusting client document state. */
     WorkspaceContentSaveResultVO unconfirmSourceOmissions(
             Long userId, Long optimizationTaskId, WorkspaceSourceOmissionRequestDTO request);
+
+    /**
+     * 服务端权威的局部原文恢复：按冻结 SOURCE 与认证归属重新解析恢复边界，
+     * 只从 frozen snapshot deep copy 重建节点及其 provenance，并自动撤销该边界上的
+     * confirmed omission；写库前重新运行 authoritative fidelity 并拒绝产生更严重
+     * provenance 问题的恢复。与 omission 使用完全相同的 expectedRevision CAS 语义。
+     */
+    WorkspaceContentSaveResultVO restoreSourceContent(
+            Long userId, Long optimizationTaskId, WorkspaceSourceRestoreRequestDTO request);
 
     /**
      * 恢复本次优化前版本：基于任务冻结的 resume_input_snapshot 重新生成编辑文档，

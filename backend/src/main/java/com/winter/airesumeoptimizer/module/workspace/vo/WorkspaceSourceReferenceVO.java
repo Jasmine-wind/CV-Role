@@ -1,6 +1,7 @@
 package com.winter.airesumeoptimizer.module.workspace.vo;
 
 import com.winter.airesumeoptimizer.module.workspace.enums.WorkspaceSourceMappingStatus;
+import com.winter.airesumeoptimizer.module.workspace.enums.WorkspaceSourceRestoreScope;
 import java.util.List;
 import java.util.Map;
 
@@ -59,7 +60,13 @@ public record WorkspaceSourceReferenceVO(
             String sourceEntryId,
             String sourceBulletId,
             boolean omissionConfirmed,
-            boolean omissionEligible) {
+            boolean omissionEligible,
+            /** Server-resolved restore unit kind; NONE when no authorized restore exists. */
+            WorkspaceSourceRestoreScope restoreScope,
+            /** True only while the whole boundary passes the server restore safety verdict. */
+            boolean restoreEligible,
+            /** Server verdict explaining why the resolved boundary is not restorable; null when eligible or NONE. */
+            String restoreBlockedReason) {
         public SourceBlock {
             occurrenceIds = occurrenceIds == null ? List.of() : List.copyOf(occurrenceIds);
             targetNodeIds = targetNodeIds == null ? List.of() : List.copyOf(targetNodeIds);

@@ -16,8 +16,16 @@ import com.winter.airesumeoptimizer.module.resume.entity.Resume;
 import com.winter.airesumeoptimizer.module.resume.mapper.ResumeMapper;
 import com.winter.airesumeoptimizer.module.resume.service.ResumeCanonicalDocumentService;
 import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentDTO;
+import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentBasicsDTO;
+import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentBulletDTO;
+import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentContactDTO;
+import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentEntryDTO;
+import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentSectionDTO;
 import com.winter.airesumeoptimizer.module.workspace.dto.WorkspaceContentSaveRequestDTO;
 import com.winter.airesumeoptimizer.module.workspace.dto.WorkspaceSourceOmissionRequestDTO;
+import com.winter.airesumeoptimizer.module.workspace.dto.WorkspaceSourceRestoreRequestDTO;
+import com.winter.airesumeoptimizer.module.workspace.enums.WorkspaceSourceMappingStatus;
+import com.winter.airesumeoptimizer.module.workspace.enums.WorkspaceSourceRestoreScope;
 import com.winter.airesumeoptimizer.module.workspace.service.ResumeDocumentConverter;
 import com.winter.airesumeoptimizer.module.workspace.service.WorkspaceContentService;
 import com.winter.airesumeoptimizer.module.workspace.service.WorkspaceSourceReferenceAssembler;
@@ -30,7 +38,9 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
+import java.util.function.Function;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -182,6 +192,55 @@ public class WorkspaceContentServiceImpl implements WorkspaceContentService {
     public WorkspaceContentSaveResultVO unconfirmSourceOmissions(
             Long userId, Long optimizationTaskId, WorkspaceSourceOmissionRequestDTO request) {
         return mutateSourceOmissions(userId, optimizationTaskId, request, false);
+    }
+
+    @Override
+    @Transactional
+    public WorkspaceContentSaveResultVO restoreSourceContent(
+            Long userId, Long optimizationTaskId, WorkspaceSourceRestoreRequestDTO request) {
+        if (request == null || request.expectedRevision() == null) {
+            throw new BusinessException(400, "缺少内容版本号");
+        }
+        validateExpectedRevision(request.expectedRevision());
+        List<String> requested = validateRequestedOccurrenceIds(request.sourceOccurrenceIds());
+        EditableTaskContext context = resolveEditableTarget(userId, optimizationTaskId);
+        long currentRevision = revisionOf(context.target());
+        if (currentRevision != request.expectedRevision()) {
+            return conflictResult(currentRevision);
+        }
+        ResumeDocumentDTO frozen = documentFromFrozenSnapshot(resolveFrozenSnapshot(context));
+        // A restore only ever deep-copies frozen nodes; the candidate starts from the persisted
+        // TARGET and never from request-supplied content.
+        ResumeDocumentDTO current = currentRevision == PRISTINE_REVISION
+                ? copyNode(frozen, ResumeDocumentDTO.class) : readPersistedDocument(context.target());
+
+        WorkspaceSourceReferenceVO before = assembleFidelity(context, currentRevision, frozen, current);
+        if (hasFidelityIssue(before, "SOURCE_MANIFEST_INVALID")
+                || hasFidelityIssue(before, "SOURCE_MANIFEST_UNAVAILABLE")) {
+            throw new BusinessException(400, "原文校验数据异常，无法在本任务内自动恢复");
+        }
+        RestoreBoundary boundary = resolveRestoreBoundary(requested, before.sourceBlocks());
+        applyRestore(current, frozen, boundary);
+
+        // Restore and confirmed omission are mutually exclusive for the same boundary: a restored
+        // occurrence can no longer stay "intentionally omitted".
+        LinkedHashSet<String> remaining = canonicalConfirmedOmissionIds(
+                before.sourceBlocks(), canonicalCandidateOccurrenceIds(current.getConfirmedSourceOmissionIds()));
+        remaining.removeAll(boundary.occurrenceClosure());
+        Set<String> candidateIds = canonicalCandidateOccurrenceIds(List.copyOf(remaining));
+        current.setConfirmedSourceOmissionIds(orderedFrozenIds(frozen, candidateIds));
+
+        WorkspaceSourceReferenceVO after = assembleFidelity(context, currentRevision, frozen, current);
+        LinkedHashSet<String> finalIds = canonicalConfirmedOmissionIds(
+                after.sourceBlocks(), canonicalCandidateOccurrenceIds(current.getConfirmedSourceOmissionIds()));
+        if (!finalIds.equals(canonicalCandidateOccurrenceIds(current.getConfirmedSourceOmissionIds()))) {
+            current.setConfirmedSourceOmissionIds(orderedFrozenIds(frozen, finalIds));
+            after = assembleFidelity(context, currentRevision, frozen, current);
+        }
+        // 与保存路径一致：写库前再做一次结构归一化校验；重复 ID、超限或形状问题全部 fail closed。
+        resumeDocumentConverter.normalize(current);
+        validateRestoreOutcome(before, after, boundary);
+        return writeTargetContent(context, current, request.expectedRevision());
     }
 
     @Override
@@ -550,6 +609,236 @@ public class WorkspaceContentServiceImpl implements WorkspaceContentService {
         return conflictResult(revisionOf(current));
     }
 
+    private WorkspaceSourceReferenceVO assembleFidelity(
+            EditableTaskContext context, long revision, ResumeDocumentDTO frozen, ResumeDocumentDTO current) {
+        return sourceReferenceAssembler.assemble(
+                context.task().getId(), context.source().getId(), context.target().getId(), revision,
+                context.resume().getOriginalFilename(), isPdf(context.resume()), frozen, current);
+    }
+
+    /**
+     * The request only names frozen occurrences. The restore unit, its boundary and its closure
+     * are re-resolved server-side from the authoritative SourceBlock verdicts of this revision.
+     */
+    private RestoreBoundary resolveRestoreBoundary(
+            List<String> requested, List<SourceBlock> sourceBlocks) {
+        List<SourceBlock> requestedBlocks = new ArrayList<>();
+        for (String requestedId : requested) {
+            SourceBlock block = resolveRequestedBlock(requestedId, sourceBlocks);
+            if (block.restoreScope() == WorkspaceSourceRestoreScope.NONE || !block.restoreEligible()) {
+                throw new BusinessException(400, restoreRejectionMessage(block));
+            }
+            if (!requestedBlocks.contains(block)) {
+                requestedBlocks.add(block);
+            }
+        }
+        RestoreBoundary boundary = RestoreBoundary.of(requestedBlocks.get(0));
+        for (SourceBlock block : requestedBlocks) {
+            if (!boundary.matches(block)) {
+                throw new BusinessException(400, "一次只能恢复一个来源边界，请分开处理");
+            }
+        }
+        LinkedHashSet<String> closure = new LinkedHashSet<>();
+        for (SourceBlock block : sourceBlocks) {
+            if (boundary.matches(block)) {
+                closure.addAll(block.occurrenceIds());
+            }
+        }
+        if (closure.isEmpty()) {
+            throw new BusinessException(400, "当前来源边界不存在");
+        }
+        return boundary.withClosure(closure);
+    }
+
+    private String restoreRejectionMessage(SourceBlock block) {
+        String reason = block.restoreBlockedReason();
+        if ("BOUNDARY_HAS_OTHER_MAPPINGS".equals(reason)) {
+            return "当前来源边界存在其它映射，无法安全恢复";
+        }
+        if ("PARENT_SECTION_MISSING".equals(reason)) {
+            return "原章节已不存在，无法安全局部恢复，请恢复优化前版本或重新创建本次优化";
+        }
+        if ("PARENT_LINEAGE_MISMATCH".equals(reason)) {
+            return "来源归属关系不一致，无法安全恢复";
+        }
+        if ("ENTRY_ALREADY_PRESENT".equals(reason) || "TARGET_VALUE_CONFLICT".equals(reason)) {
+            return "当前简历中已存在对应内容，无法安全恢复";
+        }
+        return "该来源内容当前无法安全自动恢复";
+    }
+
+    private void applyRestore(ResumeDocumentDTO target, ResumeDocumentDTO frozen, RestoreBoundary boundary) {
+        switch (boundary.scope()) {
+            case BULLET -> restoreBullet(target, frozen, boundary);
+            case ENTRY, PROJECT_ENTRY -> restoreEntry(target, frozen, boundary);
+            case CONTACT -> restoreContact(target, frozen, boundary);
+            default -> throw new BusinessException(400, "该来源内容当前无法安全自动恢复");
+        }
+    }
+
+    private void restoreBullet(ResumeDocumentDTO target, ResumeDocumentDTO frozen, RestoreBoundary boundary) {
+        ResumeDocumentEntryDTO frozenEntry = entryById(sectionById(frozen, boundary.sectionId()), boundary.entryId());
+        ResumeDocumentBulletDTO frozenBullet = null;
+        for (ResumeDocumentBulletDTO bullet : safeList(frozenEntry == null ? null : frozenEntry.getBullets())) {
+            if (bullet != null && Objects.equals(boundary.bulletId(), bullet.getId())) {
+                frozenBullet = bullet;
+                break;
+            }
+        }
+        ResumeDocumentEntryDTO targetEntry = entryById(sectionById(target, boundary.sectionId()), boundary.entryId());
+        if (frozenBullet == null || targetEntry == null) {
+            throw new BusinessException(400, "恢复目标已不存在，请刷新后重试");
+        }
+        // Deterministic SOURCE sibling order: before the nearest surviving frozen successor,
+        // otherwise after the nearest surviving frozen predecessor, otherwise append.
+        List<ResumeDocumentBulletDTO> frozenBullets = safeList(frozenEntry.getBullets());
+        List<ResumeDocumentBulletDTO> targetBullets = new ArrayList<>(safeList(targetEntry.getBullets()));
+        int frozenIndex = indexOfId(frozenBullets, boundary.bulletId(), ResumeDocumentBulletDTO::getId);
+        int insertion = insertionIndexByOrder(frozenBullets, targetBullets, frozenIndex, ResumeDocumentBulletDTO::getId);
+        targetBullets.add(insertion, copyNode(frozenBullet, ResumeDocumentBulletDTO.class));
+        targetEntry.setBullets(targetBullets);
+    }
+
+    private void restoreEntry(ResumeDocumentDTO target, ResumeDocumentDTO frozen, RestoreBoundary boundary) {
+        ResumeDocumentSectionDTO frozenSection = sectionById(frozen, boundary.sectionId());
+        ResumeDocumentEntryDTO frozenEntry = entryById(frozenSection, boundary.entryId());
+        ResumeDocumentSectionDTO targetSection = sectionById(target, boundary.sectionId());
+        if (frozenSection == null || frozenEntry == null || targetSection == null) {
+            throw new BusinessException(400, "恢复目标已不存在，请刷新后重试");
+        }
+        List<ResumeDocumentEntryDTO> frozenEntries = safeList(frozenSection.getEntries());
+        List<ResumeDocumentEntryDTO> targetEntries = new ArrayList<>(safeList(targetSection.getEntries()));
+        int frozenIndex = indexOfId(frozenEntries, boundary.entryId(), ResumeDocumentEntryDTO::getId);
+        int insertion = insertionIndexByOrder(frozenEntries, targetEntries, frozenIndex, ResumeDocumentEntryDTO::getId);
+        targetEntries.add(insertion, copyNode(frozenEntry, ResumeDocumentEntryDTO.class));
+        targetSection.setEntries(targetEntries);
+    }
+
+    private void restoreContact(ResumeDocumentDTO target, ResumeDocumentDTO frozen, RestoreBoundary boundary) {
+        ResumeDocumentBasicsDTO frozenBasics = frozen.getBasics();
+        ResumeDocumentBasicsDTO targetBasics = target.getBasics();
+        if (frozenBasics == null || targetBasics == null) {
+            throw new BusinessException(400, "恢复目标已不存在，请刷新后重试");
+        }
+        ResumeDocumentContactDTO frozenContact = null;
+        for (ResumeDocumentContactDTO contact : safeList(frozenBasics.getContacts())) {
+            if (contact == null
+                    || contactOccurrenceIds(contact).stream().noneMatch(boundary.occurrenceClosure()::contains)) {
+                continue;
+            }
+            if (frozenContact != null) {
+                throw new BusinessException(400, "该联系方式对应的原文不唯一，无法安全恢复");
+            }
+            frozenContact = contact;
+        }
+        if (frozenContact == null || !hasText(frozenContact.getId())) {
+            throw new BusinessException(400, "恢复目标已不存在，请刷新后重试");
+        }
+        List<ResumeDocumentContactDTO> frozenContacts = safeList(frozenBasics.getContacts());
+        List<ResumeDocumentContactDTO> targetContacts = new ArrayList<>(safeList(targetBasics.getContacts()));
+        int frozenIndex = indexOfId(frozenContacts, frozenContact.getId(), ResumeDocumentContactDTO::getId);
+        int insertion = insertionIndexByOrder(frozenContacts, targetContacts, frozenIndex, ResumeDocumentContactDTO::getId);
+        targetContacts.add(insertion, copyNode(frozenContact, ResumeDocumentContactDTO.class));
+        targetBasics.setContacts(targetContacts);
+    }
+
+    private List<String> contactOccurrenceIds(ResumeDocumentContactDTO contact) {
+        if (contact.getSourceOccurrenceIds() != null && !contact.getSourceOccurrenceIds().isEmpty()) {
+            return contact.getSourceOccurrenceIds();
+        }
+        return contact.getSourceRef() == null || contact.getSourceRef().getSourceOccurrenceIds() == null
+                ? List.of() : contact.getSourceRef().getSourceOccurrenceIds();
+    }
+
+    private ResumeDocumentSectionDTO sectionById(ResumeDocumentDTO document, String sectionId) {
+        if (sectionId == null) return null;
+        for (ResumeDocumentSectionDTO section : safeList(document.getSections())) {
+            if (section != null && sectionId.equals(section.getId())) return section;
+        }
+        return null;
+    }
+
+    private ResumeDocumentEntryDTO entryById(ResumeDocumentSectionDTO section, String entryId) {
+        if (section == null || entryId == null) return null;
+        for (ResumeDocumentEntryDTO entry : safeList(section.getEntries())) {
+            if (entry != null && entryId.equals(entry.getId())) return entry;
+        }
+        return null;
+    }
+
+    private <T> int indexOfId(List<T> nodes, String id, Function<T, String> idOf) {
+        if (id == null) return -1;
+        for (int index = 0; index < nodes.size(); index++) {
+            if (id.equals(idOf.apply(nodes.get(index)))) return index;
+        }
+        return -1;
+    }
+
+    private <T> int insertionIndexByOrder(
+            List<T> frozenOrder, List<T> targetOrder, int frozenIndex, Function<T, String> idOf) {
+        for (int index = frozenIndex + 1; index < frozenOrder.size(); index++) {
+            int position = indexOfId(targetOrder, idOf.apply(frozenOrder.get(index)), idOf);
+            if (position >= 0) return position;
+        }
+        for (int index = frozenIndex - 1; index >= 0; index--) {
+            int position = indexOfId(targetOrder, idOf.apply(frozenOrder.get(index)), idOf);
+            if (position >= 0) return position + 1;
+        }
+        return targetOrder.size();
+    }
+
+    private <T> List<T> safeList(List<T> values) {
+        return values == null ? List.of() : values;
+    }
+
+    private boolean hasText(String value) {
+        return value != null && !value.isBlank();
+    }
+
+    /**
+     * The restore must really clear the blocker it was invoked for. A restore that still leaves
+     * the boundary unmapped, introduces ambiguity/duplicate mappings, or corrupts the omission
+     * state is rejected before any write instead of producing a worse provenance state.
+     */
+    private void validateRestoreOutcome(
+            WorkspaceSourceReferenceVO before, WorkspaceSourceReferenceVO after, RestoreBoundary boundary) {
+        if (hasFidelityIssue(after, "SOURCE_MANIFEST_INVALID")
+                || hasFidelityIssue(after, "SOURCE_MANIFEST_UNAVAILABLE")
+                || hasFidelityIssue(after, "CONFIRMED_OMISSION_INVALID")) {
+            throw new BusinessException(400, "恢复后原文校验状态异常，本次恢复未生效");
+        }
+        if (countFidelityIssues(after, "AMBIGUOUS_MAPPING") > countFidelityIssues(before, "AMBIGUOUS_MAPPING")
+                || countFidelityIssues(after, "DUPLICATE_MAPPING") > countFidelityIssues(before, "DUPLICATE_MAPPING")) {
+            throw new BusinessException(400, "恢复会产生歧义或重复映射，本次恢复未生效");
+        }
+        for (var issue : after.fidelityIssues()) {
+            boolean guarded = "AMBIGUOUS_MAPPING".equals(issue.code())
+                    || "DUPLICATE_MAPPING".equals(issue.code())
+                    || "SOURCE_CONTENT_UNMAPPED".equals(issue.code());
+            if (guarded && issue.sourceOccurrenceIds().stream().anyMatch(boundary.occurrenceClosure()::contains)) {
+                throw new BusinessException(400, "恢复未真正解除该原文的结构问题，本次恢复未生效");
+            }
+        }
+        boolean restored = after.sourceBlocks().stream()
+                .filter(block -> block.occurrenceIds().stream().anyMatch(boundary.occurrenceClosure()::contains))
+                .noneMatch(block -> block.status() == WorkspaceSourceMappingStatus.UNMAPPED);
+        if (!restored) {
+            throw new BusinessException(400, "恢复未生效，请刷新后重试");
+        }
+    }
+
+    private long countFidelityIssues(WorkspaceSourceReferenceVO fidelity, String code) {
+        return fidelity.fidelityIssues().stream().filter(issue -> code.equals(issue.code())).count();
+    }
+
+    private <T> T copyNode(T node, Class<T> type) {
+        try {
+            return objectMapper.treeToValue(objectMapper.valueToTree(node), type);
+        } catch (JsonProcessingException | IllegalArgumentException exception) {
+            throw new BusinessException(500, "恢复原文失败，请稍后重试");
+        }
+    }
+
     private ResumeDocumentDTO readPersistedDocument(ResumeVersion target) {
         String content = target.getStructuredContent();
         if (content == null || content.isBlank()) {
@@ -624,5 +913,37 @@ public class WorkspaceContentServiceImpl implements WorkspaceContentService {
 
     private record EditableTaskContext(
             OptimizationTask task, ResumeVersion source, ResumeVersion target, Resume resume) {
+    }
+
+    /** Server-resolved restore unit identity; the client names occurrences, never boundaries. */
+    private record RestoreBoundary(
+            WorkspaceSourceRestoreScope scope,
+            String sectionId,
+            String entryId,
+            String bulletId,
+            String contactBlockId,
+            LinkedHashSet<String> occurrenceClosure) {
+
+        static RestoreBoundary of(SourceBlock block) {
+            return new RestoreBoundary(block.restoreScope(), block.sourceSectionId(), block.sourceEntryId(),
+                    block.sourceBulletId(), block.id(), new LinkedHashSet<>());
+        }
+
+        boolean matches(SourceBlock block) {
+            if (block.restoreScope() != scope) return false;
+            return switch (scope) {
+                case BULLET -> Objects.equals(sectionId, block.sourceSectionId())
+                        && Objects.equals(entryId, block.sourceEntryId())
+                        && Objects.equals(bulletId, block.sourceBulletId());
+                case ENTRY, PROJECT_ENTRY -> Objects.equals(sectionId, block.sourceSectionId())
+                        && Objects.equals(entryId, block.sourceEntryId());
+                case CONTACT -> Objects.equals(contactBlockId, block.id());
+                default -> false;
+            };
+        }
+
+        RestoreBoundary withClosure(LinkedHashSet<String> closure) {
+            return new RestoreBoundary(scope, sectionId, entryId, bulletId, contactBlockId, closure);
+        }
     }
 }

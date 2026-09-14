@@ -3,6 +3,7 @@ package com.winter.airesumeoptimizer.module.workspace.controller;
 import com.winter.airesumeoptimizer.common.result.Result;
 import com.winter.airesumeoptimizer.module.workspace.dto.WorkspaceContentSaveRequestDTO;
 import com.winter.airesumeoptimizer.module.workspace.dto.WorkspaceSourceOmissionRequestDTO;
+import com.winter.airesumeoptimizer.module.workspace.dto.WorkspaceSourceRestoreRequestDTO;
 import com.winter.airesumeoptimizer.module.workspace.service.WorkspaceContentService;
 import com.winter.airesumeoptimizer.module.workspace.vo.WorkspaceContentSaveResultVO;
 import com.winter.airesumeoptimizer.module.workspace.vo.WorkspaceContentVO;
@@ -112,6 +113,17 @@ public class WorkspaceContentController {
             Authentication authentication) {
         AuthenticatedUser user = (AuthenticatedUser) authentication.getPrincipal();
         return Result.success(workspaceContentService.unconfirmSourceOmissions(
+                user.getUserId(), optimizationTaskId, request));
+    }
+
+    @PostMapping("/{optimizationTaskId}/source-repairs/restore")
+    @Operation(summary = "恢复冻结原文节点", description = "按服务端重新解析的来源边界从 frozen snapshot 重建节点与 provenance，并自动撤销该边界上的 confirmed omission；与其它写操作共享 expectedRevision CAS")
+    public Result<WorkspaceContentSaveResultVO> restoreSourceContent(
+            @PathVariable @Positive(message = "优化任务 ID 必须大于 0") Long optimizationTaskId,
+            @Valid @RequestBody WorkspaceSourceRestoreRequestDTO request,
+            Authentication authentication) {
+        AuthenticatedUser user = (AuthenticatedUser) authentication.getPrincipal();
+        return Result.success(workspaceContentService.restoreSourceContent(
                 user.getUserId(), optimizationTaskId, request));
     }
 

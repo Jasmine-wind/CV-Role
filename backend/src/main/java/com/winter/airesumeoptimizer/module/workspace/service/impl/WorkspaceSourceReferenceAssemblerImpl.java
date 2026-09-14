@@ -9,6 +9,7 @@ import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentEntryDTO;
 import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentSectionDTO;
 import com.winter.airesumeoptimizer.module.workspace.enums.ResumeDocumentSectionKind;
 import com.winter.airesumeoptimizer.module.workspace.enums.WorkspaceSourceMappingStatus;
+import com.winter.airesumeoptimizer.module.workspace.enums.WorkspaceSourceRestoreScope;
 import com.winter.airesumeoptimizer.module.workspace.service.WorkspaceSourceReferenceAssembler;
 import com.winter.airesumeoptimizer.module.workspace.vo.WorkspaceSourceReferenceVO;
 import com.winter.airesumeoptimizer.module.workspace.vo.WorkspaceSourceReferenceVO.FidelityIssue;
@@ -28,6 +29,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import org.springframework.stereotype.Component;
 
@@ -126,8 +128,9 @@ public class WorkspaceSourceReferenceAssemblerImpl implements WorkspaceSourceRef
                     resolution.primaryIds(), status, reliable, textChanged, false, false));
         }
 
-        List<SourceBlock> blocks = new ArrayList<>();
-        int order = 0;
+        Map<String, Node> targetIdentityIndex = authenticationIndex(nodes);
+        TargetIndex targetIndex = targetIndex(target);
+        List<PrimaryState> primaryStates = new ArrayList<>();
         for (Map.Entry<String, List<String>> entry : manifest.aliasesByPrimary().entrySet()) {
             String primary = entry.getKey();
             List<Node> inverse = sourceTargets.getOrDefault(primary, List.of());
@@ -142,11 +145,12 @@ public class WorkspaceSourceReferenceAssemblerImpl implements WorkspaceSourceRef
                         ? WorkspaceSourceMappingStatus.MERGED : WorkspaceSourceMappingStatus.EXACT;
             }
             FrozenOwner owner = sourceOwners.get(primary);
+            boolean ambiguousClaim = hasAmbiguousTargetFor(
+                    primary, nodes, manifest, authenticatedNodes, duplicateTargetIdentities);
             boolean omissionEligible = status == WorkspaceSourceMappingStatus.UNMAPPED
                     && manifest.valid() && sourceOwnership.valid()
                     && owner != null && owner.eligible()
-                    && !hasAmbiguousTargetFor(
-                            primary, nodes, manifest, authenticatedNodes, duplicateTargetIdentities);
+                    && !ambiguousClaim;
             boolean omissionConfirmed = omissionEligible && confirmations.valid()
                     && confirmations.ids().containsAll(entry.getValue());
             if (inverse.isEmpty()) {
@@ -164,12 +168,25 @@ public class WorkspaceSourceReferenceAssemblerImpl implements WorkspaceSourceRef
                         duplicate ? "同一原文被重复写入多个目标位置，导出已阻止。" : "一段原文被拆分到多个目标位置，请核对边界。",
                         entry.getValue(), inverse.stream().map(Node::id).toList()));
             }
-            blocks.add(new SourceBlock(primary, order++, manifest.texts().get(primary), entry.getValue(),
-                    sourceGeometryFor(primary, entry.getValue(), manifest.refs()),
-                    inverse.stream().map(Node::id).toList(), status, inverse.size() == 1,
+            primaryStates.add(new PrimaryState(primary, entry.getValue(), manifest.texts().get(primary),
+                    sourceGeometryFor(primary, entry.getValue(), manifest.refs()), inverse, status, owner,
+                    omissionEligible, omissionConfirmed, ambiguousClaim));
+        }
+
+        RestoreContext restoreContext = new RestoreContext(
+                manifest, source, targetIndex, targetIdentityIndex, authenticatedNodes);
+        List<SourceBlock> blocks = new ArrayList<>();
+        int order = 0;
+        for (PrimaryState state : primaryStates) {
+            RestoreVerdict verdict = restoreVerdict(state, primaryStates, sourceOwnership, restoreContext);
+            FrozenOwner owner = state.owner();
+            blocks.add(new SourceBlock(state.primary(), order++, state.text(), state.occurrenceIds(),
+                    state.geometry(), state.inverse().stream().map(Node::id).toList(), state.status(),
+                    state.inverse().size() == 1,
                     owner == null ? null : owner.nodeType(), owner == null ? null : owner.sectionKind(),
                     owner == null ? null : owner.sectionId(), owner == null ? null : owner.entryId(),
-                    owner == null ? null : owner.bulletId(), omissionConfirmed, omissionEligible));
+                    owner == null ? null : owner.bulletId(), state.omissionConfirmed(), state.omissionEligible(),
+                    verdict.scope(), verdict.eligible(), verdict.reason()));
         }
 
         addStructuralIssues(
@@ -562,6 +579,247 @@ public class WorkspaceSourceReferenceAssemblerImpl implements WorkspaceSourceRef
         return Collections.unmodifiableSet(duplicates);
     }
 
+    /**
+     * Server-computed restore verdict for one SOURCE block. The unit kind and its safety are both
+     * derived from the frozen ownership graph plus the authenticated current TARGET structure;
+     * client input never participates in this decision and a hidden client verdict is worthless.
+     */
+    private static RestoreVerdict restoreVerdict(
+            PrimaryState state,
+            List<PrimaryState> allStates,
+            FrozenOwnership ownership,
+            RestoreContext context) {
+        FrozenOwner owner = state.owner();
+        if (!ownership.valid() || owner == null || !owner.eligible()) {
+            return RestoreVerdict.none();
+        }
+        if (state.status() != WorkspaceSourceMappingStatus.UNMAPPED) {
+            return RestoreVerdict.none();
+        }
+        boolean project = "PROJECT".equals(upper(owner.sectionKind()));
+        return switch (owner.nodeType()) {
+            case "CONTACT" -> contactVerdict(state, allStates, context);
+            case "BULLET" -> project && !context.targetIndex().sectionByEntryId().containsKey(owner.entryId())
+                    ? projectVerdict(state, allStates, context)
+                    : bulletVerdict(state, allStates, context);
+            case "ENTRY" -> project
+                    ? projectVerdict(state, allStates, context)
+                    : entryVerdict(state, allStates, context);
+            default -> RestoreVerdict.none();
+        };
+    }
+
+    private static RestoreVerdict bulletVerdict(
+            PrimaryState state, List<PrimaryState> allStates, RestoreContext context) {
+        FrozenOwner owner = state.owner();
+        if (!hasText(owner.sectionId()) || !hasText(owner.entryId()) || !hasText(owner.bulletId())) {
+            return RestoreVerdict.none();
+        }
+        boolean boundaryIntact = boundaryClean(allStates, candidate -> {
+            FrozenOwner candidateOwner = candidate.owner();
+            return candidateOwner != null && "BULLET".equals(candidateOwner.nodeType())
+                    && Objects.equals(owner.sectionId(), candidateOwner.sectionId())
+                    && Objects.equals(owner.entryId(), candidateOwner.entryId())
+                    && Objects.equals(owner.bulletId(), candidateOwner.bulletId());
+        });
+        if (!boundaryIntact) {
+            return RestoreVerdict.blocked(WorkspaceSourceRestoreScope.BULLET, "BOUNDARY_HAS_OTHER_MAPPINGS");
+        }
+        ResumeDocumentSectionDTO section = context.targetIndex().sectionsById().get(owner.sectionId());
+        ResumeDocumentSectionDTO entrySection = context.targetIndex().sectionByEntryId().get(owner.entryId());
+        if (section == null || entrySection == null || !Objects.equals(section.getId(), entrySection.getId())) {
+            return RestoreVerdict.blocked(WorkspaceSourceRestoreScope.BULLET, "PARENT_SECTION_MISSING");
+        }
+        if (!Objects.equals(upper(section.getKind()), upper(owner.sectionKind()))
+                || !parentLineageClean(owner.sectionId(), owner.entryId(), context)) {
+            return RestoreVerdict.blocked(WorkspaceSourceRestoreScope.BULLET, "PARENT_LINEAGE_MISMATCH");
+        }
+        if (context.targetIndex().bulletIds().contains(owner.bulletId())) {
+            return RestoreVerdict.blocked(WorkspaceSourceRestoreScope.BULLET, "TARGET_VALUE_CONFLICT");
+        }
+        return RestoreVerdict.eligible(WorkspaceSourceRestoreScope.BULLET);
+    }
+
+    private static RestoreVerdict entryVerdict(
+            PrimaryState state, List<PrimaryState> allStates, RestoreContext context) {
+        FrozenOwner owner = state.owner();
+        if (!hasText(owner.sectionId()) || !hasText(owner.entryId())) {
+            return RestoreVerdict.none();
+        }
+        boolean boundaryIntact = boundaryClean(allStates, candidate -> belongsToBoundary(candidate, owner.sectionId(), owner.entryId()));
+        if (!boundaryIntact) {
+            return RestoreVerdict.blocked(WorkspaceSourceRestoreScope.ENTRY, "BOUNDARY_HAS_OTHER_MAPPINGS");
+        }
+        if (context.targetIndex().sectionByEntryId().containsKey(owner.entryId())) {
+            return RestoreVerdict.blocked(WorkspaceSourceRestoreScope.ENTRY, "ENTRY_ALREADY_PRESENT");
+        }
+        ResumeDocumentSectionDTO section = context.targetIndex().sectionsById().get(owner.sectionId());
+        if (section == null) {
+            return RestoreVerdict.blocked(WorkspaceSourceRestoreScope.ENTRY, "PARENT_SECTION_MISSING");
+        }
+        if (!Objects.equals(upper(section.getKind()), upper(owner.sectionKind()))
+                || !parentLineageClean(owner.sectionId(), null, context)) {
+            return RestoreVerdict.blocked(WorkspaceSourceRestoreScope.ENTRY, "PARENT_LINEAGE_MISMATCH");
+        }
+        if (boundaryBulletIdCollides(allStates, owner.sectionId(), owner.entryId(), context)) {
+            return RestoreVerdict.blocked(WorkspaceSourceRestoreScope.ENTRY, "TARGET_VALUE_CONFLICT");
+        }
+        return RestoreVerdict.eligible(WorkspaceSourceRestoreScope.ENTRY);
+    }
+
+    private static RestoreVerdict projectVerdict(
+            PrimaryState state, List<PrimaryState> allStates, RestoreContext context) {
+        FrozenOwner owner = state.owner();
+        if (!hasText(owner.sectionId()) || !hasText(owner.entryId())) {
+            return RestoreVerdict.none();
+        }
+        boolean boundaryIntact = boundaryClean(allStates, candidate -> belongsToBoundary(candidate, owner.sectionId(), owner.entryId()));
+        if (!boundaryIntact) {
+            return RestoreVerdict.blocked(WorkspaceSourceRestoreScope.PROJECT_ENTRY, "BOUNDARY_HAS_OTHER_MAPPINGS");
+        }
+        if (context.targetIndex().sectionByEntryId().containsKey(owner.entryId())) {
+            return RestoreVerdict.blocked(WorkspaceSourceRestoreScope.PROJECT_ENTRY, "ENTRY_ALREADY_PRESENT");
+        }
+        ResumeDocumentSectionDTO section = context.targetIndex().sectionsById().get(owner.sectionId());
+        if (section == null) {
+            return RestoreVerdict.blocked(WorkspaceSourceRestoreScope.PROJECT_ENTRY, "PARENT_SECTION_MISSING");
+        }
+        if (!"PROJECT".equals(upper(section.getKind()))
+                || !parentLineageClean(owner.sectionId(), null, context)) {
+            return RestoreVerdict.blocked(WorkspaceSourceRestoreScope.PROJECT_ENTRY, "PARENT_LINEAGE_MISMATCH");
+        }
+        if (boundaryBulletIdCollides(allStates, owner.sectionId(), owner.entryId(), context)) {
+            return RestoreVerdict.blocked(WorkspaceSourceRestoreScope.PROJECT_ENTRY, "TARGET_VALUE_CONFLICT");
+        }
+        return RestoreVerdict.eligible(WorkspaceSourceRestoreScope.PROJECT_ENTRY);
+    }
+
+    private static RestoreVerdict contactVerdict(
+            PrimaryState state, List<PrimaryState> allStates, RestoreContext context) {
+        boolean boundaryIntact = boundaryClean(allStates,
+                candidate -> Objects.equals(state.primary(), candidate.primary()));
+        if (!boundaryIntact) {
+            return RestoreVerdict.blocked(WorkspaceSourceRestoreScope.CONTACT, "BOUNDARY_HAS_OTHER_MAPPINGS");
+        }
+        ResumeDocumentContactDTO frozenContact = frozenContact(state.primary(), context);
+        if (frozenContact == null) {
+            return RestoreVerdict.none();
+        }
+        if (hasText(frozenContact.getId()) && context.targetIndex().contactIds().contains(frozenContact.getId())) {
+            return RestoreVerdict.blocked(WorkspaceSourceRestoreScope.CONTACT, "TARGET_VALUE_CONFLICT");
+        }
+        String value = normalized(frozenContact.getValue());
+        if (hasText(value) && context.targetIndex().contactValues().getOrDefault(value, 0) > 0) {
+            return RestoreVerdict.blocked(WorkspaceSourceRestoreScope.CONTACT, "TARGET_VALUE_CONFLICT");
+        }
+        return RestoreVerdict.eligible(WorkspaceSourceRestoreScope.CONTACT);
+    }
+
+    /**
+     * A restore unit is only safe when every frozen occurrence owned by the whole boundary is
+     * currently unmapped and unambiguous. Legitimate ancestor containers (section/entry nodes)
+     * naturally carry their children's occurrence ids, so they do not count as owner-level or
+     * ambiguous claims; any broken-lineage claim on the boundary is rejected instead.
+     */
+    private static boolean boundaryClean(List<PrimaryState> allStates, Predicate<PrimaryState> match) {
+        boolean sawAny = false;
+        for (PrimaryState candidate : allStates) {
+            if (!match.test(candidate)) continue;
+            sawAny = true;
+            if (candidate.status() != WorkspaceSourceMappingStatus.UNMAPPED
+                    || candidate.ambiguousClaim()) {
+                return false;
+            }
+        }
+        return sawAny;
+    }
+
+    private static boolean belongsToBoundary(PrimaryState candidate, String sectionId, String entryId) {
+        FrozenOwner owner = candidate.owner();
+        return owner != null
+                && ("ENTRY".equals(owner.nodeType()) || "BULLET".equals(owner.nodeType()))
+                && Objects.equals(sectionId, owner.sectionId())
+                && Objects.equals(entryId, owner.entryId());
+    }
+
+    private static boolean boundaryBulletIdCollides(
+            List<PrimaryState> allStates, String sectionId, String entryId, RestoreContext context) {
+        for (PrimaryState candidate : allStates) {
+            FrozenOwner owner = candidate.owner();
+            if (owner == null || !"BULLET".equals(owner.nodeType()) || owner.bulletId() == null) continue;
+            if (!Objects.equals(sectionId, owner.sectionId()) || !Objects.equals(entryId, owner.entryId())) continue;
+            if (context.targetIndex().bulletIds().contains(owner.bulletId())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** A parent node may only host a restored child while its own lineage stays authentic. */
+    private static boolean parentLineageClean(String sectionId, String entryId, RestoreContext context) {
+        for (String identity : new String[] {sectionId, entryId}) {
+            if (!hasText(identity)) continue;
+            Node node = context.targetIdentityIndex().get(identity);
+            if (node == null || node.occurrenceIds().isEmpty()) continue;
+            Resolution resolution = resolve(node.occurrenceIds(), context.manifest());
+            if (resolution.invalid()
+                    || !authenticatedLineage(node, resolution, context.manifest(), context.frozenIdentityIndex())) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** Resolve the unique frozen contact that owns this primary; several matches are ambiguous. */
+    private static ResumeDocumentContactDTO frozenContact(String primary, RestoreContext context) {
+        ResumeDocumentContactDTO match = null;
+        for (ResumeDocumentContactDTO contact : safe(context.source() == null || context.source().getBasics() == null
+                ? null : context.source().getBasics().getContacts())) {
+            if (contact == null) continue;
+            List<String> ids = contact.getSourceOccurrenceIds() != null && !contact.getSourceOccurrenceIds().isEmpty()
+                    ? contact.getSourceOccurrenceIds()
+                    : (contact.getSourceRef() == null ? null : contact.getSourceRef().getSourceOccurrenceIds());
+            Resolution resolution = resolve(ids, context.manifest());
+            if (resolution.invalid() || !resolution.primaryIds().contains(primary)) continue;
+            if (match != null) return null;
+            match = contact;
+        }
+        return match;
+    }
+
+    private static TargetIndex targetIndex(ResumeDocumentDTO target) {
+        LinkedHashSet<String> contactIds = new LinkedHashSet<>();
+        LinkedHashMap<String, Integer> contactValues = new LinkedHashMap<>();
+        LinkedHashMap<String, ResumeDocumentSectionDTO> sectionsById = new LinkedHashMap<>();
+        LinkedHashMap<String, ResumeDocumentSectionDTO> sectionByEntryId = new LinkedHashMap<>();
+        LinkedHashSet<String> bulletIds = new LinkedHashSet<>();
+        if (target != null) {
+            for (ResumeDocumentContactDTO contact : safe(target.getBasics() == null
+                    ? null : target.getBasics().getContacts())) {
+                if (contact == null) continue;
+                if (canonicalId(contact.getId())) contactIds.add(contact.getId());
+                String value = normalized(contact.getValue());
+                if (hasText(value)) contactValues.merge(value, 1, Integer::sum);
+            }
+            for (ResumeDocumentSectionDTO section : safe(target.getSections())) {
+                if (section == null) continue;
+                if (canonicalId(section.getId())) sectionsById.putIfAbsent(section.getId(), section);
+                for (ResumeDocumentEntryDTO entry : safe(section.getEntries())) {
+                    if (entry == null) continue;
+                    if (canonicalId(entry.getId())) sectionByEntryId.putIfAbsent(entry.getId(), section);
+                    for (ResumeDocumentBulletDTO bullet : safe(entry.getBullets())) {
+                        if (bullet != null && canonicalId(bullet.getId())) bulletIds.add(bullet.getId());
+                    }
+                }
+            }
+        }
+        return new TargetIndex(contactIds, contactValues, sectionsById, sectionByEntryId, bulletIds);
+    }
+
+    private static String upper(String value) {
+        return value == null ? null : value.toUpperCase(Locale.ROOT);
+    }
+
     private static boolean authenticatedLineage(
             Node node, Resolution resolution, Manifest manifest, Map<String, Node> authenticatedNodes) {
         if (resolution.primaryIds().isEmpty()) return true;
@@ -903,6 +1161,34 @@ public class WorkspaceSourceReferenceAssemblerImpl implements WorkspaceSourceRef
             String nodeType, String sectionKind, String sectionId, String entryId, String bulletId,
             int depth, boolean eligible) {}
     private record Resolution(List<String> rawIds, List<String> primaryIds, boolean invalid) {}
+    private record RestoreVerdict(WorkspaceSourceRestoreScope scope, boolean eligible, String reason) {
+        static RestoreVerdict none() {
+            return new RestoreVerdict(WorkspaceSourceRestoreScope.NONE, false, null);
+        }
+        static RestoreVerdict eligible(WorkspaceSourceRestoreScope scope) {
+            return new RestoreVerdict(scope, true, null);
+        }
+        static RestoreVerdict blocked(WorkspaceSourceRestoreScope scope, String reason) {
+            return new RestoreVerdict(scope, false, reason);
+        }
+    }
+    private record PrimaryState(
+            String primary, List<String> occurrenceIds, String text, SourceGeometry geometry,
+            List<Node> inverse, WorkspaceSourceMappingStatus status, FrozenOwner owner,
+            boolean omissionEligible, boolean omissionConfirmed,
+            boolean ambiguousClaim) {}
+    private record TargetIndex(
+            Set<String> contactIds,
+            Map<String, Integer> contactValues,
+            Map<String, ResumeDocumentSectionDTO> sectionsById,
+            Map<String, ResumeDocumentSectionDTO> sectionByEntryId,
+            Set<String> bulletIds) {}
+    private record RestoreContext(
+            Manifest manifest,
+            ResumeDocumentDTO source,
+            TargetIndex targetIndex,
+            Map<String, Node> targetIdentityIndex,
+            Map<String, Node> frozenIdentityIndex) {}
     private record AuthenticationBoundary(
             String type, String sectionKind, String sectionId, String entryId, String bulletId) {}
     private record Node(String id, String type, String sectionKind, String sectionId, String entryId,

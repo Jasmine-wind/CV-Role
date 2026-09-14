@@ -25,8 +25,8 @@ const props = defineProps<{
   active: boolean
 }>()
 
-/** revision 过期（其它端修改了内容）时通知工作区同步服务端版本。 */
-const emit = defineEmits<{ stale: [] }>()
+/** revision 过期（其它端修改了内容）时通知工作区同步服务端版本；resolveFidelity 只做导航。 */
+const emit = defineEmits<{ stale: []; resolveFidelity: [] }>()
 
 const TEMPLATE_OPTIONS: { value: ResumeTemplateId; label: string }[] = [
   { value: 'classic', label: '经典' },
@@ -570,6 +570,15 @@ onBeforeUnmount(() => {
           <p v-if="blockingPreflightMessages.length" class="preflight-blocked-copy">
             处理后才能导出：{{ blockingPreflightMessages[0] }}
           </p>
+          <!-- 只做导航：跳回编辑态的 Source / 结构问题区域，不修改任何数据。 -->
+          <el-button
+            v-if="previewPreflight.needsReview"
+            size="small"
+            class="resolve-fidelity-action"
+            @click="emit('resolveFidelity')"
+          >
+            查看并处理
+          </el-button>
           <details v-if="allPreflightMessages.length" class="preflight-details">
             <summary>查看完整检查</summary>
             <ul>
@@ -912,6 +921,11 @@ onBeforeUnmount(() => {
   color: var(--app-danger);
   font-size: var(--app-font-size-xs);
   line-height: var(--app-line-height-body);
+}
+
+.resolve-fidelity-action {
+  justify-self: start;
+  width: fit-content;
 }
 
 .preflight-details {

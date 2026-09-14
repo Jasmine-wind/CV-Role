@@ -9,15 +9,17 @@ import type {
   WorkspaceTargetMapping,
 } from '@/types/workspace'
 
-const { confirmMock, unconfirmMock } = vi.hoisted(() => ({
+const { confirmMock, unconfirmMock, restoreMock } = vi.hoisted(() => ({
   confirmMock: vi.fn(),
   unconfirmMock: vi.fn(),
+  restoreMock: vi.fn(),
 }))
 
 vi.mock('@/api/workspace', () => ({
   getWorkspaceSourcePdf: vi.fn(),
   confirmWorkspaceSourceOmissions: confirmMock,
   unconfirmWorkspaceSourceOmissions: unconfirmMock,
+  restoreWorkspaceSourceContent: restoreMock,
 }))
 
 const block = (
@@ -39,6 +41,9 @@ const block = (
   reliable: false,
   omissionConfirmed: false,
   omissionEligible: false,
+  restoreScope: 'NONE',
+  restoreEligible: false,
+  restoreBlockedReason: null,
   ...overrides,
 })
 
@@ -84,6 +89,8 @@ const mountPane = (source: WorkspaceSourceReference, props = {}) =>
       loading: false,
       error: null,
       omissionDisabledReason: null,
+      restoreDisabledReason: null,
+      reviewRequestKey: 0,
       ...props,
     },
   })
@@ -195,7 +202,7 @@ describe('WorkspaceSourcePane', () => {
     const omissionBusy = vi.fn()
     const wrapper = mountPane(source, {
       onOmissionSaved: omissionSaved,
-      onOmissionBusy: omissionBusy,
+      onSourceMutationBusy: omissionBusy,
     })
 
     const action = wrapper.get('button.omission-action')
@@ -347,7 +354,7 @@ describe('WorkspaceSourcePane', () => {
     confirmMock.mockReturnValueOnce(pending.promise)
     const source = sourceWith([block('occ-1', 'UNMAPPED', { omissionEligible: true })])
     const omissionBusy = vi.fn()
-    const wrapper = mountPane(source, { onOmissionBusy: omissionBusy })
+    const wrapper = mountPane(source, { onSourceMutationBusy: omissionBusy })
 
     await wrapper.get('button.omission-action').trigger('click')
     await wrapper.setProps({ source: sourceWith(source.sourceBlocks, { targetRevision: 5 }) })
@@ -376,7 +383,7 @@ describe('WorkspaceSourcePane', () => {
     confirmMock.mockReturnValueOnce(firstPending.promise).mockReturnValueOnce(secondPending.promise)
     const source = sourceWith([block('occ-1', 'UNMAPPED', { omissionEligible: true })])
     const omissionBusy = vi.fn()
-    const wrapper = mountPane(source, { onOmissionBusy: omissionBusy })
+    const wrapper = mountPane(source, { onSourceMutationBusy: omissionBusy })
 
     await wrapper.get('button.omission-action').trigger('click')
     await wrapper.setProps({ optimizationTaskId: 2 })
@@ -513,7 +520,7 @@ describe('WorkspaceSourcePane', () => {
     expect(omissionSaved.mock.calls[0]?.[2]).toBe(false)
   })
 
-  it('surfaces blocker count instead of hiding unmapped content', () => {
+  it('surfaces blocker count and renders every blocker as an actionable issue card', () => {
     const source = sourceWith([block('occ-2', 'UNMAPPED', { omissionEligible: true })], {
       exportBlocked: true,
       fidelityIssues: [
@@ -529,6 +536,404 @@ describe('WorkspaceSourcePane', () => {
     const wrapper = mountPane(source)
 
     expect(wrapper.text()).toContain('结构保真：1 项阻断')
-    expect(wrapper.text()).toContain('冻结原文未映射')
+    const card = wrapper.get('.issue-card')
+    expect(card.attributes('data-issue-code')).toBe('SOURCE_CONTENT_UNMAPPED')
+    expect(card.get('.issue-card-title').text()).toBe('原文内容未进入当前简历')
+    expect(card.text()).toContain('这段内容存在于原始简历，但当前简历中找不到。')
+    expect(card.text()).toContain('原文 occ-2')
+    // 内部 code 不得进入用户可见文案
+    expect(wrapper.text()).not.toContain('SOURCE_CONTENT_UNMAPPED')
+  })
+
+  it('offers restore and omission on a restorable bullet and restores through the dedicated API', async () => {
+    const pending = deferred<{
+      saved: boolean
+      conflict: boolean
+      revision: number
+      document: null
+    }>()
+    restoreMock.mockReturnValueOnce(pending.promise)
+    const source = sourceWith(
+      [
+        block('occ-1', 'UNMAPPED', {
+          sourceNodeType: 'BULLET',
+          sourceSectionKind: 'SUMMARY',
+          sourceSectionId: 'summary-section',
+          sourceEntryId: 'summary-entry',
+          sourceBulletId: 'summary-bullet',
+          omissionEligible: true,
+          restoreEligible: true,
+          restoreScope: 'BULLET',
+        }),
+      ],
+      {
+        exportBlocked: true,
+        fidelityIssues: [
+          {
+            code: 'SOURCE_CONTENT_UNMAPPED',
+            severity: 'BLOCKER',
+            message: '冻结原文未映射',
+            sourceOccurrenceIds: ['occ-1'],
+            targetNodeIds: [],
+          },
+        ],
+      },
+    )
+    const restoreSaved = vi.fn()
+    const sourceMutationBusy = vi.fn()
+    const wrapper = mountPane(source, {
+      onRestoreSaved: restoreSaved,
+      onSourceMutationBusy: sourceMutationBusy,
+    })
+
+    const card = wrapper.get('.issue-card')
+    const cardRestore = card.get('button.issue-restore-action')
+    expect(cardRestore.text()).toBe('恢复原文')
+    expect(card.get('button.issue-omission-action').text()).toBe('确认省略')
+    const inlineRestore = wrapper.get('.source-block button.restore-action')
+    expect(inlineRestore.text()).toBe('恢复原文')
+
+    await cardRestore.trigger('click')
+    // Restore 与 omission 共享同一个 mutation lock：在途请求不能被第二条操作穿透。
+    await inlineRestore.trigger('click')
+
+    expect(restoreMock).toHaveBeenCalledTimes(1)
+    expect(restoreMock).toHaveBeenCalledWith(1, {
+      expectedRevision: 4,
+      sourceOccurrenceIds: ['occ-1'],
+    })
+    expect(cardRestore.attributes('disabled')).toBeDefined()
+    expect(cardRestore.text()).toBe('正在恢复…')
+
+    const result = { saved: true, conflict: false, revision: 5, document: null } as const
+    pending.resolve(result)
+    await flushPromises()
+
+    expect(restoreSaved).toHaveBeenCalledWith(4, result, false)
+    expect(sourceMutationBusy.mock.calls).toEqual([[true], [false]])
+  })
+
+  it('labels a restorable Project boundary as restoring the whole project', () => {
+    const projectBoundary = {
+      sourceSectionKind: 'PROJECT',
+      sourceSectionId: 'project-section',
+      sourceEntryId: 'project-entry',
+      omissionEligible: true,
+      restoreEligible: true,
+      restoreScope: 'PROJECT_ENTRY' as const,
+    }
+    const source = sourceWith(
+      [
+        block('occ-1', 'UNMAPPED', { ...projectBoundary, sourceNodeType: 'ENTRY' }),
+        block('occ-2', 'UNMAPPED', {
+          ...projectBoundary,
+          sourceNodeType: 'BULLET',
+          sourceBulletId: 'project-bullet',
+        }),
+      ],
+      {
+        exportBlocked: true,
+        fidelityIssues: [
+          {
+            code: 'PROJECT_BOUNDARY_LOST',
+            severity: 'BLOCKER',
+            message: '项目边界丢失',
+            sourceOccurrenceIds: ['occ-1', 'occ-2'],
+            targetNodeIds: [],
+          },
+          {
+            code: 'SOURCE_CONTENT_UNMAPPED',
+            severity: 'BLOCKER',
+            message: '冻结原文未映射',
+            sourceOccurrenceIds: ['occ-1', 'occ-2'],
+            targetNodeIds: [],
+          },
+        ],
+      },
+    )
+    const wrapper = mountPane(source)
+
+    const cards = wrapper.findAll('.issue-card')
+    expect(cards).toHaveLength(2)
+    for (const card of cards) {
+      expect(card.get('button.issue-restore-action').text()).toBe('恢复整个项目')
+      expect(card.get('button.issue-omission-action').text()).toBe('确认省略整个项目')
+    }
+    // 内联区域只在边界 leader block 上渲染一次恢复入口
+    const inlineRestores = wrapper.findAll('.source-block button.restore-action')
+    expect(inlineRestores).toHaveLength(1)
+    expect(inlineRestores[0]!.text()).toBe('恢复整个项目')
+  })
+
+  it('offers only omission when the boundary is omission eligible but not restorable', () => {
+    const source = sourceWith(
+      [
+        block('occ-1', 'UNMAPPED', {
+          sourceNodeType: 'BULLET',
+          sourceSectionKind: 'SUMMARY',
+          sourceSectionId: 'summary-section',
+          sourceEntryId: 'summary-entry',
+          sourceBulletId: 'summary-bullet',
+          omissionEligible: true,
+          restoreScope: 'BULLET',
+          restoreBlockedReason: 'BOUNDARY_HAS_OTHER_MAPPINGS',
+        }),
+      ],
+      {
+        exportBlocked: true,
+        fidelityIssues: [
+          {
+            code: 'SOURCE_CONTENT_UNMAPPED',
+            severity: 'BLOCKER',
+            message: '冻结原文未映射',
+            sourceOccurrenceIds: ['occ-1'],
+            targetNodeIds: [],
+          },
+        ],
+      },
+    )
+    const wrapper = mountPane(source)
+
+    expect(wrapper.findAll('button.issue-restore-action')).toHaveLength(0)
+    expect(wrapper.get('button.issue-omission-action').text()).toBe('确认省略')
+  })
+
+  it('explains when nothing can be handled automatically instead of offering fake buttons', () => {
+    const source = sourceWith([block('occ-7', 'UNMAPPED')], {
+      exportBlocked: true,
+      fidelityIssues: [
+        {
+          code: 'SOURCE_CONTENT_UNMAPPED',
+          severity: 'BLOCKER',
+          message: '冻结原文未映射',
+          sourceOccurrenceIds: ['occ-7'],
+          targetNodeIds: [],
+        },
+      ],
+    })
+    const wrapper = mountPane(source)
+
+    const card = wrapper.get('.issue-card')
+    expect(card.text()).toContain('当前问题无法自动处理，请检查结构关系。')
+    expect(card.findAll('button.issue-restore-action')).toHaveLength(0)
+    expect(card.findAll('button.issue-omission-action')).toHaveLength(0)
+    expect(wrapper.findAll('.source-block button.restore-action')).toHaveLength(0)
+  })
+
+  it('tells the user to fix project ownership when a boundary has other mappings', () => {
+    const projectBoundary = {
+      sourceSectionKind: 'PROJECT',
+      sourceSectionId: 'project-section',
+      sourceEntryId: 'project-entry',
+      restoreScope: 'PROJECT_ENTRY' as const,
+      restoreBlockedReason: 'BOUNDARY_HAS_OTHER_MAPPINGS',
+    }
+    const source = sourceWith(
+      [
+        block('occ-1', 'UNMAPPED', { ...projectBoundary, sourceNodeType: 'ENTRY' }),
+        block('occ-2', 'UNMAPPED', {
+          ...projectBoundary,
+          sourceNodeType: 'BULLET',
+          sourceBulletId: 'project-bullet',
+        }),
+      ],
+      {
+        exportBlocked: true,
+        fidelityIssues: [
+          {
+            code: 'PROJECT_BOUNDARY_LOST',
+            severity: 'BLOCKER',
+            message: '项目边界丢失',
+            sourceOccurrenceIds: ['occ-1', 'occ-2'],
+            targetNodeIds: [],
+          },
+        ],
+      },
+    )
+    const wrapper = mountPane(source)
+
+    expect(wrapper.get('.issue-card').text()).toContain(
+      '项目内容仍存在于其它位置，无法安全自动恢复。请定位错误内容并修正项目归属。',
+    )
+  })
+
+  it('offers a locate action for ambiguous mappings without restore or omission', async () => {
+    const source = sourceWith(
+      [block('occ-9', 'AMBIGUOUS', { targetNodeIds: ['section:s/entry:e/bullet:x'] })],
+      {
+        exportBlocked: true,
+        fidelityIssues: [
+          {
+            code: 'AMBIGUOUS_MAPPING',
+            severity: 'BLOCKER',
+            message: '目标内容包含未知或不一致的原文引用，必须人工核对。',
+            sourceOccurrenceIds: ['occ-9'],
+            targetNodeIds: ['section:s/entry:e/bullet:x'],
+          },
+        ],
+      },
+    )
+    const locate = vi.fn()
+    const wrapper = mountPane(source, { onLocateIssueTarget: locate })
+
+    const card = wrapper.get('.issue-card')
+    expect(card.get('.issue-card-title').text()).toBe('对应关系不明确')
+    expect(card.text()).toContain('系统无法确认这段当前内容来自哪一段原文')
+    expect(card.findAll('button.issue-restore-action')).toHaveLength(0)
+    expect(card.findAll('button.issue-omission-action')).toHaveLength(0)
+    await card.get('button.issue-locate-action').trigger('click')
+    expect(locate).toHaveBeenCalledWith('section:s/entry:e/bullet:x')
+  })
+
+  it('offers one indexed locate action per duplicate target', async () => {
+    const source = sourceWith([block('occ-8', 'SPLIT', { targetNodeIds: ['a', 'b'] })], {
+      exportBlocked: true,
+      fidelityIssues: [
+        {
+          code: 'DUPLICATE_MAPPING',
+          severity: 'BLOCKER',
+          message: '同一原文被重复写入多个目标位置，导出已阻止。',
+          sourceOccurrenceIds: ['occ-8'],
+          targetNodeIds: ['a', 'b'],
+        },
+      ],
+    })
+    const wrapper = mountPane(source)
+
+    const card = wrapper.get('.issue-card')
+    expect(card.get('.issue-card-title').text()).toBe('同一段原文出现了多份')
+    const buttons = card.findAll('button.issue-locate-action')
+    expect(buttons.map((button) => button.text())).toEqual(['定位第 1 处', '定位第 2 处'])
+  })
+
+  it('explains manifest problems as not solvable inside the current task', async () => {
+    const source = sourceWith([], {
+      exportBlocked: true,
+      fidelityIssues: [
+        {
+          code: 'SOURCE_MANIFEST_INVALID',
+          severity: 'BLOCKER',
+          message: '冻结原文清单不完整，无法安全建立定位关系。',
+          sourceOccurrenceIds: [],
+          targetNodeIds: [],
+        },
+      ],
+    })
+    const restart = vi.fn()
+    const wrapper = mountPane(source, { onRestartUpload: restart })
+
+    const card = wrapper.get('.issue-card')
+    expect(card.get('.issue-card-title').text()).toBe('原文校验数据异常')
+    expect(card.text()).toContain('该问题无法通过编辑简历内容解决')
+    expect(card.findAll('button.issue-restore-action')).toHaveLength(0)
+    expect(card.findAll('button.issue-omission-action')).toHaveLength(0)
+    await card.get('button.issue-restart-action').trigger('click')
+    expect(restart).toHaveBeenCalledTimes(1)
+  })
+
+  it('disables restore while the editor is not fully saved', () => {
+    const source = sourceWith(
+      [
+        block('occ-1', 'UNMAPPED', {
+          sourceNodeType: 'BULLET',
+          sourceSectionId: 's',
+          sourceEntryId: 'e',
+          sourceBulletId: 'b',
+          restoreEligible: true,
+          restoreScope: 'BULLET',
+        }),
+      ],
+      {
+        exportBlocked: true,
+        fidelityIssues: [
+          {
+            code: 'SOURCE_CONTENT_UNMAPPED',
+            severity: 'BLOCKER',
+            message: '冻结原文未映射',
+            sourceOccurrenceIds: ['occ-1'],
+            targetNodeIds: [],
+          },
+        ],
+      },
+    )
+    const wrapper = mountPane(source, {
+      restoreDisabledReason: '请先完成当前简历保存，再恢复原文。',
+    })
+
+    expect(wrapper.get('button.issue-restore-action').attributes('disabled')).toBeDefined()
+    expect(wrapper.text()).toContain('请先完成当前简历保存，再恢复原文。')
+    expect(wrapper.findAll('.source-block button.restore-action')).toHaveLength(1)
+  })
+
+  it('surfaces a restore CAS conflict and never reports success', async () => {
+    restoreMock.mockResolvedValueOnce({
+      saved: false,
+      conflict: true,
+      revision: 5,
+      document: null,
+    })
+    const source = sourceWith(
+      [
+        block('occ-1', 'UNMAPPED', {
+          sourceNodeType: 'BULLET',
+          sourceSectionId: 's',
+          sourceEntryId: 'e',
+          sourceBulletId: 'b',
+          restoreEligible: true,
+          restoreScope: 'BULLET',
+        }),
+      ],
+      {
+        exportBlocked: true,
+        fidelityIssues: [
+          {
+            code: 'SOURCE_CONTENT_UNMAPPED',
+            severity: 'BLOCKER',
+            message: '冻结原文未映射',
+            sourceOccurrenceIds: ['occ-1'],
+            targetNodeIds: [],
+          },
+        ],
+      },
+    )
+    const restoreConcurrent = vi.fn()
+    const restoreSaved = vi.fn()
+    const wrapper = mountPane(source, {
+      onRestoreConcurrent: restoreConcurrent,
+      onRestoreSaved: restoreSaved,
+    })
+
+    await wrapper.get('button.issue-restore-action').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('当前简历已有更新，本次恢复未生效')
+    expect(restoreConcurrent).toHaveBeenCalledTimes(1)
+    expect(restoreSaved).not.toHaveBeenCalled()
+  })
+
+  it('opens the issue area when the resolver requests review', async () => {
+    const source = sourceWith([block('occ-5', 'UNMAPPED')], {
+      exportBlocked: true,
+      fidelityIssues: [
+        {
+          code: 'SOURCE_CONTENT_UNMAPPED',
+          severity: 'BLOCKER',
+          message: '冻结原文未映射',
+          sourceOccurrenceIds: [],
+          targetNodeIds: [],
+        },
+      ],
+    })
+    const wrapper = mountPane(source)
+
+    const details = wrapper.get('details')
+    ;(details.element as HTMLDetailsElement).open = false
+    await details.trigger('toggle')
+    expect(wrapper.get('details').attributes('open')).toBeUndefined()
+
+    await wrapper.setProps({ reviewRequestKey: 1, selectedOccurrenceIds: [] })
+    await flushPromises()
+
+    expect(wrapper.get('details').attributes('open')).toBeDefined()
   })
 })

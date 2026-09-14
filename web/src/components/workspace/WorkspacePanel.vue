@@ -53,9 +53,10 @@ const selectedRequirementId = ref<number | null>(initialRequirementId)
 const sourceReference = ref<WorkspaceSourceReference | null>(null)
 const sourceLoading = ref(false)
 const sourceError = ref<string | null>(null)
-const omissionBusy = ref(false)
+const sourceMutationBusy = ref(false)
 const selectedTargetNodeId = ref<string | null>(null)
 const selectedSourceOccurrenceIds = ref<string[]>([])
+const reviewRequestKey = ref(0)
 let sourceRequestSequence = 0
 
 // At 1120px, compact columns are 245px + 340px, leaving 535px for the Resume stage.
@@ -177,9 +178,23 @@ const omissionDisabledReason = computed(() => {
   return null
 })
 
-// 未保存 / saving / failed / conflict 或 omission CAS 期间不允许发起 Suggest，
+/** Restore 与 omission 同样不能用服务端结果覆盖尚未持久化的本地编辑。 */
+const restoreDisabledReason = computed(() => {
+  if (editor.status.value !== 'saved' || editor.hasUnsavedChanges.value) {
+    return '请先完成当前简历保存，再恢复原文。'
+  }
+  if (
+    editor.revision.value === null ||
+    sourceReference.value?.targetRevision !== editor.revision.value
+  ) {
+    return '原文状态正在同步，请稍候。'
+  }
+  return null
+})
+
+// 未保存 / saving / failed / conflict 或 SOURCE mutation 期间不允许发起 Suggest，
 // 避免候选绑定到未落库内容或与另一条写路径竞争同一 revision。
-const suggestLocked = computed(() => editor.status.value !== 'saved' || omissionBusy.value)
+const suggestLocked = computed(() => editor.status.value !== 'saved' || sourceMutationBusy.value)
 
 const loadAnalysis = async () => {
   analysisLoading.value = true
@@ -194,7 +209,7 @@ const loadAnalysis = async () => {
 }
 
 const handleEditorChange = (document: Parameters<typeof editor.applyDocument>[0]) => {
-  if (omissionBusy.value) return
+  if (sourceMutationBusy.value) return
   editor.applyDocument(document)
 }
 
@@ -254,8 +269,25 @@ const handleOmissionSaved = (
   void loadSourceReference()
 }
 
-const handleOmissionConcurrent = async () => {
-  ElMessage.warning('当前简历已有更新，本次省略操作未生效。')
+/** Restore 的保存结果同样直接接回 editor；Preview 由 revision 变化自动失效。 */
+const handleRestoreSaved = (
+  expectedRevision: number,
+  result: WorkspaceSaveResult,
+  wholeProject: boolean,
+) => {
+  const accepted = editor.acceptExternalSaveResult(expectedRevision, result)
+  if (!accepted) {
+    ElMessage.warning('原文已恢复，但本地版本也发生了变化。正在重新同步，请勿重复操作。')
+  } else {
+    ElMessage.success(
+      wholeProject ? '已恢复整个项目，结构保真状态已更新' : '已恢复原文，结构保真状态已更新',
+    )
+  }
+  void loadSourceReference()
+}
+
+const handleSourceMutationConcurrent = async (subject: '省略' | '恢复') => {
+  ElMessage.warning(`当前简历已有更新，本次${subject}操作未生效。`)
   if (!editor.hasUnsavedChanges.value && editor.status.value === 'saved') {
     try {
       await editor.adoptServerVersion()
@@ -264,6 +296,42 @@ const handleOmissionConcurrent = async () => {
     }
   }
   await loadSourceReference()
+}
+
+const handleOmissionConcurrent = () => handleSourceMutationConcurrent('省略')
+const handleRestoreConcurrent = () => handleSourceMutationConcurrent('恢复')
+
+/**
+ * Preview → “查看并处理”：只做导航，不修改任何数据。
+ * 桌面切回编辑态的结构问题区域；窄屏切到冻结原文面板；并选中第一个 BLOCKER 对应的原文。
+ */
+const openFidelityResolver = () => {
+  workspaceMode.value = 'edit'
+  const firstBlocker = sourceReference.value?.fidelityIssues.find(
+    (issue) => issue.severity === 'BLOCKER',
+  )
+  selectedSourceOccurrenceIds.value = firstBlocker?.sourceOccurrenceIds ?? []
+  reviewRequestKey.value += 1
+  if (isNarrowScreen.value) mobilePanel.value = 'source'
+  // 结构性修复必须基于服务端当前判决；后台刷新不阻塞用户看到的问题列表。
+  void loadSourceReference()
+}
+
+/** [定位问题内容]：即使映射不可靠也把锚点交给编辑器，由用户自行判断并修正。 */
+const locateIssueTarget = (targetNodeId: string) => {
+  const mapping = sourceReference.value?.mappings.find((item) => item.targetNodeId === targetNodeId)
+  selectedTargetNodeId.value = targetNodeId
+  if (mapping) {
+    provenanceSectionId.value = mapping.sectionId
+    provenanceBulletId.value = mapping.bulletId
+  }
+  focusRequestKey.value += 1
+  if (isNarrowScreen.value) mobilePanel.value = 'editor'
+  if (!mapping) ElMessage.warning('无法在当前简历中定位该内容，请手动核对。')
+}
+
+const handleRestartUpload = () => {
+  void router.push('/app')
 }
 
 const goToAnalysis = () => {
@@ -322,7 +390,7 @@ const setReviewStep = (step: 'match' | 'evidence' | 'edit' | 'preview') => {
 }
 
 const confirmRestore = async () => {
-  if (restoring.value || omissionBusy.value || editor.revision.value === null) return
+  if (restoring.value || sourceMutationBusy.value || editor.revision.value === null) return
   try {
     await ElMessageBox.confirm(
       '将用本次优化开始前的简历内容覆盖当前编辑版本，并保存为新的版本。是否继续？',
@@ -348,7 +416,7 @@ const confirmRestore = async () => {
 }
 
 const handleOverwrite = async () => {
-  if (omissionBusy.value) return
+  if (sourceMutationBusy.value) return
   try {
     await editor.overwriteWithLocalDraft()
     if (editor.status.value === 'saved') {
@@ -364,7 +432,7 @@ const handleOverwrite = async () => {
 }
 
 const handleAdoptServer = async () => {
-  if (omissionBusy.value) return
+  if (sourceMutationBusy.value) return
   try {
     await editor.adoptServerVersion()
     ElMessage.success('已加载线上最新版本，本地草稿已被替换')
@@ -374,12 +442,12 @@ const handleAdoptServer = async () => {
 }
 
 const handleRetry = () => {
-  if (omissionBusy.value) return
+  if (sourceMutationBusy.value) return
   void editor.retrySave()
 }
 
 const openPreviewMode = async () => {
-  if (previewPreparing.value || omissionBusy.value || workspaceMode.value === 'preview') return
+  if (previewPreparing.value || sourceMutationBusy.value || workspaceMode.value === 'preview') return
   previewPreparing.value = true
   try {
     const ready = await editor.ensurePersistedForRender()
@@ -530,7 +598,7 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
           v-if="workspaceMode === 'edit'"
           type="primary"
           :loading="previewPreparing"
-          :disabled="omissionBusy"
+          :disabled="sourceMutationBusy"
           @click="openPreviewMode"
         >
           {{ previewPreparing ? '准备预览…' : '预览 →' }}
@@ -607,21 +675,21 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
             <div class="workspace-more-menu">
               <button
                 type="button"
-                :disabled="omissionBusy || !editor.canUndo.value || editor.status.value === 'saving'"
+                :disabled="sourceMutationBusy || !editor.canUndo.value || editor.status.value === 'saving'"
                 @click="editor.undo()"
               >
                 撤销
               </button>
               <button
                 type="button"
-                :disabled="omissionBusy || !editor.canRedo.value || editor.status.value === 'saving'"
+                :disabled="sourceMutationBusy || !editor.canRedo.value || editor.status.value === 'saving'"
                 @click="editor.redo()"
               >
                 重做
               </button>
               <button
                 type="button"
-                :disabled="omissionBusy || editor.status.value === 'saving'"
+                :disabled="sourceMutationBusy || editor.status.value === 'saving'"
                 @click="confirmRestore"
               >
                 {{ restoring ? '正在恢复…' : '恢复优化前版本' }}
@@ -642,11 +710,17 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
             aria-labelledby="workspace-tab-source"
             :selected-occurrence-ids="selectedSourceOccurrenceIds"
             :omission-disabled-reason="omissionDisabledReason"
+            :restore-disabled-reason="restoreDisabledReason"
+            :review-request-key="reviewRequestKey"
             @retry="loadSourceReference"
             @focus-target="focusTargetFromSource"
             @omission-saved="handleOmissionSaved"
             @omission-concurrent="handleOmissionConcurrent"
-            @omission-busy="omissionBusy = $event"
+            @restore-saved="handleRestoreSaved"
+            @restore-concurrent="handleRestoreConcurrent"
+            @source-mutation-busy="sourceMutationBusy = $event"
+            @locate-issue-target="locateIssueTarget"
+            @restart-upload="handleRestartUpload"
           />
 
           <section
@@ -663,7 +737,7 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
                 <button
                   type="button"
                   class="toolbar-button"
-                  :disabled="omissionBusy || !editor.canUndo.value"
+                  :disabled="sourceMutationBusy || !editor.canUndo.value"
                   @click="editor.undo()"
                 >
                   撤销
@@ -671,7 +745,7 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
                 <button
                   type="button"
                   class="toolbar-button"
-                  :disabled="omissionBusy || !editor.canRedo.value"
+                  :disabled="sourceMutationBusy || !editor.canRedo.value"
                   @click="editor.redo()"
                 >
                   重做
@@ -689,7 +763,7 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
                 <button
                   type="button"
                   class="toolbar-button toolbar-button-restore"
-                  :disabled="omissionBusy || editor.status.value === 'saving'"
+                  :disabled="sourceMutationBusy || editor.status.value === 'saving'"
                   @click="confirmRestore"
                 >
                   {{ restoring ? '正在恢复…' : '恢复版本' }}
@@ -702,7 +776,7 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
                 :suggest="bulletSuggest"
                 :suggest-enabled="suggestEnabled"
                 :suggest-locked="suggestLocked"
-                :interaction-locked="omissionBusy"
+                :interaction-locked="sourceMutationBusy"
                 :selected-section-id="selectedWorkspaceSectionId"
                 :focused-bullet-id="selectedWorkspaceBulletId"
                 :focus-request-key="focusRequestKey"
@@ -717,8 +791,8 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
           <aside
             v-if="inspectorOpen"
             v-show="!isNarrowScreen || mobilePanel === 'context'"
-            :inert="omissionBusy ? true : undefined"
-            :aria-busy="omissionBusy"
+            :inert="sourceMutationBusy ? true : undefined"
+            :aria-busy="sourceMutationBusy"
             id="workspace-panel-context"
             class="workspace-context-drawer"
             role="tabpanel"
@@ -785,6 +859,7 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
           :status="editor.status.value"
           :active="workspaceMode === 'preview'"
           @stale="handlePreviewStale"
+          @resolve-fidelity="openFidelityResolver"
         />
       </div>
     </template>

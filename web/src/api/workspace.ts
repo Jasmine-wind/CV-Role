@@ -11,6 +11,7 @@ import type {
   WorkspaceSaveResult,
   WorkspaceSourceOmissionRequest,
   WorkspaceSourceReference,
+  WorkspaceSourceRestoreRequest,
 } from '@/types/workspace'
 
 /** AI 生成可能超过默认请求超时，单独放宽；服务端自身有 AI 调用超时兜底。 */
@@ -46,6 +47,17 @@ export const unconfirmWorkspaceSourceOmissions = (
 ) => {
   return request.post<WorkspaceSaveResult>(
     `/api/workspace/${optimizationTaskId}/source-omissions/unconfirm`,
+    data,
+  )
+}
+
+/** 服务端权威的局部原文恢复：客户端只提交要恢复的 frozen occurrence，边界由服务端重新解析。 */
+export const restoreWorkspaceSourceContent = (
+  optimizationTaskId: number,
+  data: WorkspaceSourceRestoreRequest,
+) => {
+  return request.post<WorkspaceSaveResult>(
+    `/api/workspace/${optimizationTaskId}/source-repairs/restore`,
     data,
   )
 }

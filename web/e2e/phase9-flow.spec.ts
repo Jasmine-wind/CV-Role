@@ -703,7 +703,9 @@ test('intentional omission: a deleted source bullet blocks delivery until confir
   }
   expect(stalePayload.data.saved).toBe(false)
   expect(stalePayload.data.conflict).toBe(true)
-  await expect(stalePage.getByText(/当前简历已有更新，本次操作未生效/)).toBeVisible()
+  // The same conflict is reported next to the block and on its issue card; the scoped locator
+  // keeps the assertion pinned to the inline source-card surface.
+  await expect(stalePage.locator('.source-block .mutation-error')).toBeVisible()
   await expect(stalePage.getByText('已确认省略，结构保真状态已更新')).toHaveCount(0)
   await expect(stalePage.getByText('✓ 已保存', { exact: true })).toBeVisible({ timeout: 15_000 })
   await stalePage.close()
@@ -952,5 +954,307 @@ test.describe('narrow viewport', () => {
     await expect(page.locator('.preflight-section')).toBeVisible()
     await expect(page.getByRole('button', { name: '导出 PDF', exact: true })).toBeVisible()
     await page.screenshot({ path: testInfo.outputPath('narrow-preview.png'), fullPage: true })
+  })
+})
+
+test.describe('structure fidelity resolver', () => {
+  test('restores a deleted source bullet through the dedicated restore API', async ({ page }) => {
+    await registerAndLogin(page)
+    await uploadAndStartAnalysis(page, chineseJavaJobDescription, standardFixture)
+    await waitForAnalysis(page)
+    await openWorkspaceWithoutEditing(page)
+
+    // Delete one bullet of a multi-bullet work entry so the diagnostic Preview stays renderable.
+    const workGroup = page.getByRole('group', { name: /工作经历，第 \d+ 项/ })
+    const targetBullet = workGroup.locator('.bullet-block').first()
+    await expect(targetBullet).toBeVisible({ timeout: 15_000 })
+    const targetNodeId = await targetBullet.getAttribute('data-target-node-id')
+    expect(targetNodeId).toBeTruthy()
+    const mappedSourceBlock = page.locator(
+      `.source-block[data-target-node-id="${targetNodeId}"]`,
+    )
+    await expect(mappedSourceBlock).toHaveCount(1)
+    const sourceBlockId = await mappedSourceBlock.getAttribute('data-source-block-id')
+    expect(sourceBlockId).toBeTruthy()
+    const sourceCard = page.locator(`.source-block[data-source-block-id="${sourceBlockId}"]`)
+
+    const deletedSave = page.waitForResponse(
+      (response) =>
+        response.request().method() === 'PUT' &&
+        /\/api\/workspace\/\d+\/content$/.test(new URL(response.url()).pathname),
+    )
+    await targetBullet.locator('.bullet-delete-action').click()
+    await deletedSave
+    await expect(page.getByText('✓ 已保存', { exact: true })).toBeVisible({ timeout: 15_000 })
+    await expect(sourceCard.locator('.mapping-state')).toHaveText('未映射', { timeout: 15_000 })
+    await expect(page.getByText(/结构保真：\d+ 项阻断/)).toBeVisible()
+
+    // The server verdict must authorize a BULLET restore for this block before any button shows.
+    const fidelityVerdict = page.waitForResponse(
+      (response) =>
+        response.request().method() === 'GET' &&
+        /\/api\/workspace\/\d+\/source-reference$/.test(new URL(response.url()).pathname),
+    )
+    await page.getByRole('button', { name: '预览 →', exact: true }).click()
+    const fidelityResponse = await fidelityVerdict
+    expect(fidelityResponse.ok()).toBe(true)
+    const fidelityPayload = (await fidelityResponse.json()) as {
+      data: {
+        sourceBlocks: Array<{
+          id: string
+          text: string
+          occurrenceIds: string[]
+          restoreEligible: boolean
+          restoreScope: string
+        }>
+        exportBlocked: boolean
+      }
+    }
+    const restoreBlock = fidelityPayload.data.sourceBlocks.find(
+      (block) => block.id === sourceBlockId,
+    )
+    expect(restoreBlock?.restoreEligible).toBe(true)
+    expect(restoreBlock?.restoreScope).toBe('BULLET')
+    expect(fidelityPayload.data.exportBlocked).toBe(true)
+
+    // Preview stays diagnostic: PDF visible, Export blocked, and 查看并处理 offered.
+    await expect(page.getByTitle('简历 PDF 预览')).toBeVisible({ timeout: 45_000 })
+    await expect(page.locator('.preflight-blocked-copy')).toContainText('原文结构仍需确认')
+    await expect(page.getByRole('button', { name: '导出 PDF', exact: true })).toBeDisabled()
+    const resolveAction = page.locator('.resolve-fidelity-action')
+    await expect(resolveAction).toBeVisible()
+    await resolveAction.click()
+
+    // Back in edit mode the first blocker is located in the source pane and rendered as an issue card.
+    await expect(page.locator('textarea').first()).toBeVisible({ timeout: 15_000 })
+    await expect(page.locator('.source-block.is-selected')).toHaveCount(1)
+    const issueCard = page
+      .locator('.issue-card')
+      .filter({ hasText: '原文内容未进入当前简历' })
+      .first()
+    await expect(issueCard).toBeVisible()
+    const restoreAction = issueCard.getByRole('button', { name: '恢复原文', exact: true })
+    await expect(restoreAction).toBeEnabled({ timeout: 15_000 })
+
+    const restoreResponse = page.waitForResponse(
+      (response) =>
+        response.request().method() === 'POST' &&
+        response.url().endsWith('/source-repairs/restore'),
+    )
+    await restoreAction.click()
+    const restored = await restoreResponse
+    expect(restored.ok()).toBe(true)
+    const restoreBody = restored.request().postDataJSON() as {
+      expectedRevision: number
+      sourceOccurrenceIds: string[]
+    }
+    expect(Number.isInteger(restoreBody.expectedRevision)).toBe(true)
+    expect(restoreBody.sourceOccurrenceIds).toEqual(restoreBlock?.occurrenceIds)
+    const restorePayload = (await restored.json()) as { data: { saved: boolean; revision: number } }
+    expect(restorePayload.data.saved).toBe(true)
+    const restoredRevision = restorePayload.data.revision
+    expect(Number.isInteger(restoredRevision)).toBe(true)
+
+    // The authoritative refresh decides the outcome: located again, no blocker, exportable.
+    await expect(sourceCard.locator('.mapping-state')).toHaveText('已定位', { timeout: 15_000 })
+    await expect(page.getByText('结构保真检查通过', { exact: true })).toBeVisible({
+      timeout: 15_000,
+    })
+    if (restoreBlock?.text) {
+      const restoredValues = await page
+        .locator('.bullet-block textarea')
+        .evaluateAll((nodes) => nodes.map((node) => (node as HTMLTextAreaElement).value))
+      expect(restoredValues).toContain(restoreBlock.text)
+    }
+
+    // Fresh Preview for the restored revision enables Export.
+    let lastPreviewRevision: number | null = null
+    const previewResponse = page.waitForResponse(
+      (response) => response.url().includes('/preview.pdf'),
+    )
+    await page.getByRole('button', { name: '预览 →', exact: true }).click()
+    const preview = await previewResponse
+    const previewRevision = new URL(preview.url()).searchParams.get('expectedRevision')
+    if (previewRevision !== null) lastPreviewRevision = Number(previewRevision)
+    await expect(page.locator('.preflight-section').getByText('可以导出', { exact: true })).toBeVisible(
+      { timeout: 45_000 },
+    )
+    await expect(page.getByRole('button', { name: '导出 PDF', exact: true })).toBeEnabled()
+    expect(lastPreviewRevision).toBe(restoredRevision)
+  })
+
+  test('keeps intentional omission as an equally valid resolution path', async ({ page }) => {
+    await registerAndLogin(page)
+    await uploadAndStartAnalysis(page, chineseJavaJobDescription, standardFixture)
+    await waitForAnalysis(page)
+    await openWorkspaceWithoutEditing(page)
+
+    const targetBullet = page
+      .getByRole('group', { name: /工作经历，第 \d+ 项/ })
+      .locator('.bullet-block')
+      .first()
+    await expect(targetBullet).toBeVisible({ timeout: 15_000 })
+    const targetNodeId = await targetBullet.getAttribute('data-target-node-id')
+    const mappedSourceBlock = page.locator(
+      `.source-block[data-target-node-id="${targetNodeId}"]`,
+    )
+    const sourceBlockId = await mappedSourceBlock.getAttribute('data-source-block-id')
+    const sourceCard = page.locator(`.source-block[data-source-block-id="${sourceBlockId}"]`)
+
+    const deletedSave = page.waitForResponse(
+      (response) =>
+        response.request().method() === 'PUT' &&
+        /\/api\/workspace\/\d+\/content$/.test(new URL(response.url()).pathname),
+    )
+    await targetBullet.locator('.bullet-delete-action').click()
+    await deletedSave
+    await expect(page.getByText('✓ 已保存', { exact: true })).toBeVisible({ timeout: 15_000 })
+
+    // One problem, two legitimate paths: restore or confirm the intentional omission.
+    const issueCard = page
+      .locator('.issue-card')
+      .filter({ hasText: '原文内容未进入当前简历' })
+      .first()
+    await expect(issueCard).toBeVisible()
+    await expect(issueCard.getByRole('button', { name: '恢复原文', exact: true })).toBeVisible()
+    const confirmAction = issueCard.getByRole('button', { name: '确认省略', exact: true })
+    await expect(confirmAction).toBeEnabled({ timeout: 15_000 })
+
+    const confirmResponse = page.waitForResponse(
+      (response) =>
+        response.request().method() === 'POST' &&
+        response.url().endsWith('/source-omissions/confirm'),
+    )
+    await confirmAction.click()
+    expect((await confirmResponse).ok()).toBe(true)
+    await expect(page.getByText('结构保真检查通过', { exact: true })).toBeVisible({
+      timeout: 15_000,
+    })
+    await expect(sourceCard.locator('.mapping-state')).toHaveText('已确认省略', { timeout: 15_000 })
+
+    await page.getByRole('button', { name: '预览 →', exact: true }).click()
+    await expect(page.locator('.preflight-section').getByText('可以导出', { exact: true })).toBeVisible(
+      { timeout: 45_000 },
+    )
+    await expect(page.getByRole('button', { name: '导出 PDF', exact: true })).toBeEnabled()
+  })
+
+  test('restores a whole deleted Project through the issue card', async ({ page }) => {
+    await registerAndLogin(page)
+    await uploadAndStartAnalysis(page, chineseJavaJobDescription, standardFixture)
+    await waitForAnalysis(page)
+    await openWorkspaceWithoutEditing(page)
+
+    const sourceReferenceResponse = page.waitForResponse(
+      (response) =>
+        response.request().method() === 'GET' &&
+        /\/api\/workspace\/\d+\/source-reference$/.test(new URL(response.url()).pathname),
+    )
+    await page.reload()
+    const sourcePayload = (await (await sourceReferenceResponse).json()) as {
+      data: {
+        sourceBlocks: Array<{
+          id: string
+          order: number
+          occurrenceIds: string[]
+          sourceSectionKind: string | null
+          sourceSectionId: string | null
+          sourceEntryId: string | null
+        }>
+      }
+    }
+
+    const projectSection = page.getByRole('group', { name: /项目经历，第 \d+ 项/ }).first()
+    await expect(projectSection).toBeVisible({ timeout: 15_000 })
+    const projectEntry = projectSection.locator('.editor-entry').first()
+    const sourceSectionId = await projectSection.getAttribute('data-section-id')
+    const sourceEntryId = await projectEntry.getAttribute('data-entry-id')
+    expect(sourceSectionId).toBeTruthy()
+    expect(sourceEntryId).toBeTruthy()
+
+    const projectBlocks = sourcePayload.data.sourceBlocks
+      .filter(
+        (block) =>
+          block.sourceSectionKind === 'PROJECT' &&
+          block.sourceSectionId === sourceSectionId &&
+          block.sourceEntryId === sourceEntryId,
+      )
+      .sort((left, right) => left.order - right.order)
+    const expectedProjectOccurrenceIds = [
+      ...new Set(projectBlocks.flatMap((block) => block.occurrenceIds)),
+    ]
+    expect(projectBlocks.length).toBeGreaterThan(1)
+
+    const deletedSave = page.waitForResponse(
+      (response) =>
+        response.request().method() === 'PUT' &&
+        /\/api\/workspace\/\d+\/content$/.test(new URL(response.url()).pathname),
+    )
+    await projectEntry.hover()
+    await projectEntry.locator('.entry-delete-action').click()
+    await page
+      .locator('.el-message-box__btns')
+      .getByRole('button', { name: '删除', exact: true })
+      .click()
+    expect((await deletedSave).ok()).toBe(true)
+    await expect(page.getByText('✓ 已保存', { exact: true })).toBeVisible({ timeout: 15_000 })
+    await expect(page.getByText(/结构保真：\d+ 项阻断/)).toBeVisible({ timeout: 15_000 })
+
+    // Preview diagnostic → 查看并处理 → the Project boundary card offers the whole-project restore.
+    const fidelityVerdict = page.waitForResponse(
+      (response) =>
+        response.request().method() === 'GET' &&
+        /\/api\/workspace\/\d+\/source-reference$/.test(new URL(response.url()).pathname),
+    )
+    await page.getByRole('button', { name: '预览 →', exact: true }).click()
+    expect((await fidelityVerdict).ok()).toBe(true)
+    await expect(page.getByTitle('简历 PDF 预览')).toBeVisible({ timeout: 45_000 })
+    await expect(page.getByRole('button', { name: '导出 PDF', exact: true })).toBeDisabled()
+    await page.locator('.resolve-fidelity-action').click()
+    await expect(page.locator('textarea').first()).toBeVisible({ timeout: 15_000 })
+
+    const projectCard = page
+      .locator('.issue-card')
+      .filter({ hasText: '项目未进入当前简历' })
+      .first()
+    await expect(projectCard).toBeVisible()
+    const restoreWholeProject = projectCard.getByRole('button', {
+      name: '恢复整个项目',
+      exact: true,
+    })
+    await expect(restoreWholeProject).toBeEnabled({ timeout: 15_000 })
+
+    const restoreResponse = page.waitForResponse(
+      (response) =>
+        response.request().method() === 'POST' &&
+        response.url().endsWith('/source-repairs/restore'),
+    )
+    await restoreWholeProject.click()
+    const restored = await restoreResponse
+    expect(restored.ok()).toBe(true)
+    const restoreBody = restored.request().postDataJSON() as { sourceOccurrenceIds: string[] }
+    expect(restoreBody.sourceOccurrenceIds).toEqual(expectedProjectOccurrenceIds)
+    const restorePayload = (await restored.json()) as { data: { saved: boolean; revision: number } }
+    expect(restorePayload.data.saved).toBe(true)
+
+    // The whole frozen Project entry is back with its title and bullets, and the boundary blocker is gone.
+    const restoredEntry = page.locator(`.editor-entry[data-entry-id="${sourceEntryId}"]`)
+    await expect(restoredEntry).toBeVisible({ timeout: 15_000 })
+    await expect(restoredEntry.locator('.bullet-block').first()).toBeVisible()
+    await expect(page.getByText('结构保真检查通过', { exact: true })).toBeVisible({
+      timeout: 15_000,
+    })
+    expect(await page.locator('.issue-card').filter({ hasText: '项目未进入当前简历' }).count()).toBe(0)
+
+    // Fresh Preview for the restored revision enables Export.
+    const previewResponse = page.waitForResponse((response) =>
+      response.url().includes('/preview.pdf'),
+    )
+    await page.getByRole('button', { name: '预览 →', exact: true }).click()
+    await previewResponse
+    await expect(page.locator('.preflight-section').getByText('可以导出', { exact: true })).toBeVisible(
+      { timeout: 45_000 },
+    )
+    await expect(page.getByRole('button', { name: '导出 PDF', exact: true })).toBeEnabled()
   })
 })

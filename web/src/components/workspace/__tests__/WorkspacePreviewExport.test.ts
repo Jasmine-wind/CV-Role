@@ -423,4 +423,46 @@ describe('WorkspacePreviewExport', () => {
     expect(wrapper.text()).toContain('PDF response invalid')
     expect(button(wrapper, '导出 PDF').attributes('disabled')).toBeDefined()
   })
+
+  it('offers 查看并处理 for a needsReview preflight and only emits a navigation event', async () => {
+    previewMock.mockResolvedValue({
+      ...previewResult(),
+      preflight: { ...previewResult().preflight, needsReview: true },
+    })
+    const resolveFidelity = vi.fn()
+    const wrapper = mount(WorkspacePreviewExport, {
+      props: {
+        optimizationTaskId: 42,
+        revision: 3,
+        status: 'saved',
+        active: true,
+        onStale: staleHandler,
+        onResolveFidelity: resolveFidelity,
+      },
+    })
+    await flushPromises()
+
+    // PDF 仍然可见（Preview 是诊断工具），但导出被阻断且提供处理入口。
+    expect(wrapper.find('.preview-frame').exists()).toBe(true)
+    expect(button(wrapper, '导出 PDF').attributes('disabled')).toBeDefined()
+    const action = button(wrapper, '查看并处理')
+    expect(action).toBeTruthy()
+
+    const previewRequestsBefore = previewMock.mock.calls.length
+    await action.trigger('click')
+    await flushPromises()
+
+    expect(resolveFidelity).toHaveBeenCalledTimes(1)
+    // 只做导航：不重新渲染、不修改导出状态。
+    expect(previewMock).toHaveBeenCalledTimes(previewRequestsBefore)
+    expect(button(wrapper, '导出 PDF').attributes('disabled')).toBeDefined()
+  })
+
+  it('does not offer 查看并处理 when the preflight has no structure review', async () => {
+    const wrapper = mountComponent()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('可以导出')
+    expect(wrapper.findAll('button').some((item) => item.text().includes('查看并处理'))).toBe(false)
+  })
 })
