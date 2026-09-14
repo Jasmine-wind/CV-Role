@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -35,8 +37,14 @@ import com.winter.airesumeoptimizer.module.workspace.vo.WorkspaceContentSaveResu
 import com.winter.airesumeoptimizer.module.workspace.vo.WorkspaceContentVO;
 import java.nio.charset.StandardCharsets;
 import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
@@ -484,6 +492,30 @@ class WorkspaceContentServiceImplTest {
     }
 
     @Test
+    void ordinarySaveDropsMalformedConfirmationsInsteadOfNormalizingThemIntoAuthority() throws Exception {
+        ResumeDocumentDTO frozen = canonicalFrozenDocument();
+        String frozenJson = objectMapper.writeValueAsString(frozen);
+        sourceVersion.setStructuredContent(frozenJson);
+        task.setResumeInputSnapshot(frozenJson);
+        ResumeDocumentDTO current = objectMapper.readValue(frozenJson, ResumeDocumentDTO.class);
+        current.getSections().get(0).getEntries().get(0).setBullets(List.of());
+        current.setConfirmedSourceOmissionIds(List.of("occ-bullet", "occ-bullet"));
+        dbRevision.set(1L);
+        dbContent.set(objectMapper.writeValueAsString(current));
+
+        WorkspaceContentSaveResultVO duplicate = service.saveContent(
+                USER_ID, TASK_ID, saveRequest(1L, current));
+        assertThat(duplicate.getDocument().getConfirmedSourceOmissionIds()).isEmpty();
+
+        ResumeDocumentDTO whitespace = objectMapper.readValue(dbContent.get(), ResumeDocumentDTO.class);
+        whitespace.setConfirmedSourceOmissionIds(List.of(" occ-bullet"));
+        dbContent.set(objectMapper.writeValueAsString(whitespace));
+        WorkspaceContentSaveResultVO trimmed = service.saveContent(
+                USER_ID, TASK_ID, saveRequest(2L, whitespace));
+        assertThat(trimmed.getDocument().getConfirmedSourceOmissionIds()).isEmpty();
+    }
+
+    @Test
     void confirmAndUnconfirmIntentionalOmissionUseCasAndBringBlockerBack() throws Exception {
         ResumeDocumentDTO frozen = canonicalFrozenDocument();
         String frozenJson = objectMapper.writeValueAsString(frozen);
@@ -552,9 +584,38 @@ class WorkspaceContentServiceImplTest {
     }
 
     @Test
-    void projectOmissionExpandsOneRequestedOccurrenceToTheWholeFrozenEntryBoundary() throws Exception {
+    void projectOmissionExpandsOneRequestedOccurrenceToTheWholeFrozenProvenanceBoundary() throws Exception {
         ResumeDocumentDTO frozen = canonicalFrozenDocument();
         frozen.getSections().get(0).setKind("PROJECT");
+        List<String> order = new java.util.ArrayList<>(List.of(
+                "occ-section", "occ-entry", "occ-field", "occ-tech",
+                "occ-skill", "occ-description", "occ-bullet"));
+        Map<String, String> texts = new LinkedHashMap<>(Map.of(
+                "occ-section", "工作经历",
+                "occ-entry", "某公司 Java 开发",
+                "occ-field", "上海",
+                "occ-tech", "Spring Boot",
+                "occ-skill", "容量规划",
+                "occ-description", "保障高峰稳定性",
+                "occ-bullet", "负责订单服务开发"));
+        Map<String, String> primaryIds = new LinkedHashMap<>();
+        order.forEach(id -> primaryIds.put(id, id));
+        frozen.setSourceOccurrenceIds(order);
+        frozen.setSourceOccurrenceTexts(texts);
+        frozen.setSourceOccurrencePrimaryIds(primaryIds);
+        ResumeDocumentEntryDTO project = frozen.getSections().get(0).getEntries().get(0);
+        project.setLocation("上海");
+        project.setFieldSourceRefs(Map.of("location", ResumeSourceRefDTO.builder()
+                .text("上海").sourceOccurrenceIds(List.of("occ-field")).build()));
+        project.setTechStack(List.of("Spring Boot"));
+        project.setTechStackSourceRefs(List.of(ResumeSourceRefDTO.builder()
+                .text("Spring Boot").sourceOccurrenceIds(List.of("occ-tech")).build()));
+        project.setSkillItems(List.of("容量规划"));
+        project.setSkillItemSourceRefs(List.of(ResumeSourceRefDTO.builder()
+                .text("容量规划").sourceOccurrenceIds(List.of("occ-skill")).build()));
+        project.setSkillDescriptions(List.of("保障高峰稳定性"));
+        project.setSkillDescriptionSourceRefs(List.of(ResumeSourceRefDTO.builder()
+                .text("保障高峰稳定性").sourceOccurrenceIds(List.of("occ-description")).build()));
         String frozenJson = objectMapper.writeValueAsString(frozen);
         sourceVersion.setStructuredContent(frozenJson);
         task.setResumeInputSnapshot(frozenJson);
@@ -567,7 +628,8 @@ class WorkspaceContentServiceImplTest {
                 USER_ID, TASK_ID, new WorkspaceSourceOmissionRequestDTO(1L, List.of("occ-bullet")));
 
         assertThat(confirmed.getDocument().getConfirmedSourceOmissionIds())
-                .containsExactly("occ-entry", "occ-bullet");
+                .containsExactly("occ-entry", "occ-field", "occ-tech",
+                        "occ-skill", "occ-description", "occ-bullet");
         assertThat(service.getSourceReference(USER_ID, TASK_ID).fidelityIssues())
                 .extracting(issue -> issue.code()).doesNotContain("PROJECT_BOUNDARY_LOST");
 
@@ -628,6 +690,237 @@ class WorkspaceContentServiceImplTest {
     }
 
     @Test
+    void unconfirmRepairsMalformedPartialAliasStateAndDropsAllUnrelatedStaleIds() throws Exception {
+        ResumeDocumentDTO frozen = canonicalFrozenDocumentWithBullets("EXPERIENCE", 2, true);
+        String frozenJson = objectMapper.writeValueAsString(frozen);
+        sourceVersion.setStructuredContent(frozenJson);
+        task.setResumeInputSnapshot(frozenJson);
+        ResumeDocumentDTO omitted = objectMapper.readValue(frozenJson, ResumeDocumentDTO.class);
+        omitted.getSections().get(0).getEntries().get(0).setBullets(List.of());
+        omitted.setConfirmedSourceOmissionIds(List.of(
+                "occ-bullet-alias", "occ-bullet-alias", "occ-entry", "unknown-stale"));
+        dbRevision.set(1L);
+        dbContent.set(objectMapper.writeValueAsString(omitted));
+        assertThat(service.getSourceReference(USER_ID, TASK_ID).fidelityIssues())
+                .extracting(issue -> issue.code()).contains("CONFIRMED_OMISSION_INVALID");
+
+        WorkspaceContentSaveResultVO repaired = service.unconfirmSourceOmissions(
+                USER_ID, TASK_ID, new WorkspaceSourceOmissionRequestDTO(
+                        1L, List.of("occ-bullet")));
+
+        assertThat(repaired.isSaved()).isTrue();
+        assertThat(repaired.getRevision()).isEqualTo(2L);
+        assertThat(repaired.getDocument().getConfirmedSourceOmissionIds()).isEmpty();
+        assertThat(service.getSourceReference(USER_ID, TASK_ID).fidelityIssues())
+                .extracting(issue -> issue.code())
+                .contains("SOURCE_CONTENT_UNMAPPED")
+                .doesNotContain("CONFIRMED_OMISSION_INVALID");
+        verify(resumeVersionMapper, times(1)).update(isNull(), any(UpdateWrapper.class));
+    }
+
+    @Test
+    void unconfirmCanRemoveAnOrphanOnlyTaskLocalStaleValueWithoutGrantingItAuthority() throws Exception {
+        ResumeDocumentDTO frozen = canonicalFrozenDocument();
+        String frozenJson = objectMapper.writeValueAsString(frozen);
+        sourceVersion.setStructuredContent(frozenJson);
+        task.setResumeInputSnapshot(frozenJson);
+        ResumeDocumentDTO current = objectMapper.readValue(frozenJson, ResumeDocumentDTO.class);
+        current.setConfirmedSourceOmissionIds(List.of("unknown-stale"));
+        dbRevision.set(1L);
+        dbContent.set(objectMapper.writeValueAsString(current));
+
+        WorkspaceContentSaveResultVO result = service.unconfirmSourceOmissions(
+                USER_ID, TASK_ID, new WorkspaceSourceOmissionRequestDTO(
+                        1L, List.of("unknown-stale")));
+
+        assertThat(result.isSaved()).isTrue();
+        assertThat(result.getDocument().getConfirmedSourceOmissionIds()).isEmpty();
+        assertThat(dbRevision.get()).isEqualTo(2L);
+        verify(resumeVersionMapper, times(1)).update(isNull(), any(UpdateWrapper.class));
+    }
+
+    @Test
+    void unconfirmRepairsARequestedKnownConfirmationThatBecameMappedAndIneligible() throws Exception {
+        ResumeDocumentDTO frozen = canonicalFrozenDocument();
+        String frozenJson = objectMapper.writeValueAsString(frozen);
+        sourceVersion.setStructuredContent(frozenJson);
+        task.setResumeInputSnapshot(frozenJson);
+        ResumeDocumentDTO stale = objectMapper.readValue(frozenJson, ResumeDocumentDTO.class);
+        stale.setConfirmedSourceOmissionIds(List.of("occ-bullet", "unknown-stale"));
+        dbRevision.set(1L);
+        dbContent.set(objectMapper.writeValueAsString(stale));
+
+        WorkspaceContentSaveResultVO repaired = service.unconfirmSourceOmissions(
+                USER_ID, TASK_ID, new WorkspaceSourceOmissionRequestDTO(1L, List.of("occ-bullet")));
+
+        assertThat(repaired.isSaved()).isTrue();
+        assertThat(repaired.getDocument().getConfirmedSourceOmissionIds()).isEmpty();
+        assertThat(service.getSourceReference(USER_ID, TASK_ID).exportBlocked()).isFalse();
+        verify(resumeVersionMapper, times(1)).update(isNull(), any(UpdateWrapper.class));
+    }
+
+    @Test
+    void confirmCanonicalizesExistingStateWithoutPromotingAnUnrelatedPartialAlias() throws Exception {
+        ResumeDocumentDTO frozen = canonicalFrozenDocumentWithBullets("EXPERIENCE", 4, true);
+        String frozenJson = objectMapper.writeValueAsString(frozen);
+        sourceVersion.setStructuredContent(frozenJson);
+        task.setResumeInputSnapshot(frozenJson);
+        ResumeDocumentDTO omitted = objectMapper.readValue(frozenJson, ResumeDocumentDTO.class);
+        ResumeDocumentEntryDTO entry = omitted.getSections().get(0).getEntries().get(0);
+        ResumeDocumentBulletDTO ambiguous = ResumeDocumentBulletDTO.builder()
+                .id("new-bullet").text("错误归属")
+                .sourceOccurrenceIds(List.of("occ-bullet-2")).build();
+        entry.setBullets(List.of(ambiguous));
+        omitted.setConfirmedSourceOmissionIds(List.of(
+                "occ-section",
+                "occ-bullet",
+                "occ-bullet-2", "occ-bullet-2-alias", "occ-bullet-2",
+                "occ-bullet-3", "occ-bullet-3-alias",
+                "unknown-stale"));
+        dbRevision.set(1L);
+        dbContent.set(objectMapper.writeValueAsString(omitted));
+
+        WorkspaceContentSaveResultVO confirmed = service.confirmSourceOmissions(
+                USER_ID, TASK_ID, new WorkspaceSourceOmissionRequestDTO(
+                        1L, List.of("occ-bullet-4-alias")));
+
+        assertThat(confirmed.getDocument().getConfirmedSourceOmissionIds()).containsExactly(
+                "occ-bullet-3", "occ-bullet-3-alias",
+                "occ-bullet-4", "occ-bullet-4-alias");
+        verify(resumeVersionMapper, times(1)).update(isNull(), any(UpdateWrapper.class));
+    }
+
+    @Test
+    void confirmValidatesEveryRequestedBlockBeforeTheSingleCasWrite() throws Exception {
+        ResumeDocumentDTO frozen = canonicalFrozenDocumentWithBullets("EXPERIENCE", 3, false);
+        String frozenJson = objectMapper.writeValueAsString(frozen);
+        sourceVersion.setStructuredContent(frozenJson);
+        task.setResumeInputSnapshot(frozenJson);
+        ResumeDocumentDTO mixed = objectMapper.readValue(frozenJson, ResumeDocumentDTO.class);
+        ResumeDocumentEntryDTO entry = mixed.getSections().get(0).getEntries().get(0);
+        ResumeDocumentBulletDTO ambiguous = ResumeDocumentBulletDTO.builder()
+                .id("new-bullet").text("错误归属")
+                .sourceOccurrenceIds(List.of("occ-bullet-2")).build();
+        entry.setBullets(List.of(ambiguous, entry.getBullets().get(2)));
+        dbRevision.set(1L);
+        dbContent.set(objectMapper.writeValueAsString(mixed));
+
+        assertThatThrownBy(() -> service.confirmSourceOmissions(
+                USER_ID, TASK_ID, new WorkspaceSourceOmissionRequestDTO(
+                        1L, List.of("occ-bullet", "unknown"))))
+                .isInstanceOf(BusinessException.class);
+        assertThatThrownBy(() -> service.confirmSourceOmissions(
+                USER_ID, TASK_ID, new WorkspaceSourceOmissionRequestDTO(
+                        1L, List.of("occ-bullet", "occ-bullet-2"))))
+                .isInstanceOf(BusinessException.class);
+        assertThatThrownBy(() -> service.confirmSourceOmissions(
+                USER_ID, TASK_ID, new WorkspaceSourceOmissionRequestDTO(
+                        1L, List.of("occ-bullet", "occ-bullet-3"))))
+                .isInstanceOf(BusinessException.class);
+
+        assertThat(dbRevision.get()).isEqualTo(1L);
+        verify(resumeVersionMapper, never()).update(isNull(), any(UpdateWrapper.class));
+    }
+
+    @Test
+    void unconfirmValidatesTheWholeBatchBeforeAnyCasWrite() throws Exception {
+        ResumeDocumentDTO frozen = canonicalFrozenDocumentWithBullets("EXPERIENCE", 2, true);
+        String frozenJson = objectMapper.writeValueAsString(frozen);
+        sourceVersion.setStructuredContent(frozenJson);
+        task.setResumeInputSnapshot(frozenJson);
+        ResumeDocumentDTO omitted = objectMapper.readValue(frozenJson, ResumeDocumentDTO.class);
+        omitted.getSections().get(0).getEntries().get(0).setBullets(List.of());
+        omitted.setConfirmedSourceOmissionIds(List.of(
+                "occ-bullet", "occ-bullet-alias",
+                "occ-bullet-2", "occ-bullet-2-alias"));
+        dbRevision.set(1L);
+        dbContent.set(objectMapper.writeValueAsString(omitted));
+
+        assertThatThrownBy(() -> service.unconfirmSourceOmissions(
+                USER_ID, TASK_ID, new WorkspaceSourceOmissionRequestDTO(
+                        1L, List.of("occ-bullet", "unknown-not-persisted"))))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("不属于当前冻结简历");
+
+        assertThat(dbRevision.get()).isEqualTo(1L);
+        assertThat(objectMapper.readValue(dbContent.get(), ResumeDocumentDTO.class)
+                .getConfirmedSourceOmissionIds()).containsExactly(
+                        "occ-bullet", "occ-bullet-alias",
+                        "occ-bullet-2", "occ-bullet-2-alias");
+        verify(resumeVersionMapper, never()).update(isNull(), any(UpdateWrapper.class));
+    }
+
+    @Test
+    void confirmOfMultipleValidAliasBlocksUsesExactlyOneCas() throws Exception {
+        ResumeDocumentDTO frozen = canonicalFrozenDocumentWithBullets("EXPERIENCE", 2, true);
+        String frozenJson = objectMapper.writeValueAsString(frozen);
+        sourceVersion.setStructuredContent(frozenJson);
+        task.setResumeInputSnapshot(frozenJson);
+        ResumeDocumentDTO omitted = objectMapper.readValue(frozenJson, ResumeDocumentDTO.class);
+        omitted.getSections().get(0).getEntries().get(0).setBullets(List.of());
+        dbRevision.set(1L);
+        dbContent.set(objectMapper.writeValueAsString(omitted));
+
+        WorkspaceContentSaveResultVO confirmed = service.confirmSourceOmissions(
+                USER_ID, TASK_ID, new WorkspaceSourceOmissionRequestDTO(
+                        1L, List.of("occ-bullet-alias", "occ-bullet-2")));
+
+        assertThat(confirmed.getDocument().getConfirmedSourceOmissionIds()).containsExactly(
+                "occ-bullet", "occ-bullet-alias", "occ-bullet-2", "occ-bullet-2-alias");
+        assertThat(confirmed.getRevision()).isEqualTo(2L);
+        verify(resumeVersionMapper, times(1)).update(isNull(), any(UpdateWrapper.class));
+    }
+
+    @Test
+    void unconfirmOfMultipleBlocksUsesOneCasAndRestoresEverySourceBlocker() throws Exception {
+        ResumeDocumentDTO frozen = canonicalFrozenDocumentWithBullets("EXPERIENCE", 2, true);
+        String frozenJson = objectMapper.writeValueAsString(frozen);
+        sourceVersion.setStructuredContent(frozenJson);
+        task.setResumeInputSnapshot(frozenJson);
+        ResumeDocumentDTO omitted = objectMapper.readValue(frozenJson, ResumeDocumentDTO.class);
+        omitted.getSections().get(0).getEntries().get(0).setBullets(List.of());
+        omitted.setConfirmedSourceOmissionIds(List.of(
+                "occ-bullet", "occ-bullet-alias", "occ-bullet-2", "occ-bullet-2-alias"));
+        dbRevision.set(1L);
+        dbContent.set(objectMapper.writeValueAsString(omitted));
+
+        WorkspaceContentSaveResultVO unconfirmed = service.unconfirmSourceOmissions(
+                USER_ID, TASK_ID, new WorkspaceSourceOmissionRequestDTO(
+                        1L, List.of("occ-bullet-alias", "occ-bullet-2")));
+
+        assertThat(unconfirmed.getDocument().getConfirmedSourceOmissionIds()).isEmpty();
+        assertThat(service.getSourceReference(USER_ID, TASK_ID).fidelityIssues())
+                .filteredOn(issue -> "SOURCE_CONTENT_UNMAPPED".equals(issue.code()))
+                .hasSize(2);
+        verify(resumeVersionMapper, times(1)).update(isNull(), any(UpdateWrapper.class));
+    }
+
+    @Test
+    void partialProjectUnconfirmExpandsToTheWholeEntryAndRestoresBoundaryBlocker() throws Exception {
+        ResumeDocumentDTO frozen = canonicalFrozenDocumentWithBullets("PROJECT", 2, true);
+        String frozenJson = objectMapper.writeValueAsString(frozen);
+        sourceVersion.setStructuredContent(frozenJson);
+        task.setResumeInputSnapshot(frozenJson);
+        ResumeDocumentDTO omitted = objectMapper.readValue(frozenJson, ResumeDocumentDTO.class);
+        omitted.getSections().get(0).setEntries(List.of());
+        // Persisted legacy state is only a partial Project boundary. The requested physical alias is
+        // a different block in that same server-owned entry, so unconfirm must still repair the whole unit.
+        omitted.setConfirmedSourceOmissionIds(List.of("occ-entry"));
+        dbRevision.set(1L);
+        dbContent.set(objectMapper.writeValueAsString(omitted));
+
+        WorkspaceContentSaveResultVO unconfirmed = service.unconfirmSourceOmissions(
+                USER_ID, TASK_ID, new WorkspaceSourceOmissionRequestDTO(
+                        1L, List.of("occ-bullet-2-alias")));
+
+        assertThat(unconfirmed.getDocument().getConfirmedSourceOmissionIds()).isEmpty();
+        assertThat(service.getSourceReference(USER_ID, TASK_ID).fidelityIssues())
+                .extracting(issue -> issue.code())
+                .contains("PROJECT_BOUNDARY_LOST", "SOURCE_CONTENT_UNMAPPED");
+        verify(resumeVersionMapper, times(1)).update(isNull(), any(UpdateWrapper.class));
+    }
+
+    @Test
     void omissionMutationRejectsStaleRevisionAndSameRevisionRaceHasOneCasWinner() throws Exception {
         ResumeDocumentDTO frozen = canonicalFrozenDocument();
         String frozenJson = objectMapper.writeValueAsString(frozen);
@@ -657,6 +950,49 @@ class WorkspaceContentServiceImplTest {
     }
 
     @Test
+    void concurrentOmissionRequestsOnTheSameRevisionHaveExactlyOneCasWinner() throws Exception {
+        ResumeDocumentDTO frozen = canonicalFrozenDocument();
+        String frozenJson = objectMapper.writeValueAsString(frozen);
+        sourceVersion.setStructuredContent(frozenJson);
+        task.setResumeInputSnapshot(frozenJson);
+        ResumeDocumentDTO omitted = objectMapper.readValue(frozenJson, ResumeDocumentDTO.class);
+        omitted.getSections().get(0).getEntries().get(0).setBullets(List.of());
+        dbRevision.set(1L);
+        dbContent.set(objectMapper.writeValueAsString(omitted));
+
+        CountDownLatch bothAtCas = new CountDownLatch(2);
+        when(resumeVersionMapper.update(isNull(), any(UpdateWrapper.class))).thenAnswer(invocation -> {
+            bothAtCas.countDown();
+            if (!bothAtCas.await(5, TimeUnit.SECONDS)) {
+                throw new AssertionError("both omission requests did not reach the CAS boundary");
+            }
+            synchronized (dbRevision) {
+                return simulateConditionalUpdate(
+                        invocation.getArgument(1), TARGET_VERSION_ID, dbRevision, dbContent);
+            }
+        });
+
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<WorkspaceContentSaveResultVO> first = executor.submit(() -> service.confirmSourceOmissions(
+                    USER_ID, TASK_ID, new WorkspaceSourceOmissionRequestDTO(1L, List.of("occ-bullet"))));
+            Future<WorkspaceContentSaveResultVO> second = executor.submit(() -> service.confirmSourceOmissions(
+                    USER_ID, TASK_ID, new WorkspaceSourceOmissionRequestDTO(1L, List.of("occ-bullet"))));
+
+            List<WorkspaceContentSaveResultVO> results = List.of(
+                    first.get(10, TimeUnit.SECONDS), second.get(10, TimeUnit.SECONDS));
+            assertThat(results).filteredOn(WorkspaceContentSaveResultVO::isSaved).hasSize(1);
+            assertThat(results).filteredOn(WorkspaceContentSaveResultVO::isConflict).hasSize(1);
+            assertThat(dbRevision.get()).isEqualTo(2L);
+            assertThat(objectMapper.readValue(dbContent.get(), ResumeDocumentDTO.class)
+                    .getConfirmedSourceOmissionIds()).containsExactly("occ-bullet");
+            verify(resumeVersionMapper, times(2)).update(isNull(), any(UpdateWrapper.class));
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
     void confirmFailsClosedWhenFrozenManifestIsInvalid() throws Exception {
         ResumeDocumentDTO frozen = canonicalFrozenDocument();
         frozen.setSourceOccurrenceIds(List.of("occ-section", "occ-entry", "occ-bullet", "occ-bullet"));
@@ -677,26 +1013,33 @@ class WorkspaceContentServiceImplTest {
     }
 
     @Test
-    void ordinarySaveRejectsResurrectionOfDeletedFrozenNodeId() throws Exception {
+    void ordinarySaveRejectsResurrectionOfDeletedFrozenNodeIdAcrossRealRevisions() throws Exception {
         ResumeDocumentDTO frozen = canonicalFrozenDocument();
         String frozenJson = objectMapper.writeValueAsString(frozen);
         sourceVersion.setStructuredContent(frozenJson);
+        targetVersion.setStructuredContent(frozenJson);
         task.setResumeInputSnapshot(frozenJson);
-        ResumeDocumentDTO current = objectMapper.readValue(frozenJson, ResumeDocumentDTO.class);
-        current.getSections().get(0).getEntries().get(0).setBullets(List.of());
-        dbRevision.set(1L);
-        dbContent.set(objectMapper.writeValueAsString(current));
+        dbContent.set(frozenJson);
 
-        ResumeDocumentDTO submitted = objectMapper.readValue(dbContent.get(), ResumeDocumentDTO.class);
-        submitted.getSections().get(0).getEntries().get(0).setBullets(List.of(
+        ResumeDocumentDTO deletion = objectMapper.readValue(frozenJson, ResumeDocumentDTO.class);
+        deletion.getSections().get(0).getEntries().get(0).setBullets(List.of());
+        WorkspaceContentSaveResultVO deleted = service.saveContent(
+                USER_ID, TASK_ID, saveRequest(0L, deletion));
+        assertThat(deleted.isSaved()).isTrue();
+        assertThat(deleted.getRevision()).isEqualTo(1L);
+
+        ResumeDocumentDTO recreated = objectMapper.readValue(dbContent.get(), ResumeDocumentDTO.class);
+        recreated.getSections().get(0).getEntries().get(0).setBullets(List.of(
                 ResumeDocumentBulletDTO.builder()
                         .id("s-1-e-1-b-1").text("伪造重建的来源节点").build()));
 
         assertThatThrownBy(() -> service.saveContent(
-                USER_ID, TASK_ID, saveRequest(1L, submitted)))
+                USER_ID, TASK_ID, saveRequest(1L, recreated)))
                 .isInstanceOfSatisfying(BusinessException.class,
                         exception -> assertThat(exception.getCode()).isEqualTo(400));
         assertThat(dbRevision.get()).isEqualTo(1L);
+        assertThat(dbContent.get()).doesNotContain("伪造重建的来源节点", "s-1-e-1-b-1");
+        verify(resumeVersionMapper, times(1)).update(isNull(), any(UpdateWrapper.class));
     }
 
     @Test
@@ -1019,6 +1362,47 @@ class WorkspaceContentServiceImplTest {
                                 .build()))
                         .build()))
                 .build();
+    }
+
+    private ResumeDocumentDTO canonicalFrozenDocumentWithBullets(
+            String sectionKind, int bulletCount, boolean includeAliases) {
+        ResumeDocumentDTO document = canonicalFrozenDocument();
+        document.getSections().get(0).setKind(sectionKind);
+
+        List<String> occurrenceIds = new java.util.ArrayList<>(List.of("occ-section", "occ-entry"));
+        Map<String, String> occurrenceTexts = new LinkedHashMap<>();
+        occurrenceTexts.put("occ-section", "工作经历");
+        occurrenceTexts.put("occ-entry", "某公司 Java 开发");
+        Map<String, String> primaryIds = new LinkedHashMap<>();
+        primaryIds.put("occ-section", "occ-section");
+        primaryIds.put("occ-entry", "occ-entry");
+        List<ResumeDocumentBulletDTO> bullets = new java.util.ArrayList<>();
+        for (int index = 1; index <= bulletCount; index++) {
+            String suffix = index == 1 ? "" : "-" + index;
+            String occurrenceId = "occ-bullet" + suffix;
+            String aliasId = occurrenceId + "-alias";
+            String text = "职责 " + index;
+            List<String> bulletOccurrences = includeAliases
+                    ? List.of(occurrenceId, aliasId) : List.of(occurrenceId);
+            occurrenceIds.addAll(bulletOccurrences);
+            occurrenceTexts.put(occurrenceId, text);
+            primaryIds.put(occurrenceId, occurrenceId);
+            if (includeAliases) {
+                occurrenceTexts.put(aliasId, text);
+                primaryIds.put(aliasId, occurrenceId);
+            }
+            ResumeSourceRefDTO sourceRef = ResumeSourceRefDTO.builder()
+                    .text(text).sourceOccurrenceIds(bulletOccurrences).build();
+            bullets.add(ResumeDocumentBulletDTO.builder()
+                    .id("s-1-e-1-b-" + index).text(text)
+                    .sourceRef(sourceRef).sourceOccurrenceIds(bulletOccurrences)
+                    .build());
+        }
+        document.setSourceOccurrenceIds(occurrenceIds);
+        document.setSourceOccurrenceTexts(occurrenceTexts);
+        document.setSourceOccurrencePrimaryIds(primaryIds);
+        document.getSections().get(0).getEntries().get(0).setBullets(bullets);
+        return document;
     }
 
     private WorkspaceContentSaveRequestDTO saveRequest(long expectedRevision, ResumeDocumentDTO document) {

@@ -126,6 +126,92 @@ class ResumeDocumentConverterImplTest {
     }
 
     @Test
+    void normalizeWorkspaceSaveShouldRejectDeletedFrozenIdRecreatedUnderDifferentParent() {
+        ResumeDocumentDTO frozen = documentWithProvenance();
+        ResumeDocumentDTO current = converter.normalize(frozen);
+        current.getSections().get(0).getEntries().get(0).getBullets().clear();
+        current.getSections().get(0).getEntries().add(ResumeDocumentEntryDTO.builder()
+                .id("new-entry")
+                .organization("用户新增项目")
+                .bullets(new ArrayList<>())
+                .build());
+        ResumeDocumentDTO submitted = converter.normalize(current);
+        submitted.getSections().get(0).getEntries().get(1).getBullets().add(
+                ResumeDocumentBulletDTO.builder()
+                        .id("s-1-e-1-b-1")
+                        .text("尝试复用已删除来源 ID")
+                        .build());
+
+        assertThatThrownBy(() -> converter.normalizeWorkspaceSave(submitted, current, frozen))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("已删除的来源节点不能复用原 ID");
+    }
+
+    @Test
+    void normalizeWorkspaceSaveShouldRejectDeletedFrozenIdRecreatedAsDifferentNodeType() {
+        ResumeDocumentDTO frozen = documentWithProvenance();
+        ResumeDocumentDTO current = converter.normalize(frozen);
+        current.getSections().get(0).getEntries().get(0).getBullets().clear();
+        ResumeDocumentDTO submitted = converter.normalize(current);
+        submitted.getBasics().getContacts().add(ResumeDocumentContactDTO.builder()
+                .id("s-1-e-1-b-1")
+                .type("EMAIL")
+                .label("邮箱")
+                .value("new@example.test")
+                .build());
+
+        assertThatThrownBy(() -> converter.normalizeWorkspaceSave(submitted, current, frozen))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("已删除的来源节点不能复用原 ID");
+    }
+
+    @Test
+    void normalizeWorkspaceSaveShouldRejectWhitespaceDisguisedFrozenIdResurrection() {
+        ResumeDocumentDTO frozen = documentWithProvenance();
+        ResumeDocumentDTO current = converter.normalize(frozen);
+        current.getSections().get(0).getEntries().get(0).getBullets().clear();
+        ResumeDocumentDTO submitted = converter.normalize(current);
+        submitted.getSections().get(0).getEntries().get(0).getBullets().add(
+                ResumeDocumentBulletDTO.builder()
+                        .id(" s-1-e-1-b-1 ")
+                        .text("尝试用空白绕过冻结 ID 检查")
+                        .build());
+
+        assertThatThrownBy(() -> converter.normalizeWorkspaceSave(submitted, current, frozen))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("节点 ID 格式不正确");
+    }
+
+    @Test
+    void normalizeWorkspaceSaveShouldKeepGenuineNewIdAcrossRepeatedSavesWithoutProvenance() {
+        ResumeDocumentDTO frozen = documentWithProvenance();
+        ResumeDocumentDTO firstSubmission = converter.normalize(frozen);
+        firstSubmission.getSections().get(0).getEntries().get(0).getBullets().add(
+                ResumeDocumentBulletDTO.builder()
+                        .id("new-bullet")
+                        .text("用户新增内容")
+                        .sourceOccurrenceIds(List.of("occ-bullet"))
+                        .sourceRef(sourceRef("occ-bullet", "伪造来源"))
+                        .build());
+        ResumeDocumentDTO firstSaved = converter.normalizeWorkspaceSave(firstSubmission, frozen, frozen);
+        ResumeDocumentDTO secondSubmission = converter.normalize(firstSaved);
+        ResumeDocumentBulletDTO newBullet = secondSubmission.getSections().get(0)
+                .getEntries().get(0).getBullets().get(1);
+        newBullet.setText("用户再次编辑新增内容");
+        newBullet.setSourceOccurrenceIds(List.of("occ-bullet"));
+        newBullet.setSourceRef(sourceRef("occ-bullet", "再次伪造来源"));
+
+        ResumeDocumentDTO secondSaved = converter.normalizeWorkspaceSave(secondSubmission, firstSaved, frozen);
+
+        ResumeDocumentBulletDTO repeatedlySaved = secondSaved.getSections().get(0)
+                .getEntries().get(0).getBullets().get(1);
+        assertThat(repeatedlySaved.getId()).isEqualTo("new-bullet");
+        assertThat(repeatedlySaved.getText()).isEqualTo("用户再次编辑新增内容");
+        assertThat(repeatedlySaved.getSourceOccurrenceIds()).isNullOrEmpty();
+        assertThat(repeatedlySaved.getSourceRef()).isNull();
+    }
+
+    @Test
     void normalizeShouldRejectDuplicateIds() {
         ResumeDocumentDTO document = validDocument();
         document.getBasics().getContacts().get(0).setId("dup");

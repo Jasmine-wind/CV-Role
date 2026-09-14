@@ -3,7 +3,9 @@ package com.winter.airesumeoptimizer.module.workspace.service.impl;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.winter.airesumeoptimizer.module.resume.dto.ResumeSourceRefDTO;
+import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentBasicsDTO;
 import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentBulletDTO;
+import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentContactDTO;
 import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentDTO;
 import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentEntryDTO;
 import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentSectionDTO;
@@ -301,6 +303,7 @@ class WorkspaceSourceReferenceAssemblerImplTest {
         ResumeDocumentEntryDTO second = entry("e-2", "项目二",
                 List.of(bullet("b-2", "项目二职责", List.of("occ-p2-bullet"))));
         second.setSourceOccurrenceIds(List.of("occ-p2"));
+        second.setRole("项目负责人");
         second.setFieldSourceRefs(Map.of("role", ResumeSourceRefDTO.builder()
                 .text("项目负责人").sourceOccurrenceIds(List.of("occ-p2-field")).build()));
         source.getSections().get(0).setEntries(List.of(first, second));
@@ -415,6 +418,495 @@ class WorkspaceSourceReferenceAssemblerImplTest {
     }
 
     @Test
+    void rejectsTrimmedManifestIdsAndNonExactAliasText() {
+        ResumeDocumentDTO trimmedId = document(List.of(" occ-heading", "occ-body"),
+                Map.of(" occ-heading", "项目经历", "occ-body", "原始职责"),
+                List.of(bullet("b-1", "原始职责", List.of("occ-body"))));
+        trimmedId.getSections().get(0).setSourceOccurrenceIds(List.of(" occ-heading"));
+        trimmedId.getSections().get(0).getEntries().get(0)
+                .setSourceOccurrenceIds(List.of(" occ-heading", "occ-body"));
+
+        assertManifestInvalid(trimmedId);
+
+        ResumeDocumentDTO normalizedAlias = document(List.of("occ-heading", "occ-body", "occ-body-alias"),
+                Map.of("occ-heading", "项目经历", "occ-body", "原始 职责", "occ-body-alias", " 原始  职责 "),
+                List.of(bullet("b-1", "原始 职责", List.of("occ-body", "occ-body-alias"))));
+        normalizedAlias.getSourceOccurrencePrimaryIds().put("occ-body-alias", "occ-body");
+
+        assertManifestInvalid(normalizedAlias);
+    }
+
+    @Test
+    void manifestOrderTextsAndPrimaryKeysMustMatchAndTextsMustBeNonBlank() {
+        ResumeDocumentDTO missingText = document(List.of("occ-heading", "occ-body"),
+                Map.of("occ-heading", "项目经历", "occ-body", "原始职责"),
+                List.of(bullet("b-1", "原始职责", List.of("occ-body"))));
+        missingText.getSourceOccurrenceTexts().remove("occ-body");
+        assertManifestInvalid(missingText);
+
+        ResumeDocumentDTO extraPrimary = document(List.of("occ-heading", "occ-body"),
+                Map.of("occ-heading", "项目经历", "occ-body", "原始职责"),
+                List.of(bullet("b-1", "原始职责", List.of("occ-body"))));
+        extraPrimary.getSourceOccurrencePrimaryIds().put("unknown", "unknown");
+        assertManifestInvalid(extraPrimary);
+
+        ResumeDocumentDTO blankText = document(List.of("occ-heading", "occ-body"),
+                Map.of("occ-heading", "项目经历", "occ-body", " "),
+                List.of(bullet("b-1", "原始职责", List.of("occ-body"))));
+        assertManifestInvalid(blankText);
+    }
+
+    @Test
+    void aliasResolutionUsesOneCanonicalPrimaryAndPreservesPhysicalOrder() {
+        ResumeDocumentDTO source = document(List.of(
+                        "occ-heading", "occ-body-alias", "occ-body"),
+                Map.of("occ-heading", "项目经历", "occ-body", "原始职责",
+                        "occ-body-alias", "原始职责"),
+                List.of(bullet("b-1", "原始职责", List.of("occ-body-alias", "occ-body"))));
+        source.getSourceOccurrencePrimaryIds().put("occ-body-alias", "occ-body");
+
+        WorkspaceSourceReferenceVO result = assembler.assemble(
+                1L, 2L, 3L, 1L, "resume.pdf", true, source, source);
+
+        assertThat(result.sourceBlocks()).filteredOn(block -> "occ-body".equals(block.id()))
+                .singleElement().satisfies(block -> {
+                    assertThat(block.occurrenceIds()).containsExactly("occ-body-alias", "occ-body");
+                    assertThat(block.status()).isEqualTo(WorkspaceSourceMappingStatus.EXACT);
+                });
+        assertThat(result.fidelityIssues()).extracting(WorkspaceSourceReferenceVO.FidelityIssue::code)
+                .doesNotContain("SOURCE_MANIFEST_INVALID");
+    }
+
+    @Test
+    void rejectsPrimaryChainsCyclesAndRootsOutsideTheManifest() {
+        ResumeDocumentDTO chain = document(List.of("occ-heading", "occ-a", "occ-b"),
+                Map.of("occ-heading", "项目经历", "occ-a", "原始职责", "occ-b", "原始职责"),
+                List.of(bullet("b-1", "原始职责", List.of("occ-a", "occ-b"))));
+        chain.getSourceOccurrencePrimaryIds().put("occ-a", "occ-b");
+        chain.getSourceOccurrencePrimaryIds().put("occ-b", "occ-heading");
+        assertManifestInvalid(chain);
+
+        ResumeDocumentDTO cycle = document(List.of("occ-heading", "occ-a", "occ-b"),
+                Map.of("occ-heading", "项目经历", "occ-a", "原始职责", "occ-b", "原始职责"),
+                List.of(bullet("b-1", "原始职责", List.of("occ-a", "occ-b"))));
+        cycle.getSourceOccurrencePrimaryIds().put("occ-a", "occ-b");
+        cycle.getSourceOccurrencePrimaryIds().put("occ-b", "occ-a");
+        assertManifestInvalid(cycle);
+
+        ResumeDocumentDTO outside = document(List.of("occ-heading", "occ-body"),
+                Map.of("occ-heading", "项目经历", "occ-body", "原始职责"),
+                List.of(bullet("b-1", "原始职责", List.of("occ-body"))));
+        outside.getSourceOccurrencePrimaryIds().put("occ-body", "unknown");
+        assertManifestInvalid(outside);
+    }
+
+    @Test
+    void duplicateOrBlankOccurrenceIdsAreInvalidInsteadOfBeingNormalizedAway() {
+        ResumeDocumentDTO source = document(List.of("occ-heading", "occ-body"),
+                Map.of("occ-heading", "项目经历", "occ-body", "原始职责"),
+                List.of(bullet("b-1", "原始职责", List.of("occ-body"))));
+
+        for (List<String> ids : List.of(
+                List.of("occ-body", "occ-body"),
+                List.of("occ-body", " "),
+                List.of(" occ-body"))) {
+            ResumeDocumentDTO target = document(List.of(), Map.of(),
+                    List.of(bullet("b-1", "原始职责", ids)));
+
+            WorkspaceSourceReferenceVO result = assembler.assemble(
+                    1L, 2L, 3L, 1L, "resume.pdf", true, source, target);
+
+            assertThat(result.mappings()).filteredOn(mapping -> "b-1".equals(mapping.bulletId()))
+                    .extracting(WorkspaceSourceReferenceVO.TargetMapping::status)
+                    .containsExactly(WorkspaceSourceMappingStatus.AMBIGUOUS);
+            assertThat(result.fidelityIssues()).extracting(WorkspaceSourceReferenceVO.FidelityIssue::code)
+                    .contains("AMBIGUOUS_MAPPING");
+        }
+
+        source.getSections().get(0).getEntries().get(0).setSourceOccurrenceIds(List.of("occ-body"));
+        ResumeDocumentDTO duplicateEntryTarget = document(List.of(), Map.of(), List.of());
+        duplicateEntryTarget.getSections().get(0).getEntries().get(0)
+                .setSourceOccurrenceIds(List.of("occ-body", "occ-body"));
+        WorkspaceSourceReferenceVO duplicateEntry = assembler.assemble(
+                1L, 2L, 3L, 1L, "resume.pdf", true, source, duplicateEntryTarget);
+        assertThat(duplicateEntry.mappings()).filteredOn(mapping -> "e-1".equals(mapping.entryId()))
+                .extracting(WorkspaceSourceReferenceVO.TargetMapping::status)
+                .containsExactly(WorkspaceSourceMappingStatus.AMBIGUOUS);
+    }
+
+    @Test
+    void sidecarRequiresExactTextAndIdsFromOnlyItsLogicalAliasGroup() {
+        ResumeDocumentDTO mismatchedText = sourceWithBodySidecar(ResumeSourceRefDTO.builder()
+                .text(" 原始职责 ")
+                .sourceOccurrenceIds(List.of("occ-body"))
+                .page(1)
+                .build());
+        assertManifestInvalid(mismatchedText);
+
+        ResumeDocumentDTO unknownId = sourceWithBodySidecar(ResumeSourceRefDTO.builder()
+                .text("原始职责")
+                .sourceOccurrenceIds(List.of("occ-body", "unknown"))
+                .page(1)
+                .build());
+        assertManifestInvalid(unknownId);
+
+        ResumeDocumentDTO crossedGroup = sourceWithBodySidecar(ResumeSourceRefDTO.builder()
+                .text("原始职责")
+                .sourceOccurrenceIds(List.of("occ-body", "occ-heading"))
+                .page(1)
+                .build());
+        assertManifestInvalid(crossedGroup);
+    }
+
+    @Test
+    void frozenChildReferencesMustMatchRootTextAndOneLogicalGroup() {
+        ResumeDocumentDTO mismatchedText = document(List.of("occ-heading", "occ-body"),
+                Map.of("occ-heading", "项目经历", "occ-body", "原始职责"), List.of());
+        ResumeDocumentEntryDTO entry = entry("e-1", "OmniGateway", List.of());
+        entry.setFieldSourceRefs(Map.of("role", ResumeSourceRefDTO.builder()
+                .text("伪造职责").sourceOccurrenceIds(List.of("occ-body")).build()));
+        mismatchedText.getSections().get(0).setEntries(List.of(entry));
+        assertManifestInvalid(mismatchedText);
+
+        ResumeDocumentDTO crossedGroup = document(List.of("occ-heading", "occ-body"),
+                Map.of("occ-heading", "项目经历", "occ-body", "原始职责"), List.of());
+        ResumeDocumentEntryDTO crossedEntry = entry("e-1", "OmniGateway", List.of());
+        crossedEntry.setFieldSourceRefs(Map.of("role", ResumeSourceRefDTO.builder()
+                .text("原始职责").sourceOccurrenceIds(List.of("occ-body", "occ-heading")).build()));
+        crossedGroup.getSections().get(0).setEntries(List.of(crossedEntry));
+        assertManifestInvalid(crossedGroup);
+
+        ResumeDocumentDTO contradictoryPair = document(List.of("occ-heading", "occ-body"),
+                Map.of("occ-heading", "项目经历", "occ-body", "原始职责"), List.of());
+        ResumeDocumentEntryDTO contradictoryEntry = entry("e-1", "OmniGateway", List.of());
+        contradictoryEntry.setSourceOccurrenceIds(List.of("occ-heading"));
+        contradictoryEntry.setSourceRef(ref("原始职责", "occ-body"));
+        contradictoryPair.getSections().get(0).setEntries(List.of(contradictoryEntry));
+        assertManifestInvalid(contradictoryPair);
+
+        ResumeDocumentDTO unsupportedSlot = document(List.of("occ-heading", "occ-body"),
+                Map.of("occ-heading", "项目经历", "occ-body", "原始职责"), List.of());
+        ResumeDocumentEntryDTO unsupportedEntry = entry("e-1", "OmniGateway", List.of());
+        unsupportedEntry.setFieldSourceRefs(Map.of("forgedField", ref("原始职责", "occ-body")));
+        unsupportedSlot.getSections().get(0).setEntries(List.of(unsupportedEntry));
+        assertManifestInvalid(unsupportedSlot);
+
+        ResumeDocumentDTO unalignedList = document(List.of("occ-heading", "occ-body"),
+                Map.of("occ-heading", "项目经历", "occ-body", "原始职责"), List.of());
+        ResumeDocumentEntryDTO unalignedEntry = entry("e-1", "OmniGateway", List.of());
+        unalignedEntry.setTechStack(List.of());
+        unalignedEntry.setTechStackSourceRefs(List.of(ref("原始职责", "occ-body")));
+        unalignedList.getSections().get(0).setEntries(List.of(unalignedEntry));
+        assertManifestInvalid(unalignedList);
+    }
+
+    @Test
+    void multiOccurrenceFrozenReferencesAreValidatedAgainstTheOrderedRootSpan() {
+        ResumeDocumentDTO source = document(List.of("occ-heading", "occ-a", "occ-b"),
+                Map.of("occ-heading", "项目经历", "occ-a", "第一行", "occ-b", "第二行"), List.of());
+        ResumeDocumentEntryDTO entry = entry("e-1", "OmniGateway", List.of());
+        entry.setSourceRef(ResumeSourceRefDTO.builder()
+                .text("第一行\n第二行")
+                .sourceOccurrenceIds(List.of("occ-a", "occ-b"))
+                .build());
+        entry.setSourceOccurrenceIds(List.of("occ-a", "occ-b"));
+        source.getSections().get(0).setEntries(List.of(entry));
+
+        WorkspaceSourceReferenceVO result = assembler.assemble(
+                1L, 2L, 3L, 1L, "resume.pdf", true, source, source);
+
+        assertThat(result.fidelityIssues()).extracting(WorkspaceSourceReferenceVO.FidelityIssue::code)
+                .doesNotContain("SOURCE_MANIFEST_INVALID");
+
+        entry.setSourceRef(ResumeSourceRefDTO.builder()
+                .text("第二行\n第一行")
+                .sourceOccurrenceIds(List.of("occ-b", "occ-a"))
+                .build());
+        assertManifestInvalid(source);
+
+        ResumeDocumentDTO nonContiguous = document(
+                List.of("occ-heading", "occ-a", "occ-gap", "occ-b"),
+                Map.of("occ-heading", "项目经历", "occ-a", "第一行",
+                        "occ-gap", "中间行", "occ-b", "第二行"), List.of());
+        ResumeDocumentEntryDTO spanningEntry = entry("e-1", "OmniGateway", List.of());
+        spanningEntry.setSourceRef(ResumeSourceRefDTO.builder()
+                .text("第一行\n第二行")
+                .sourceOccurrenceIds(List.of("occ-a", "occ-b"))
+                .build());
+        spanningEntry.setSourceOccurrenceIds(List.of("occ-a", "occ-b"));
+        nonContiguous.getSections().get(0).setEntries(List.of(spanningEntry));
+        assertManifestInvalid(nonContiguous);
+    }
+
+    @Test
+    void duplicateTargetIdentityIsAmbiguousEvenWhenTheTextsDiffer() {
+        ResumeDocumentDTO source = document(List.of("occ-heading", "occ-body"),
+                Map.of("occ-heading", "项目经历", "occ-body", "原始职责"),
+                List.of(bullet("b-1", "原始职责", List.of("occ-body"))));
+        ResumeDocumentDTO target = document(List.of(), Map.of(), List.of(
+                bullet("b-1", "第一份内容", List.of("occ-body")),
+                bullet("b-1", "不同的第二份内容", List.of("occ-body"))));
+
+        WorkspaceSourceReferenceVO result = assembler.assemble(
+                1L, 2L, 3L, 1L, "resume.pdf", true, source, target);
+
+        assertThat(result.mappings()).filteredOn(mapping -> "b-1".equals(mapping.bulletId()))
+                .extracting(WorkspaceSourceReferenceVO.TargetMapping::status)
+                .containsOnly(WorkspaceSourceMappingStatus.AMBIGUOUS);
+        assertThat(result.fidelityIssues()).extracting(WorkspaceSourceReferenceVO.FidelityIssue::code)
+                .contains("AMBIGUOUS_MAPPING");
+        assertThat(result.exportBlocked()).isTrue();
+    }
+
+    @Test
+    void duplicateStableNodeIdentityIsInvalidRegardlessOfSectionKindOrNodeType() {
+        ResumeDocumentDTO source = document(List.of("occ-heading", "occ-body"),
+                Map.of("occ-heading", "项目经历", "occ-body", "原始职责"),
+                List.of(bullet("b-1", "原始职责", List.of("occ-body"))));
+        source.setSections(List.of(
+                source.getSections().get(0),
+                ResumeDocumentSectionDTO.builder()
+                        .id("s-1").kind("EXPERIENCE").title("工作经历").entries(List.of()).build()));
+
+        assertManifestInvalid(source);
+
+        ResumeDocumentDTO crossType = document(List.of("occ-heading", "occ-body"),
+                Map.of("occ-heading", "项目经历", "occ-body", "原始职责"),
+                List.of(bullet("shared-id", "原始职责", List.of("occ-body"))));
+        crossType.getSections().get(0).setId("shared-id");
+        assertManifestInvalid(crossType);
+
+        ResumeDocumentDTO contactCollision = document(List.of(
+                        "occ-heading", "occ-body", "occ-contact"),
+                Map.of("occ-heading", "项目经历", "occ-body", "原始职责",
+                        "occ-contact", "contact@example.test"),
+                List.of(bullet("b-1", "原始职责", List.of("occ-body"))));
+        contactCollision.getSections().get(0).setId("shared-contact-id");
+        contactCollision.setBasics(ResumeDocumentBasicsDTO.builder().contacts(List.of(
+                ResumeDocumentContactDTO.builder().id("shared-contact-id").type("EMAIL")
+                        .value("contact@example.test")
+                        .sourceOccurrenceIds(List.of("occ-contact")).build())).build());
+        assertManifestInvalid(contactCollision);
+    }
+
+    @Test
+    void multipleNonContactDeepestOwnersInvalidateTheWholeManifest() {
+        ResumeDocumentDTO source = document(List.of("occ-heading", "occ-body"),
+                Map.of("occ-heading", "项目经历", "occ-body", "原始职责"),
+                List.of(
+                        bullet("b-1", "原始职责上半段", List.of("occ-body")),
+                        bullet("b-2", "原始职责下半段", List.of("occ-body"))));
+
+        assertManifestInvalid(source);
+    }
+
+    @Test
+    void ownerlessManifestOccurrenceInvalidatesTheWholeManifest() {
+        ResumeDocumentDTO source = document(List.of("occ-heading", "occ-body", "occ-orphan"),
+                Map.of("occ-heading", "项目经历", "occ-body", "原始职责", "occ-orphan", "孤立原文"),
+                List.of(bullet("b-1", "原始职责", List.of("occ-body"))));
+
+        assertManifestInvalid(source);
+    }
+
+    @Test
+    void sourceSectionKindMustBeCanonicalAndTargetKindMustMatchExactly() {
+        ResumeDocumentDTO nonCanonicalSource = document(List.of("occ-heading", "occ-body"),
+                Map.of("occ-heading", "项目经历", "occ-body", "原始职责"),
+                List.of(bullet("b-1", "原始职责", List.of("occ-body"))));
+        nonCanonicalSource.getSections().get(0).setKind("project");
+        assertManifestInvalid(nonCanonicalSource);
+
+        ResumeDocumentDTO source = document(List.of("occ-heading", "occ-body"),
+                Map.of("occ-heading", "项目经历", "occ-body", "原始职责"),
+                List.of(bullet("b-1", "原始职责", List.of("occ-body"))));
+        ResumeDocumentDTO target = document(List.of(), Map.of(),
+                List.of(bullet("b-1", "原始职责", List.of("occ-body"))));
+        target.getSections().get(0).setKind(" project ");
+
+        WorkspaceSourceReferenceVO result = assembler.assemble(
+                1L, 2L, 3L, 1L, "resume.pdf", true, source, target);
+
+        assertThat(result.mappings()).filteredOn(mapping -> "b-1".equals(mapping.bulletId()))
+                .extracting(WorkspaceSourceReferenceVO.TargetMapping::status)
+                .containsExactly(WorkspaceSourceMappingStatus.AMBIGUOUS);
+    }
+
+    @Test
+    void emptyShellTargetProjectEntryDoesNotHideLostProjectBoundary() {
+        ResumeDocumentDTO source = document(List.of("occ-heading", "occ-p1", "occ-p2"),
+                Map.of("occ-heading", "项目经历", "occ-p1", "项目一", "occ-p2", "项目二"), List.of());
+        ResumeDocumentEntryDTO first = entry("e-1", "项目一", List.of());
+        first.setSourceOccurrenceIds(List.of("occ-p1"));
+        ResumeDocumentEntryDTO second = entry("e-2", "项目二", List.of());
+        second.setSourceOccurrenceIds(List.of("occ-p2"));
+        source.getSections().get(0).setEntries(List.of(first, second));
+
+        ResumeDocumentDTO target = document(List.of(), Map.of(), List.of());
+        target.getSections().get(0).setEntries(List.of(
+                first,
+                ResumeDocumentEntryDTO.builder().id("e-2")
+                        .sourceOccurrenceIds(List.of("occ-p2")).bullets(List.of()).build()));
+
+        WorkspaceSourceReferenceVO result = assembler.assemble(
+                1L, 2L, 3L, 1L, "resume.pdf", true, source, target);
+
+        assertThat(result.fidelityIssues()).extracting(WorkspaceSourceReferenceVO.FidelityIssue::code)
+                .contains("PROJECT_BOUNDARY_LOST");
+    }
+
+    @Test
+    void nonEmptyProjectShellWithoutAuthenticatedLineageDoesNotHideLostBoundary() {
+        ResumeDocumentDTO source = document(List.of("occ-heading", "occ-p1", "occ-p2"),
+                Map.of("occ-heading", "项目经历", "occ-p1", "项目一", "occ-p2", "项目二"), List.of());
+        ResumeDocumentEntryDTO first = entry("e-1", "项目一", List.of());
+        first.setSourceOccurrenceIds(List.of("occ-p1"));
+        ResumeDocumentEntryDTO second = entry("e-2", "项目二", List.of());
+        second.setSourceOccurrenceIds(List.of("occ-p2"));
+        source.getSections().get(0).setEntries(List.of(first, second));
+
+        ResumeDocumentDTO target = document(List.of(), Map.of(), List.of());
+        target.getSections().get(0).setEntries(List.of(
+                first,
+                ResumeDocumentEntryDTO.builder().id("e-2").organization("伪造的空壳项目")
+                        .bullets(List.of()).build()));
+
+        WorkspaceSourceReferenceVO result = assembler.assemble(
+                1L, 2L, 3L, 1L, "resume.pdf", true, source, target);
+
+        assertThat(result.fidelityIssues()).extracting(WorkspaceSourceReferenceVO.FidelityIssue::code)
+                .contains("PROJECT_BOUNDARY_LOST");
+    }
+
+    @Test
+    void projectBoundaryUsesEveryValidatedFrozenChildReferenceAndBulletFallback() {
+        ResumeDocumentDTO source = document(List.of(
+                        "occ-heading", "occ-p1", "occ-p2", "occ-field", "occ-tech",
+                        "occ-skill", "occ-description", "occ-bullet"),
+                Map.of("occ-heading", "项目经历", "occ-p1", "项目一", "occ-p2", "项目二",
+                        "occ-field", "负责人", "occ-tech", "Java", "occ-skill", "治理",
+                        "occ-description", "平台治理", "occ-bullet", "降低延迟"), List.of());
+        ResumeDocumentEntryDTO first = entry("e-1", "项目一", List.of());
+        first.setSourceOccurrenceIds(List.of("occ-p1"));
+        ResumeDocumentEntryDTO second = entry("e-2", "项目二", List.of(
+                ResumeDocumentBulletDTO.builder().id("b-2").text("降低延迟")
+                        .sourceRef(ref("降低延迟", "occ-bullet")).build()));
+        second.setSourceRef(ref("项目二", "occ-p2"));
+        second.setRole("负责人");
+        second.setFieldSourceRefs(Map.of("role", ref("负责人", "occ-field")));
+        second.setTechStack(List.of("Java"));
+        second.setTechStackSourceRefs(List.of(ref("Java", "occ-tech")));
+        second.setSkillItems(List.of("治理"));
+        second.setSkillItemSourceRefs(List.of(ref("治理", "occ-skill")));
+        second.setSkillDescriptions(List.of("平台治理"));
+        second.setSkillDescriptionSourceRefs(List.of(ref("平台治理", "occ-description")));
+        source.getSections().get(0).setEntries(List.of(first, second));
+
+        ResumeDocumentDTO target = document(List.of(), Map.of(), List.of());
+        target.getSections().get(0).setEntries(List.of(first));
+        target.setConfirmedSourceOmissionIds(List.of(
+                "occ-p2", "occ-field", "occ-tech", "occ-skill", "occ-description", "occ-bullet"));
+
+        WorkspaceSourceReferenceVO result = assembler.assemble(
+                1L, 2L, 3L, 1L, "resume.pdf", true, source, target);
+
+        assertThat(result.fidelityIssues()).extracting(WorkspaceSourceReferenceVO.FidelityIssue::code)
+                .doesNotContain("PROJECT_BOUNDARY_LOST", "SOURCE_CONTENT_UNMAPPED", "SOURCE_MANIFEST_INVALID");
+        assertThat(result.exportBlocked()).isFalse();
+    }
+
+    @Test
+    void alignedSemanticListsMayRetainCanonicalNullReferencePlaceholders() {
+        ResumeDocumentDTO source = document(List.of("occ-heading", "occ-body"),
+                Map.of("occ-heading", "技能", "occ-body", "Java, Python"), List.of());
+        source.getSections().get(0).setKind("SKILL");
+        ResumeDocumentEntryDTO entry = source.getSections().get(0).getEntries().get(0);
+        entry.setSkillItems(List.of("Java", "Python"));
+        entry.setSkillItemSourceRefs(java.util.Arrays.asList(
+                ref("Java, Python", "occ-body"), null));
+
+        WorkspaceSourceReferenceVO result = assembler.assemble(
+                1L, 2L, 3L, 1L, "resume.pdf", true, source, source);
+
+        assertThat(result.fidelityIssues()).extracting(WorkspaceSourceReferenceVO.FidelityIssue::code)
+                .doesNotContain("SOURCE_MANIFEST_INVALID");
+    }
+
+    @Test
+    void legitimateSharedBasicsAndContactLineDoesNotInvalidateFrozenOwnership() {
+        ResumeDocumentDTO source = document(List.of("occ-heading", "occ-body", "occ-header"),
+                Map.of("occ-heading", "项目经历", "occ-body", "原始职责",
+                        "occ-header", "Candidate · Backend · candidate@example.test"),
+                List.of(bullet("b-1", "原始职责", List.of("occ-body"))));
+        ResumeSourceRefDTO headerRef = ref(
+                "Candidate · Backend · candidate@example.test", "occ-header");
+        source.setBasics(ResumeDocumentBasicsDTO.builder()
+                .name("Candidate")
+                .jobIntention("Backend")
+                .fieldSourceRefs(Map.of("name", headerRef, "jobIntention", headerRef))
+                .contacts(List.of(ResumeDocumentContactDTO.builder()
+                        .id("c-email").type("EMAIL").value("candidate@example.test")
+                        .sourceRef(headerRef).sourceOccurrenceIds(List.of("occ-header")).build()))
+                .build());
+
+        WorkspaceSourceReferenceVO result = assembler.assemble(
+                1L, 2L, 3L, 1L, "resume.pdf", true, source, source);
+
+        assertThat(result.fidelityIssues()).extracting(WorkspaceSourceReferenceVO.FidelityIssue::code)
+                .doesNotContain("SOURCE_MANIFEST_INVALID");
+        assertThat(result.sourceBlocks()).filteredOn(block -> "occ-header".equals(block.id()))
+                .singleElement().satisfies(block ->
+                        assertThat(block.status()).isEqualTo(WorkspaceSourceMappingStatus.SPLIT));
+    }
+
+    @Test
+    void legitimateContactSplitDoesNotInvalidateFrozenOwnership() {
+        ResumeDocumentDTO source = document(List.of("occ-heading", "occ-body", "occ-contact"),
+                Map.of("occ-heading", "项目经历", "occ-body", "原始职责",
+                        "occ-contact", "邮箱与电话"),
+                List.of(bullet("b-1", "原始职责", List.of("occ-body"))));
+        source.setBasics(ResumeDocumentBasicsDTO.builder().contacts(List.of(
+                ResumeDocumentContactDTO.builder().id("c-email").type("EMAIL")
+                        .value("user@example.test").sourceOccurrenceIds(List.of("occ-contact")).build(),
+                ResumeDocumentContactDTO.builder().id("c-phone").type("PHONE")
+                        .value("13000000000").sourceOccurrenceIds(List.of("occ-contact")).build())).build());
+
+        WorkspaceSourceReferenceVO result = assembler.assemble(
+                1L, 2L, 3L, 1L, "resume.pdf", true, source, source);
+
+        assertThat(result.fidelityIssues()).extracting(WorkspaceSourceReferenceVO.FidelityIssue::code)
+                .doesNotContain("SOURCE_MANIFEST_INVALID");
+        assertThat(result.sourceBlocks()).filteredOn(block -> "occ-contact".equals(block.id()))
+                .singleElement().satisfies(block ->
+                        assertThat(block.status()).isEqualTo(WorkspaceSourceMappingStatus.SPLIT));
+    }
+
+    @Test
+    void targetNodeTypeIsPartOfAuthenticatedLineage() {
+        ResumeDocumentDTO source = document(List.of("occ-heading", "occ-body", "occ-contact"),
+                Map.of("occ-heading", "项目经历", "occ-body", "原始职责",
+                        "occ-contact", "candidate@example.test"),
+                List.of(bullet("b-1", "原始职责", List.of("occ-body"))));
+        source.setBasics(ResumeDocumentBasicsDTO.builder().contacts(List.of(
+                ResumeDocumentContactDTO.builder().id("c-email").type("EMAIL")
+                        .value("candidate@example.test")
+                        .sourceOccurrenceIds(List.of("occ-contact")).build())).build());
+        ResumeDocumentDTO target = document(List.of(), Map.of(), List.of());
+        target.getSections().get(0).setId("c-email");
+        target.getSections().get(0).setSourceOccurrenceIds(List.of("occ-contact"));
+        target.getSections().get(0).setEntries(List.of());
+
+        WorkspaceSourceReferenceVO result = assembler.assemble(
+                1L, 2L, 3L, 1L, "resume.pdf", true, source, target);
+
+        assertThat(result.mappings()).filteredOn(mapping -> "c-email".equals(mapping.sectionId()))
+                .extracting(WorkspaceSourceReferenceVO.TargetMapping::status)
+                .containsExactly(WorkspaceSourceMappingStatus.AMBIGUOUS);
+        assertThat(result.fidelityIssues()).extracting(WorkspaceSourceReferenceVO.FidelityIssue::code)
+                .contains("AMBIGUOUS_MAPPING");
+    }
+
+    @Test
     void sectionKindIsPartOfAuthenticatedLineage() {
         ResumeDocumentDTO source = document(List.of("occ-heading", "occ-body"),
                 Map.of("occ-heading", "项目经历", "occ-body", "原始职责"),
@@ -431,6 +923,26 @@ class WorkspaceSourceReferenceAssemblerImplTest {
                 .containsExactly(WorkspaceSourceMappingStatus.AMBIGUOUS);
         assertThat(result.fidelityIssues()).extracting(WorkspaceSourceReferenceVO.FidelityIssue::code)
                 .contains("AMBIGUOUS_MAPPING");
+    }
+
+    private void assertManifestInvalid(ResumeDocumentDTO source) {
+        WorkspaceSourceReferenceVO result = assembler.assemble(
+                1L, 2L, 3L, 1L, "resume.pdf", true, source, source);
+        assertThat(result.fidelityIssues()).extracting(WorkspaceSourceReferenceVO.FidelityIssue::code)
+                .contains("SOURCE_MANIFEST_INVALID");
+        assertThat(result.exportBlocked()).isTrue();
+    }
+
+    private static ResumeDocumentDTO sourceWithBodySidecar(ResumeSourceRefDTO sidecar) {
+        ResumeDocumentDTO source = document(List.of("occ-heading", "occ-body"),
+                Map.of("occ-heading", "项目经历", "occ-body", "原始职责"),
+                List.of(bullet("b-1", "原始职责", List.of("occ-body"))));
+        source.setSourceOccurrenceRefs(Map.of("occ-body", sidecar));
+        return source;
+    }
+
+    private static ResumeSourceRefDTO ref(String text, String occurrenceId) {
+        return ResumeSourceRefDTO.builder().text(text).sourceOccurrenceIds(List.of(occurrenceId)).build();
     }
 
     private static ResumeDocumentEntryDTO entry(

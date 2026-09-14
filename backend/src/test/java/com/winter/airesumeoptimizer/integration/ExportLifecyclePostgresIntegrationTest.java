@@ -33,6 +33,12 @@ import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentContactDT
 import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentDTO;
 import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentEntryDTO;
 import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentSectionDTO;
+import com.winter.airesumeoptimizer.module.workspace.dto.WorkspaceSourceOmissionRequestDTO;
+import com.winter.airesumeoptimizer.module.workspace.service.WorkspaceContentService;
+import com.winter.airesumeoptimizer.module.workspace.service.WorkspaceSourceReferenceAssembler;
+import com.winter.airesumeoptimizer.module.workspace.service.impl.WorkspaceSourceReferenceAssemblerImpl;
+import com.winter.airesumeoptimizer.module.workspace.vo.WorkspaceContentSaveResultVO;
+import com.winter.airesumeoptimizer.module.workspace.vo.WorkspaceSourceReferenceVO;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
@@ -43,19 +49,26 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 
 /** Real PostgreSQL and local-storage validation for the recoverable export lifecycle. */
 @SpringBootTest
 @ActiveProfiles("phase9-e2e")
+@Import(ExportLifecyclePostgresIntegrationTest.ConcurrentAssemblerConfiguration.class)
 class ExportLifecyclePostgresIntegrationTest {
 
     @Autowired private DataSource dataSource;
@@ -71,6 +84,8 @@ class ExportLifecyclePostgresIntegrationTest {
     @Autowired private AsyncTaskService asyncTaskService;
     @Autowired private ExportArtifactCleanupService cleanupService;
     @Autowired private WorkspaceExportService workspaceExportService;
+    @Autowired private WorkspaceContentService workspaceContentService;
+    @Autowired private BarrierSourceReferenceAssembler barrierSourceReferenceAssembler;
     @Autowired private LocalStoragePathResolver storagePathResolver;
 
     @Test
@@ -208,6 +223,51 @@ class ExportLifecyclePostgresIntegrationTest {
         assertThat(optimizationTaskMapper.selectById(fixture.task().getId())).isNull();
         assertThat(artifactStatus(artifactId)).isNull();
         assertThat(asyncTaskService.getTask(runningId, fixture.userId()).getStatus()).isEqualTo("CANCELLED");
+    }
+
+    @Test
+    void concurrentOmissionMutationsOnOneRevisionHaveExactlyOnePostgresCasWinner() throws Exception {
+        Fixture fixture = fixture("omission-cas-race");
+        ResumeVersion target = resumeVersionMapper.selectById(fixture.task().getTargetResumeVersionId());
+        ResumeDocumentDTO omitted = objectMapper.readValue(target.getStructuredContent(), ResumeDocumentDTO.class);
+        omitted.getSections().getFirst().getEntries().getFirst().setBullets(List.of());
+        target.setStructuredContent(objectMapper.writeValueAsString(omitted));
+        resumeVersionMapper.updateById(target);
+
+        long advisoryKey = Math.abs(System.nanoTime());
+        String suffix = suffix();
+        createTargetRevisionUpdateWaitTrigger(suffix, target.getId(), advisoryKey);
+        barrierSourceReferenceAssembler.armForTwoReaders();
+        try (Connection lockConnection = dataSource.getConnection()) {
+            advisoryLock(lockConnection, advisoryKey, true);
+            WorkspaceSourceOmissionRequestDTO request = new WorkspaceSourceOmissionRequestDTO(
+                    1L, List.of("occ-bullet"));
+            CompletableFuture<WorkspaceContentSaveResultVO> first = CompletableFuture.supplyAsync(() ->
+                    workspaceContentService.confirmSourceOmissions(
+                            fixture.userId(), fixture.task().getId(), request));
+            CompletableFuture<WorkspaceContentSaveResultVO> second = CompletableFuture.supplyAsync(() ->
+                    workspaceContentService.confirmSourceOmissions(
+                            fixture.userId(), fixture.task().getId(), request));
+            assertThat(barrierSourceReferenceAssembler.awaitBothReaders(5, TimeUnit.SECONDS)).isTrue();
+            barrierSourceReferenceAssembler.releaseReaders();
+            assertFutureBlocked(first);
+            assertFutureBlocked(second);
+
+            advisoryLock(lockConnection, advisoryKey, false);
+            List<WorkspaceContentSaveResultVO> results = List.of(
+                    first.get(10, TimeUnit.SECONDS), second.get(10, TimeUnit.SECONDS));
+            assertThat(results).filteredOn(WorkspaceContentSaveResultVO::isSaved).hasSize(1);
+            assertThat(results).filteredOn(WorkspaceContentSaveResultVO::isConflict).hasSize(1);
+
+            ResumeVersion persisted = resumeVersionMapper.selectById(target.getId());
+            assertThat(persisted.getContentRevision()).isEqualTo(2L);
+            assertThat(objectMapper.readValue(persisted.getStructuredContent(), ResumeDocumentDTO.class)
+                    .getConfirmedSourceOmissionIds()).containsExactly("occ-bullet");
+        } finally {
+            barrierSourceReferenceAssembler.releaseReaders();
+            dropTrigger("trg_target_revision_" + suffix, "resume_versions",
+                    "target_revision_" + suffix);
+        }
     }
 
     @Test
@@ -363,7 +423,7 @@ class ExportLifecyclePostgresIntegrationTest {
                 .sourceOccurrenceIds(occurrenceIds)
                 .sourceRef(ResumeSourceRefDTO.builder()
                         .text(occurrenceIds.stream().map(occurrenceTexts::get)
-                                .collect(java.util.stream.Collectors.joining()))
+                                .collect(java.util.stream.Collectors.joining("\n")))
                         .sourceOccurrenceIds(occurrenceIds)
                         .build())
                 .sourceOccurrenceTexts(occurrenceTexts)
@@ -485,6 +545,17 @@ class ExportLifecyclePostgresIntegrationTest {
                 + suffix + "()");
     }
 
+    private void createTargetRevisionUpdateWaitTrigger(
+            String suffix, Long targetVersionId, long advisoryKey) {
+        jdbcTemplate.execute("CREATE FUNCTION target_revision_" + suffix
+                + "() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.id = " + targetVersionId
+                + " AND NEW.content_revision = 2 THEN PERFORM pg_advisory_xact_lock(" + advisoryKey
+                + "); END IF; RETURN NEW; END; $$");
+        jdbcTemplate.execute("CREATE TRIGGER trg_target_revision_" + suffix
+                + " BEFORE UPDATE ON resume_versions FOR EACH ROW EXECUTE FUNCTION target_revision_"
+                + suffix + "()");
+    }
+
     private void createArtifactInsertWaitTrigger(String suffix, Long taskId, long advisoryKey) {
         jdbcTemplate.execute("CREATE FUNCTION export_insert_" + suffix
                 + "() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.optimization_task_id = " + taskId
@@ -533,6 +604,62 @@ class ExportLifecyclePostgresIntegrationTest {
             // Expected: the advisory or parent row lock still owns the serialization point.
         } catch (ExecutionException exception) {
             throw new AssertionError("operation failed before the lifecycle fence was released", exception);
+        }
+    }
+
+    @TestConfiguration
+    static class ConcurrentAssemblerConfiguration {
+        @Bean
+        @Primary
+        BarrierSourceReferenceAssembler barrierSourceReferenceAssembler() {
+            return new BarrierSourceReferenceAssembler();
+        }
+    }
+
+    static final class BarrierSourceReferenceAssembler implements WorkspaceSourceReferenceAssembler {
+        private final WorkspaceSourceReferenceAssembler delegate =
+                new WorkspaceSourceReferenceAssemblerImpl();
+        private final AtomicInteger waitingCalls = new AtomicInteger();
+        private volatile CountDownLatch readersReady = new CountDownLatch(0);
+        private volatile CountDownLatch readersRelease = new CountDownLatch(0);
+
+        synchronized void armForTwoReaders() {
+            waitingCalls.set(2);
+            readersReady = new CountDownLatch(2);
+            readersRelease = new CountDownLatch(1);
+        }
+
+        boolean awaitBothReaders(long timeout, TimeUnit unit) throws InterruptedException {
+            return readersReady.await(timeout, unit);
+        }
+
+        void releaseReaders() {
+            readersRelease.countDown();
+        }
+
+        @Override
+        public WorkspaceSourceReferenceVO assemble(
+                Long taskId,
+                Long sourceVersionId,
+                Long targetVersionId,
+                long targetRevision,
+                String sourceFilename,
+                boolean sourcePdfAvailable,
+                ResumeDocumentDTO source,
+                ResumeDocumentDTO target) {
+            if (waitingCalls.getAndUpdate(value -> Math.max(0, value - 1)) > 0) {
+                readersReady.countDown();
+                try {
+                    if (!readersRelease.await(10, TimeUnit.SECONDS)) {
+                        throw new IllegalStateException("Timed out waiting to release concurrent readers");
+                    }
+                } catch (InterruptedException exception) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException("Interrupted while coordinating concurrent readers", exception);
+                }
+            }
+            return delegate.assemble(taskId, sourceVersionId, targetVersionId, targetRevision,
+                    sourceFilename, sourcePdfAvailable, source, target);
         }
     }
 

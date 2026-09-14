@@ -111,6 +111,7 @@ public class ResumeDocumentConverterImpl implements ResumeDocumentConverter {
             throw new BusinessException(400, "简历内容不能为空");
         }
         ResumeDocumentDTO candidate = withoutSubmittedProvenance(submitted);
+        rejectNonCanonicalSubmittedIds(candidate);
         Map<String, NodeLocation> currentTopology = topology(currentTarget);
         FrozenNodes frozen = frozenNodes(frozenSource);
 
@@ -121,7 +122,7 @@ public class ResumeDocumentConverterImpl implements ResumeDocumentConverter {
         for (ResumeDocumentContactDTO contact : safeList(candidate.getBasics() == null
                 ? null : candidate.getBasics().getContacts())) {
             NodeLocation contactLocation = new NodeLocation("CONTACT", "BASICS");
-            rejectFrozenIdResurrection(contact.getId(), contactLocation, currentTopology, frozen.topology());
+            rejectFrozenIdResurrection(contact.getId(), currentTopology, frozen.topology());
             if (existingAt(contact.getId(), contactLocation, currentTopology)
                     && frozenAt(contact.getId(), contactLocation, frozen.topology())) {
                 restoreContactProvenance(contact, frozen.contacts().get(contact.getId()));
@@ -129,7 +130,7 @@ public class ResumeDocumentConverterImpl implements ResumeDocumentConverter {
         }
         for (ResumeDocumentSectionDTO section : safeList(candidate.getSections())) {
             NodeLocation sectionLocation = new NodeLocation("SECTION", "ROOT:" + section.getKind());
-            rejectFrozenIdResurrection(section.getId(), sectionLocation, currentTopology, frozen.topology());
+            rejectFrozenIdResurrection(section.getId(), currentTopology, frozen.topology());
             boolean existingSection = existingAt(section.getId(), sectionLocation, currentTopology);
             ResumeDocumentSectionDTO frozenSection = existingSection
                     && frozenAt(section.getId(), sectionLocation, frozen.topology())
@@ -137,7 +138,7 @@ public class ResumeDocumentConverterImpl implements ResumeDocumentConverter {
             restoreSectionProvenance(section, frozenSection);
             for (ResumeDocumentEntryDTO entry : safeList(section.getEntries())) {
                 NodeLocation entryLocation = new NodeLocation("ENTRY", "SECTION:" + section.getId());
-                rejectFrozenIdResurrection(entry.getId(), entryLocation, currentTopology, frozen.topology());
+                rejectFrozenIdResurrection(entry.getId(), currentTopology, frozen.topology());
                 boolean existingEntry = existingAt(entry.getId(), entryLocation, currentTopology);
                 ResumeDocumentEntryDTO frozenEntry = existingEntry
                         && frozenAt(entry.getId(), entryLocation, frozen.topology())
@@ -146,7 +147,7 @@ public class ResumeDocumentConverterImpl implements ResumeDocumentConverter {
                 for (ResumeDocumentBulletDTO bullet : safeList(entry.getBullets())) {
                     NodeLocation bulletLocation = new NodeLocation(
                             "BULLET", "SECTION:" + section.getId() + "/ENTRY:" + entry.getId());
-                    rejectFrozenIdResurrection(bullet.getId(), bulletLocation, currentTopology, frozen.topology());
+                    rejectFrozenIdResurrection(bullet.getId(), currentTopology, frozen.topology());
                     if (existingAt(bullet.getId(), bulletLocation, currentTopology)
                             && frozenAt(bullet.getId(), bulletLocation, frozen.topology())) {
                         restoreBulletProvenance(bullet, frozen.bullets().get(bullet.getId()));
@@ -178,6 +179,31 @@ public class ResumeDocumentConverterImpl implements ResumeDocumentConverter {
         }
         if (node.isArray()) {
             node.elements().forEachRemaining(this::removeProvenance);
+        }
+    }
+
+    private void rejectNonCanonicalSubmittedIds(ResumeDocumentDTO document) {
+        if (document == null) return;
+        for (ResumeDocumentContactDTO contact : safeList(document.getBasics() == null
+                ? null : document.getBasics().getContacts())) {
+            rejectNonCanonicalSubmittedId(contact == null ? null : contact.getId());
+        }
+        for (ResumeDocumentSectionDTO section : safeList(document.getSections())) {
+            if (section == null) continue;
+            rejectNonCanonicalSubmittedId(section.getId());
+            for (ResumeDocumentEntryDTO entry : safeList(section.getEntries())) {
+                if (entry == null) continue;
+                rejectNonCanonicalSubmittedId(entry.getId());
+                for (ResumeDocumentBulletDTO bullet : safeList(entry.getBullets())) {
+                    rejectNonCanonicalSubmittedId(bullet == null ? null : bullet.getId());
+                }
+            }
+        }
+    }
+
+    private void rejectNonCanonicalSubmittedId(String id) {
+        if (id != null && !id.isBlank() && !id.equals(id.strip())) {
+            throw new BusinessException(400, "简历节点 ID 格式不正确");
         }
     }
 
@@ -266,12 +292,10 @@ public class ResumeDocumentConverterImpl implements ResumeDocumentConverter {
 
     private void rejectFrozenIdResurrection(
             String id,
-            NodeLocation expected,
             Map<String, NodeLocation> currentTopology,
             Map<String, NodeLocation> frozenTopology) {
         if (id == null || id.isBlank()) return;
-        NodeLocation frozen = frozenTopology.get(id);
-        if (frozen != null && frozen.equals(expected) && !currentTopology.containsKey(id)) {
+        if (frozenTopology.containsKey(id) && !currentTopology.containsKey(id)) {
             throw new BusinessException(400, "已删除的来源节点不能复用原 ID，请恢复优化前版本后重试");
         }
     }

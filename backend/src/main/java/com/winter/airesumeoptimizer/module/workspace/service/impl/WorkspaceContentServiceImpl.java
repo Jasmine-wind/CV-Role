@@ -217,46 +217,71 @@ public class WorkspaceContentServiceImpl implements WorkspaceContentService {
         ResumeDocumentDTO frozen = documentFromFrozenSnapshot(resolveFrozenSnapshot(context));
         ResumeDocumentDTO current = currentRevision == PRISTINE_REVISION
                 ? frozen : readPersistedDocument(context.target());
-        canonicalizeConfirmedOmissions(frozen, current);
         Set<String> frozenIds = new LinkedHashSet<>(safeStrings(frozen.getSourceOccurrenceIds()));
-        if (!frozenIds.containsAll(requested)) {
+        if (confirm && !frozenIds.containsAll(requested)) {
             throw new BusinessException(400, "来源 occurrence 不属于当前冻结简历");
         }
 
+        // Inspect the persisted state before normalizing it. In particular, a malformed partial alias
+        // group must remain removable even though the assembler correctly refuses to call it confirmed.
+        Set<String> persistedIds = canonicalCandidateOccurrenceIds(current.getConfirmedSourceOmissionIds());
+        Set<String> persistedMentions = mentionedOccurrenceIds(current.getConfirmedSourceOmissionIds());
         WorkspaceSourceReferenceVO fidelity = sourceReferenceAssembler.assemble(
                 context.task().getId(), context.source().getId(), context.target().getId(), currentRevision,
                 context.resume().getOriginalFilename(), isPdf(context.resume()), frozen, current);
-        if (fidelity.fidelityIssues().stream().anyMatch(issue ->
-                "SOURCE_MANIFEST_INVALID".equals(issue.code())
-                        || "SOURCE_MANIFEST_UNAVAILABLE".equals(issue.code())
-                        || "CONFIRMED_OMISSION_INVALID".equals(issue.code()))) {
+        if (hasFidelityIssue(fidelity, "SOURCE_MANIFEST_INVALID")
+                || hasFidelityIssue(fidelity, "SOURCE_MANIFEST_UNAVAILABLE")) {
             throw new BusinessException(400, "冻结原文清单不允许确认省略");
         }
+
+        // Existing decisions have no authority merely because they were persisted. Rebuild only complete,
+        // currently eligible alias/boundary groups; this drops unknown, duplicate, mapped, ambiguous,
+        // ineligible, and unrelated partial stale state without promoting a partial alias to its closure.
+        LinkedHashSet<String> next = canonicalConfirmedOmissionIds(fidelity.sourceBlocks(), persistedIds);
         LinkedHashSet<SourceBlock> boundaryBlocks = new LinkedHashSet<>();
         for (String requestedId : requested) {
-            SourceBlock requestedBlock = fidelity.sourceBlocks().stream()
-                    .filter(candidate -> candidate.occurrenceIds().contains(requestedId))
-                    .findFirst().orElseThrow(() -> new BusinessException(400, "来源 occurrence 不属于当前冻结简历"));
+            if (!frozenIds.contains(requestedId)) {
+                if (confirm || !persistedMentions.contains(requestedId)) {
+                    throw new BusinessException(400, "来源 occurrence 不属于当前冻结简历");
+                }
+                // An exact task-local stale value can authorize only its own CAS-backed removal.
+                continue;
+            }
+            SourceBlock requestedBlock = resolveRequestedBlock(requestedId, fidelity.sourceBlocks());
             if (confirm && !isConfirmableOmission(requestedBlock)) {
                 throw new BusinessException(400, "来源 occurrence 当前不能确认为省略");
             }
-            if (!confirm && !requestedBlock.omissionConfirmed()) {
+            List<SourceBlock> requestedBoundary = omissionBoundary(requestedBlock, fidelity.sourceBlocks());
+            if (!confirm && requestedBoundary.stream()
+                    .flatMap(block -> block.occurrenceIds().stream())
+                    .noneMatch(persistedMentions::contains)) {
                 throw new BusinessException(400, "来源 occurrence 当前未确认省略");
             }
-            boundaryBlocks.addAll(omissionBoundary(requestedBlock, fidelity.sourceBlocks()));
+            boundaryBlocks.addAll(requestedBoundary);
         }
         if (confirm && boundaryBlocks.stream().anyMatch(block -> !isConfirmableOmission(block))) {
             throw new BusinessException(400, "来源边界未完整省略，当前不能确认");
         }
+
+        // SourceBlock.occurrenceIds is the complete physical alias closure. Applying the enclosing
+        // Project/Bullet boundary after block resolution makes either operation authoritative and atomic.
         LinkedHashSet<String> authoritativeIds = boundaryBlocks.stream()
                 .flatMap(block -> block.occurrenceIds().stream())
                 .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
-
-        LinkedHashSet<String> next = new LinkedHashSet<>(safeStrings(current.getConfirmedSourceOmissionIds()));
         if (confirm) next.addAll(authoritativeIds);
         else next.removeAll(authoritativeIds);
-        current.setConfirmedSourceOmissionIds(frozen.getSourceOccurrenceIds().stream()
-                .filter(next::contains).toList());
+        current.setConfirmedSourceOmissionIds(orderedFrozenIds(frozen, next));
+
+        // A malformed confirmation list may be repaired, but no mutation may persist a confirmation state
+        // that the assembler still considers invalid. This keeps confirm fail closed when rebuilding is unsafe.
+        WorkspaceSourceReferenceVO rebuilt = sourceReferenceAssembler.assemble(
+                context.task().getId(), context.source().getId(), context.target().getId(), currentRevision,
+                context.resume().getOriginalFilename(), isPdf(context.resume()), frozen, current);
+        Set<String> rebuiltIds = canonicalCandidateOccurrenceIds(current.getConfirmedSourceOmissionIds());
+        if (hasFidelityIssue(rebuilt, "CONFIRMED_OMISSION_INVALID")
+                || !canonicalConfirmedOmissionIds(rebuilt.sourceBlocks(), rebuiltIds).equals(rebuiltIds)) {
+            throw new BusinessException(400, "已确认省略状态无法安全规范化");
+        }
         return writeTargetContent(context, current, request.expectedRevision());
     }
 
@@ -267,31 +292,81 @@ public class WorkspaceContentServiceImpl implements WorkspaceContentService {
         List<String> normalized = new ArrayList<>();
         Set<String> unique = new LinkedHashSet<>();
         for (String id : ids) {
-            if (id == null || id.isBlank() || !unique.add(id.strip())) {
+            if (id == null || id.isBlank() || !id.equals(id.strip()) || !unique.add(id)) {
                 throw new BusinessException(400, "来源 occurrence ID 无效或重复");
             }
-            normalized.add(id.strip());
+            normalized.add(id);
         }
         return normalized;
     }
 
     private void canonicalizeConfirmedOmissions(ResumeDocumentDTO frozen, ResumeDocumentDTO target) {
-        Set<String> existing = new LinkedHashSet<>(safeStrings(target.getConfirmedSourceOmissionIds()));
         WorkspaceSourceReferenceVO fidelity = sourceReferenceAssembler.assemble(
                 null, null, null, 0L, null, false, frozen, target);
-        Set<String> canonical = new LinkedHashSet<>();
-        for (SourceBlock block : fidelity.sourceBlocks()) {
-            if (!block.omissionEligible()) continue;
-            List<SourceBlock> boundary = omissionBoundary(block, fidelity.sourceBlocks());
-            boolean complete = boundary.stream().allMatch(candidate -> candidate.omissionEligible()
+        Set<String> existing = canonicalCandidateOccurrenceIds(target.getConfirmedSourceOmissionIds());
+        Set<String> canonical = canonicalConfirmedOmissionIds(fidelity.sourceBlocks(), existing);
+        target.setConfirmedSourceOmissionIds(orderedFrozenIds(frozen, canonical));
+    }
+
+    private LinkedHashSet<String> canonicalConfirmedOmissionIds(
+            List<SourceBlock> sourceBlocks, Set<String> existing) {
+        LinkedHashSet<String> canonical = new LinkedHashSet<>();
+        for (SourceBlock block : sourceBlocks) {
+            if (!isConfirmableOmission(block)) continue;
+            List<SourceBlock> boundary = omissionBoundary(block, sourceBlocks);
+            boolean complete = boundary.stream().allMatch(candidate -> isConfirmableOmission(candidate)
                     && existing.containsAll(candidate.occurrenceIds()));
             if (complete) {
                 boundary.stream().flatMap(candidate -> candidate.occurrenceIds().stream())
                         .forEach(canonical::add);
             }
         }
-        target.setConfirmedSourceOmissionIds(safeStrings(frozen.getSourceOccurrenceIds()).stream()
-                .filter(canonical::contains).toList());
+        return canonical;
+    }
+
+    private SourceBlock resolveRequestedBlock(String requestedId, List<SourceBlock> sourceBlocks) {
+        List<SourceBlock> matches = sourceBlocks.stream()
+                .filter(candidate -> candidate.occurrenceIds().contains(requestedId))
+                .toList();
+        if (matches.size() != 1) {
+            throw new BusinessException(400, "来源 occurrence 不属于当前冻结简历");
+        }
+        return matches.get(0);
+    }
+
+    /**
+     * Return only exact, unique persisted IDs that may retain authority. Malformed values are
+     * never trimmed or deduplicated into a valid confirmation; every repeated ID is removed.
+     */
+    private Set<String> canonicalCandidateOccurrenceIds(List<String> ids) {
+        LinkedHashSet<String> candidates = new LinkedHashSet<>();
+        LinkedHashSet<String> duplicates = new LinkedHashSet<>();
+        for (String id : safeStrings(ids)) {
+            if (id == null || id.isBlank() || !id.equals(id.strip())) continue;
+            if (!candidates.add(id)) duplicates.add(id);
+        }
+        candidates.removeAll(duplicates);
+        return candidates;
+    }
+
+    /** A malformed stored value may authorize only its own removal, never confirmation. */
+    private Set<String> mentionedOccurrenceIds(List<String> ids) {
+        LinkedHashSet<String> mentions = new LinkedHashSet<>();
+        for (String id : safeStrings(ids)) {
+            if (id != null && !id.isBlank()) mentions.add(id.strip());
+        }
+        return mentions;
+    }
+
+    private List<String> orderedFrozenIds(ResumeDocumentDTO frozen, Set<String> ids) {
+        return safeStrings(frozen.getSourceOccurrenceIds()).stream()
+                .filter(ids::contains)
+                .distinct()
+                .toList();
+    }
+
+    private boolean hasFidelityIssue(WorkspaceSourceReferenceVO fidelity, String code) {
+        return fidelity.fidelityIssues().stream().anyMatch(issue -> code.equals(issue.code()));
     }
 
     private boolean isConfirmableOmission(SourceBlock block) {
