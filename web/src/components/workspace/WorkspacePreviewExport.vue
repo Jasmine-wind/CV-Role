@@ -21,6 +21,8 @@ const props = defineProps<{
   /** 最近一次成功保存的服务端内容版本号；null 表示内容尚未就绪。 */
   revision: number | null
   status: WorkspaceSaveStatus
+  /** 是否处于 Preview mode；只有 active 时才允许自动生成预览，杜绝编辑态后台渲染。 */
+  active: boolean
 }>()
 
 /** revision 过期（其它端修改了内容）时通知工作区同步服务端版本。 */
@@ -430,7 +432,23 @@ const retryFailedOperation = () => {
 
 const formatCreatedAt = (value: string) => value.replace('T', ' ').slice(0, 16)
 
+// Preview 自动生成状态机的唯一入口：mount 与 edit→preview re-entry 共用。
+// 仅当处于 Preview mode、内容可渲染、当前没有匹配 (task, revision, template)
+// 的有效预览、且没有在途请求时才生成，避免重复请求与编辑态后台渲染。
+const ensureActivePreview = () => {
+  if (
+    props.active &&
+    canOperate.value &&
+    previewKey.value !== currentPreviewKey.value &&
+    !previewLoading.value
+  ) {
+    void handlePreview()
+  }
+}
+
 // 状态、revision、模板或任务变化时立即使旧预览及仍在途的响应失效。
+// 本 watcher 只负责失效；是否重新生成由 active transition 决定，
+// 防止用户仍在编辑时 autosave revision 触发后台 PDF 渲染。
 watch(
   () => [props.status, props.revision, templateId.value, props.optimizationTaskId],
   () => {
@@ -440,9 +458,17 @@ watch(
   },
 )
 
+// edit → preview 重新进入：预览已失效则自动重新生成，仍有效则复用不重复请求。
+watch(
+  () => props.active,
+  (active, previous) => {
+    if (active && !previous) ensureActivePreview()
+  },
+)
+
 onMounted(() => {
   // 进入 Preview mode 即生成一次预览；操作栏仍保留“重新预览”供模板切换后使用。
-  if (canOperate.value) void handlePreview()
+  ensureActivePreview()
 })
 
 onBeforeUnmount(() => {

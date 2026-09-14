@@ -496,7 +496,9 @@ test('intentional omission: a deleted source bullet blocks delivery until confir
   ).toBeVisible()
   await expect(page.getByTitle('简历 PDF 预览')).toBeVisible({ timeout: 45_000 })
   expect(previewRequestCount).toBeGreaterThan(0)
-  await expect(page.getByText('原文结构仍需确认')).toBeVisible()
+  // Pin the needsReview copy to its unique semantic container: the same sentence also
+  // appears inside the collapsed .preflight-details list, so a bare getByText is ambiguous.
+  await expect(page.locator('.preflight-blocked-copy')).toContainText('原文结构仍需确认')
   await expect(page.getByRole('button', { name: '导出 PDF', exact: true })).toBeDisabled()
   page.off('request', countPreviewRequest)
   // Return to edit mode so the omission confirmation flow can continue.
@@ -778,8 +780,13 @@ test('intentional omission: a whole Project entry is released after authoritativ
 
   // Preview is a diagnostic tool: it is allowed even while blockers exist, but Export stays disabled.
   let projectPreviewRequests = 0
+  let lastProjectPreviewRevision: number | null = null
   const countProjectPreview = (request: { url: () => string }) => {
-    if (request.url().includes('/preview.pdf')) projectPreviewRequests += 1
+    const url = request.url()
+    if (!url.includes('/preview.pdf')) return
+    projectPreviewRequests += 1
+    const revision = new URL(url).searchParams.get('expectedRevision')
+    if (revision !== null) lastProjectPreviewRevision = Number(revision)
   }
   page.on('request', countProjectPreview)
   const blockedFidelityVerdict = page.waitForResponse(
@@ -822,6 +829,9 @@ test('intentional omission: a whole Project entry is released after authoritativ
     sourceOccurrenceIds: string[]
   }
   expect(confirmBody.sourceOccurrenceIds).toEqual(expectedProjectOccurrenceIds)
+  const confirmedPayload = (await confirmed.json()) as { data: { revision: number } }
+  const confirmedRevision = confirmedPayload.data.revision
+  expect(Number.isInteger(confirmedRevision)).toBe(true)
   // Whole-Project confirmed omission releases PROJECT_BOUNDARY_LOST; fidelity passes.
   await expect(page.getByText('结构保真检查通过', { exact: true })).toBeVisible({
     timeout: 15_000,
@@ -829,6 +839,7 @@ test('intentional omission: a whole Project entry is released after authoritativ
 
   // Preview again with a clean verdict: Export becomes enabled.
   projectPreviewRequests = 0
+  lastProjectPreviewRevision = null
   page.on('request', countProjectPreview)
   const freshProjectFidelityVerdict = page.waitForResponse(
     (response) =>
@@ -843,6 +854,10 @@ test('intentional omission: a whole Project entry is released after authoritativ
   }
   expect(projectFidelityPayload.data.exportBlocked).toBe(false)
   await expect(page.getByTitle('简历 PDF 预览')).toBeVisible({ timeout: 45_000 })
+  // The re-entry must render a fresh PDF for the post-confirmation revision, not reuse the
+  // blocked first-preview cache. Prove both the request count and the exact revision.
+  expect(projectPreviewRequests).toBeGreaterThan(0)
+  expect(lastProjectPreviewRevision).toBe(confirmedRevision)
   await expect(
     page.locator('.preflight-section').getByText('可以导出', { exact: true }),
   ).toBeVisible({ timeout: 45_000 })

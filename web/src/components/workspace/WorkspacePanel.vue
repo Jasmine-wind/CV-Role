@@ -783,6 +783,7 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
           :optimization-task-id="optimizationTaskId"
           :revision="editor.revision.value"
           :status="editor.status.value"
+          :active="workspaceMode === 'preview'"
           @stale="handlePreviewStale"
         />
       </div>

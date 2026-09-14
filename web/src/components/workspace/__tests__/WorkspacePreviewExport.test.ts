@@ -110,12 +110,14 @@ const deferred = <T>() => {
 const mountComponent = (
   status: 'dirty' | 'saving' | 'saved' | 'failed' | 'conflict' = 'saved',
   revision = 3,
+  active = true,
 ) =>
   mount(WorkspacePreviewExport, {
     props: {
       optimizationTaskId: 42,
       revision,
       status,
+      active,
       onStale: staleHandler,
     },
   })
@@ -273,6 +275,52 @@ describe('WorkspacePreviewExport', () => {
     expect(wrapper.text()).toContain('原文结构仍需确认')
     expect(wrapper.text()).toContain('当前 PDF 仅供检查')
     expect(button(wrapper, '导出 PDF').attributes('disabled')).toBeDefined()
+  })
+
+  it('regenerates an invalidated preview when preview mode becomes active again', async () => {
+    // Return the revision that was actually requested so each preview stays current.
+    previewMock.mockImplementation(async (_taskId, _templateId, revision) => previewResult(revision))
+    const wrapper = mountComponent('saved', 1, true)
+    await flushPromises()
+
+    expect(previewMock).toHaveBeenCalledTimes(1)
+    expect(previewMock).toHaveBeenLastCalledWith(42, 'classic', 1)
+    expect(wrapper.find('.preview-frame').exists()).toBe(true)
+
+    // Leaving preview mode keeps the component mounted and issues no new request.
+    await wrapper.setProps({ active: false })
+    await flushPromises()
+    expect(previewMock).toHaveBeenCalledTimes(1)
+
+    // An edit-mode revision change invalidates the cache but must NOT render in background.
+    await wrapper.setProps({ revision: 2 })
+    await flushPromises()
+    expect(previewMock).toHaveBeenCalledTimes(1)
+    expect(wrapper.find('.preview-frame').exists()).toBe(false)
+
+    // Re-entering preview mode regenerates for the new revision without a manual click.
+    await wrapper.setProps({ active: true })
+    await flushPromises()
+    expect(previewMock).toHaveBeenCalledTimes(2)
+    expect(previewMock).toHaveBeenLastCalledWith(42, 'classic', 2)
+    expect(wrapper.find('.preview-frame').exists()).toBe(true)
+  })
+
+  it('reuses a still-valid preview on re-entry without a duplicate request', async () => {
+    const wrapper = mountComponent()
+    await flushPromises()
+    expect(previewMock).toHaveBeenCalledTimes(1)
+    expect(wrapper.find('.preview-frame').exists()).toBe(true)
+
+    // Leave and re-enter preview mode with no revision/template change.
+    await wrapper.setProps({ active: false })
+    await flushPromises()
+    await wrapper.setProps({ active: true })
+    await flushPromises()
+
+    // The valid cache is reused; the backend is not asked to render again.
+    expect(previewMock).toHaveBeenCalledTimes(1)
+    expect(wrapper.find('.preview-frame').exists()).toBe(true)
   })
 
   it('drops a late preview response after revision changes', async () => {
