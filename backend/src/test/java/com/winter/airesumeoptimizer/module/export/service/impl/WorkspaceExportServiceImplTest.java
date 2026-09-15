@@ -200,17 +200,14 @@ class WorkspaceExportServiceImplTest {
 
     @Test
     void previewAllowsNeedsReviewContentAndSurfacesReviewFlag() {
-        // 待确认内容仍允许预览（审查工具），但 preflight 携带待确认标志；正式导出的阻断在 export 路径。
+        // 待确认内容仍允许预览；preflight 只携带 advisory 标志，不再意味着导出会被拒绝。
         when(workspaceContentService.getPersistedContentForRender(USER_ID, TASK_ID)).thenReturn(savedContent());
         when(resumePdfRenderer.render(any(ResumeDocumentDTO.class), any(ResumeTemplateId.class)))
                 .thenReturn(renderResult());
         givenTaskWithTargetVersion();
         when(exportDocumentGate.check(any(), any(), any()))
                 .thenReturn(new ExportDocumentGate.GateResult(
-                        ExportDocumentGate.STATUS_BLOCK,
-                        ExportDocumentGate.CODE_DOCUMENT_NOT_CONFIRMED,
-                        "NEEDS_REVIEW",
-                        true));
+                        ExportDocumentGate.STATUS_PASS, null, "NEEDS_REVIEW", true));
         ExportPreflight reviewPreflight = new ExportPreflight(2, false, false, false, false, true, List.of());
         when(preflightChecker.check(any(), any(), anyBoolean())).thenReturn(reviewPreflight);
         when(previewReceiptService.issue(any())).thenReturn(PREVIEW_RECEIPT);
@@ -222,42 +219,36 @@ class WorkspaceExportServiceImplTest {
     }
 
     @Test
-    void previewAllowsStructureFidelityBlockerAsDiagnosticAndExportStillRejects() {
-        // Structure Fidelity 是 reviewable blocker：Preview 仍然渲染 PDF 并携带 needsReview，
-        // 但正式 Export 必须被 Document Gate 拒绝，且不能产生渲染/存储副作用。
+    void exportSucceedsWithAdvisoryConcernsEvenWhenPreflightNeedsReview() {
+        // 产品原则：系统负责发现问题和提醒用户，用户决定是否修改。
+        // Structure Fidelity / 内容质量只产生 needsReview 提醒；不处理也能导出。
         when(workspaceContentService.getPersistedContentForRender(USER_ID, TASK_ID)).thenReturn(savedContent());
         when(resumePdfRenderer.render(any(ResumeDocumentDTO.class), any(ResumeTemplateId.class)))
                 .thenReturn(renderResult());
         givenTaskWithTargetVersion();
         when(exportDocumentGate.check(any(), any(), any()))
                 .thenReturn(new ExportDocumentGate.GateResult(
-                        ExportDocumentGate.STATUS_BLOCK,
-                        ExportDocumentGate.CODE_STRUCTURE_FIDELITY_FAILED,
-                        "READY",
-                        true));
-        ExportPreflight reviewPreflight = new ExportPreflight(2, false, false, false, false, true, List.of());
-        when(preflightChecker.check(any(), any(), anyBoolean())).thenReturn(reviewPreflight);
+                        ExportDocumentGate.STATUS_PASS, null, "READY", true));
+        when(preflightChecker.check(any(), any(), anyBoolean()))
+                .thenReturn(new ExportPreflight(2, false, false, false, false, false, true, List.of()));
+        when(previewReceiptService.verify(PREVIEW_RECEIPT)).thenReturn(receiptClaims("classic"));
         when(previewReceiptService.issue(any())).thenReturn(PREVIEW_RECEIPT);
+        givenCommittedInsert();
+        when(fileStorageService.store(any(StoreFileCommand.class))).thenReturn(
+                new StoredFile("exports/7/20260821/key.pdf", "resume.pdf", "application/pdf",
+                        PDF.length, "LOCAL"));
 
         RenderedPdf rendered = service.preview(USER_ID, TASK_ID, "classic", REVISION);
-
-        verify(resumePdfRenderer).render(any(ResumeDocumentDTO.class), any(ResumeTemplateId.class));
-        assertThat(rendered.pdf()).isEqualTo(PDF);
         assertThat(rendered.preflight().needsReview()).isTrue();
-        assertThat(rendered.previewReceipt()).isEqualTo(PREVIEW_RECEIPT);
 
-        // The receipt issued during a blocked preview must never bypass the Export Gate.
         WorkspaceExportRequestDTO request = new WorkspaceExportRequestDTO();
         request.setTemplateId("classic");
         request.setExpectedRevision(REVISION);
         request.setPreviewReceipt(PREVIEW_RECEIPT);
-        assertThatThrownBy(() -> service.export(USER_ID, TASK_ID, request))
-                .isInstanceOfSatisfying(BusinessException.class,
-                        exception -> {
-                            assertThat(exception.getCode()).isEqualTo(409);
-                            assertThat(exception.getMessage()).contains("STRUCTURE_FIDELITY_FAILED");
-                        });
-        verify(fileStorageService, never()).store(any());
+        ExportArtifactVO exported = service.export(USER_ID, TASK_ID, request);
+
+        assertThat(exported.getContentRevision()).isEqualTo(REVISION);
+        verify(fileStorageService).store(any(StoreFileCommand.class));
     }
 
     @Test
@@ -287,9 +278,9 @@ class WorkspaceExportServiceImplTest {
         when(exportDocumentGate.check(any(), any(), any()))
                 .thenReturn(new ExportDocumentGate.GateResult(
                         ExportDocumentGate.STATUS_BLOCK,
-                        ExportDocumentGate.CODE_DOCUMENT_NOT_CONFIRMED,
-                        "NEEDS_REVIEW",
-                        true));
+                        ExportDocumentGate.CODE_RESUME_PARSE_PENDING,
+                        "PENDING",
+                        false));
 
         WorkspaceExportRequestDTO request = new WorkspaceExportRequestDTO();
         request.setTemplateId("classic");
@@ -300,48 +291,48 @@ class WorkspaceExportServiceImplTest {
                 .isInstanceOfSatisfying(BusinessException.class,
                         exception -> {
                             assertThat(exception.getCode()).isEqualTo(409);
-                            assertThat(exception.getMessage()).contains("DOCUMENT_NOT_CONFIRMED");
+                            assertThat(exception.getMessage()).contains("RESUME_PARSE_PENDING");
                         });
         verify(resumePdfRenderer, never()).render(any(), any());
         verify(fileStorageService, never()).store(any());
     }
 
     @Test
-    void exportRejectsWhenPdfGateDetectsOverflowOrOrphanFinalPage() {
+    void exportSucceedsWithPdfLayoutAdvisoriesAndRecordsThemOnTheArtifact() {
+        // PDF 质量门降级为 advisory：越界、孤立末页、字号偏小只记录进导出物，不再拒绝导出。
         when(workspaceContentService.getPersistedContentForRender(USER_ID, TASK_ID)).thenReturn(savedContent());
         givenTaskWithTargetVersion();
         when(resumePdfRenderer.render(any(), any())).thenReturn(renderResult());
+        when(previewReceiptService.verify(PREVIEW_RECEIPT)).thenReturn(receiptClaims("classic"));
+        when(preflightChecker.check(any(), any(), anyBoolean()))
+                .thenReturn(new ExportPreflight(3, true, true, true, true, true, true,
+                        List.of("MISSING_CONTACT", "PAGE_LIMIT_EXCEEDED", "CONTENT_OUT_OF_PAGE_BOUNDS",
+                                "ORPHAN_FINAL_PAGE", "READABILITY_TOO_SMALL")));
+        givenCommittedInsert();
+        when(fileStorageService.store(any(StoreFileCommand.class))).thenReturn(
+                new StoredFile("exports/7/20260821/key.pdf", "resume.pdf", "application/pdf",
+                        PDF.length, "LOCAL"));
 
         WorkspaceExportRequestDTO request = new WorkspaceExportRequestDTO();
         request.setTemplateId("classic");
         request.setExpectedRevision(REVISION);
         request.setPreviewReceipt(PREVIEW_RECEIPT);
+        service.export(USER_ID, TASK_ID, request);
 
-        // 文字越界：正式导出阻断。
-        when(previewReceiptService.verify(PREVIEW_RECEIPT)).thenReturn(receiptClaims("classic"));
-        when(preflightChecker.check(any(), any(), anyBoolean()))
-                .thenReturn(new ExportPreflight(2, false, false, true, false, false, List.of()));
-        assertThatThrownBy(() -> service.export(USER_ID, TASK_ID, request))
-                .isInstanceOfSatisfying(BusinessException.class,
-                        exception -> {
-                            assertThat(exception.getCode()).isEqualTo(409);
-                            assertThat(exception.getMessage()).contains("CONTENT_OUT_OF_PAGE_BOUNDS");
-                        });
-
-        // 孤立末页（页数 ≥2 且末页非空行 <3）：正式导出阻断。
-        when(preflightChecker.check(any(), any(), anyBoolean()))
-                .thenReturn(new ExportPreflight(2, false, false, false, true, false, List.of()));
-        assertThatThrownBy(() -> service.export(USER_ID, TASK_ID, request))
-                .isInstanceOfSatisfying(BusinessException.class,
-                        exception -> {
-                            assertThat(exception.getCode()).isEqualTo(409);
-                            assertThat(exception.getMessage()).contains("ORPHAN_FINAL_PAGE");
-                        });
-        verify(fileStorageService, never()).store(any());
+        ArgumentCaptor<ExportArtifact> captor = ArgumentCaptor.forClass(ExportArtifact.class);
+        verify(exportArtifactMapper).insert(captor.capture());
+        ExportArtifact stored = captor.getValue();
+        assertThat(stored.getPageCount()).isEqualTo(3);
+        assertThat(stored.getMissingContact()).isTrue();
+        assertThat(stored.getPageLimitExceeded()).isTrue();
+        assertThat(stored.getOverflowDetected()).isTrue();
+        assertThat(stored.getOrphanFinalPage()).isTrue();
+        assertThat(stored.getReadabilityTooSmall()).isTrue();
+        verify(fileStorageService).store(any(StoreFileCommand.class));
     }
 
     @Test
-    void exportRejectsUnreadableFontBeforeStorage() {
+    void exportSucceedsWithUnreadableFontAdvisory() {
         when(workspaceContentService.getPersistedContentForRender(USER_ID, TASK_ID)).thenReturn(savedContent());
         givenTaskWithTargetVersion();
         when(resumePdfRenderer.render(any(ResumeDocumentDTO.class), any(ResumeTemplateId.class)))
@@ -350,16 +341,21 @@ class WorkspaceExportServiceImplTest {
         when(preflightChecker.check(any(), any(), anyBoolean()))
                 .thenReturn(new ExportPreflight(1, false, false, false, false, true, false,
                         List.of("READABILITY_TOO_SMALL")));
+        givenCommittedInsert();
+        when(fileStorageService.store(any(StoreFileCommand.class))).thenReturn(
+                new StoredFile("exports/7/20260821/key.pdf", "resume.pdf", "application/pdf",
+                        PDF.length, "LOCAL"));
 
         WorkspaceExportRequestDTO request = new WorkspaceExportRequestDTO();
         request.setTemplateId("classic");
         request.setExpectedRevision(REVISION);
         request.setPreviewReceipt(PREVIEW_RECEIPT);
+        service.export(USER_ID, TASK_ID, request);
 
-        assertThatThrownBy(() -> service.export(USER_ID, TASK_ID, request))
-                .isInstanceOfSatisfying(BusinessException.class,
-                        exception -> assertThat(exception.getMessage()).contains("READABILITY_TOO_SMALL"));
-        verify(fileStorageService, never()).store(any());
+        ArgumentCaptor<ExportArtifact> captor = ArgumentCaptor.forClass(ExportArtifact.class);
+        verify(exportArtifactMapper).insert(captor.capture());
+        assertThat(captor.getValue().getReadabilityTooSmall()).isTrue();
+        verify(fileStorageService).store(any(StoreFileCommand.class));
     }
 
     @Test

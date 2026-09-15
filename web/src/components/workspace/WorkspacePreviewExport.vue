@@ -74,79 +74,66 @@ const canOperate = computed(
 const currentPreviewKey = computed(
   () => `${props.optimizationTaskId}:${props.revision}:${templateId.value}`,
 )
+/**
+ * 导出只需要一个与当前 (task, revision, template) 绑定的有效 Preview receipt。
+ * 内容质量、Structure Fidelity、PDF 排版快照全部是 advisory 提示；
+ * 真正无法导出时由服务端返回错误，前端不再提前禁用按钮。
+ */
 const canExport = computed(
   () =>
     canOperate.value &&
     previewKey.value === currentPreviewKey.value &&
     previewReceipt.value !== null &&
-    previewPreflight.value !== null &&
-    !previewPreflight.value.missingContact &&
-    !previewPreflight.value.overflowDetected &&
-    !previewPreflight.value.orphanFinalPage &&
-    !previewPreflight.value.readabilityTooSmall &&
-    !previewPreflight.value.needsReview,
+    previewPreflight.value !== null,
 )
 
-const blockingPreflightMessages = computed(() => {
+/** 导出前建议（全部 advisory，不再阻断）：机器事实 → 人话。 */
+const advisoryPreflightMessages = computed(() => {
   const result = previewPreflight.value
   if (!result) return []
   const messages: string[] = []
-  if (result.missingContact) messages.push('缺少可用联系方式，需要补充电话或邮箱')
-  if (result.overflowDetected) messages.push('检测到文字超出页面边界，需要调整内容或编辑器字段')
-  if (result.orphanFinalPage) messages.push('末页内容过少，需要调整内容分页')
-  if (result.readabilityTooSmall) messages.push('部分字号低于可读下限，需要调整内容')
+  if (result.missingContact) messages.push('未检测到电话或邮箱，建议补充联系方式')
+  if (result.pageLimitExceeded) messages.push('当前 PDF 超过建议的 2 页，可以导出，但建议检查内容取舍')
+  if (result.overflowDetected) messages.push('检测到文字超出页面边界，建议调整内容或编辑器字段')
+  if (result.orphanFinalPage) messages.push('末页内容过少，建议调整内容分页')
+  if (result.readabilityTooSmall) messages.push('部分字号低于可读下限，建议调整内容')
   return messages
 })
 
 const fidelityIssueCount = computed(() => props.fidelityIssueCount ?? 0)
-const showFidelityBanner = computed(() => Boolean(previewPreflight.value?.needsReview))
+const showFidelityBanner = computed(
+  () => fidelityIssueCount.value > 0 || Boolean(previewPreflight.value?.needsReview),
+)
 const fidelityBannerText = computed(() =>
   fidelityIssueCount.value > 0
-    ? `还有 ${fidelityIssueCount.value} 项内容需要确认，处理后才能导出。`
-    : '还有内容需要确认，处理后才能导出。',
+    ? `发现 ${fidelityIssueCount.value} 项建议检查。建议导出前检查，但你仍可以继续导出。`
+    : '还有部分内容建议检查，但不影响继续导出。',
 )
-/** 导出按钮下一两行人话，不展示内部 code。 */
+/** 导出按钮旁边的人话清单，不展示内部 code。 */
 const exportIssueMessages = computed(() => {
-  const messages = [...blockingPreflightMessages.value]
+  const messages = [...advisoryPreflightMessages.value]
   if (previewPreflight.value?.needsReview) {
     messages.push(
       fidelityIssueCount.value > 0
-        ? `还有 ${fidelityIssueCount.value} 项内容需要确认`
-        : '还有内容需要确认',
+        ? `⚠ ${fidelityIssueCount.value} 项建议检查`
+        : '还有部分内容建议检查',
     )
   }
   return messages
 })
-const exportButtonLabel = computed(() => {
-  if (canExport.value) return '导出 PDF'
-  return exportIssueMessages.value.length > 0
-    ? `导出 PDF（需要先处理 ${exportIssueMessages.value.length} 项问题）`
-    : '导出 PDF'
-})
 
-const advisoryPreflightMessages = computed(() => {
-  const result = previewPreflight.value
-  if (!result || !result.pageLimitExceeded) return []
-  return ['当前 PDF 超过建议的 2 页，可以导出，但建议检查内容取舍']
-})
-
-const allPreflightMessages = computed(() => [
-  ...blockingPreflightMessages.value,
-  ...advisoryPreflightMessages.value,
-])
+const allPreflightMessages = computed(() => exportIssueMessages.value)
 
 const preflightStatusLabel = computed(() => {
   if (!previewPreflight.value) return '尚未检查'
-  if (blockingPreflightMessages.value.length) return '需要处理后才能导出'
-  if (previewPreflight.value.needsReview) return '还有内容需要确认'
-  if (advisoryPreflightMessages.value.length) return '可以导出，建议检查页数'
+  if (previewPreflight.value.needsReview) return '有内容建议检查'
+  if (advisoryPreflightMessages.value.length) return '可以导出，建议检查'
   return '可以导出'
 })
 
 const preflightStatusClass = computed(() => {
   if (!previewPreflight.value) return 'is-pending'
-  if (blockingPreflightMessages.value.length) return 'is-blocked'
-  if (advisoryPreflightMessages.value.length) return 'is-advisory'
+  if (previewPreflight.value.needsReview || advisoryPreflightMessages.value.length) return 'is-advisory'
   return 'is-ready'
 })
 
@@ -531,11 +518,12 @@ onBeforeUnmount(() => {
         <div v-if="showFidelityBanner" class="preview-fidelity-banner" role="status">
           <span>{{ fidelityBannerText }}</span>
           <button
+            v-if="fidelityIssueCount > 0"
             type="button"
             class="resolve-fidelity-action"
             @click="emit('resolveFidelity')"
           >
-            查看并处理
+            查看问题
           </button>
         </div>
         <div class="preview-document-canvas">
@@ -606,8 +594,8 @@ onBeforeUnmount(() => {
               <span><strong>{{ check.label }}</strong><small>{{ check.detail }}</small></span>
             </li>
           </ul>
-          <p v-if="blockingPreflightMessages.length" class="preflight-blocked-copy">
-            处理后才能导出：{{ blockingPreflightMessages[0] }}
+          <p v-if="exportIssueMessages.length" class="preflight-advisory-copy">
+            以下只是建议检查项；你可以先调整，也可以直接导出。
           </p>
           <details v-if="allPreflightMessages.length" class="preflight-details">
             <summary>查看完整检查</summary>
@@ -687,15 +675,16 @@ onBeforeUnmount(() => {
           <ul
             v-else-if="exportIssueMessages.length"
             class="export-issue-list"
-            aria-label="导出前需要处理的问题"
+            aria-label="导出前建议检查"
           >
             <li v-for="issue in exportIssueMessages.slice(0, 3)" :key="issue">{{ issue }}</li>
           </ul>
           <p v-else-if="!canExport" class="export-blocked-copy">
-            {{ previewPreflight ? '请先处理导出前检查中的阻断项。' : '生成预览并完成导出前检查后可导出。' }}
+            {{ previewPreflight ? '预览已失效，请重新预览后再导出。' : '请先生成预览，再导出 PDF。' }}
           </p>
+          <p v-else class="export-advisory-copy">建议导出前检查，但你仍可以继续导出。</p>
           <el-button type="primary" :loading="exporting" :disabled="!canExport" @click="handleExport">
-            {{ exportButtonLabel }}
+            导出 PDF
           </el-button>
         </section>
       </aside>
@@ -972,7 +961,7 @@ onBeforeUnmount(() => {
 }
 
 .preflight-check-list li.is-warning .preflight-check-marker {
-  background: var(--app-danger);
+  background: var(--app-warning);
 }
 
 .preflight-check-list li span:last-child {
@@ -987,12 +976,12 @@ onBeforeUnmount(() => {
 }
 
 .preflight-check-list li.is-warning small {
-  color: var(--app-danger);
+  color: var(--app-warning);
 }
 
-.preflight-blocked-copy {
+.preflight-advisory-copy {
   margin: 0;
-  color: var(--app-danger);
+  color: var(--app-text-secondary);
   font-size: var(--app-font-size-xs);
   line-height: var(--app-line-height-body);
 }
@@ -1042,7 +1031,14 @@ onBeforeUnmount(() => {
 }
 
 .export-blocked-copy {
-  color: var(--app-warning);
+  color: var(--app-text-secondary);
+}
+
+.export-advisory-copy {
+  margin: 0;
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-size-xs);
+  line-height: var(--app-line-height-body);
 }
 
 .export-issue-list {

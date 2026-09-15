@@ -252,10 +252,11 @@ describe('WorkspacePreviewExport', () => {
     expect(wrapper.text()).toContain('缺少可用联系方式')
     expect(wrapper.text()).toContain('超过建议的 2 页')
     expect(wrapper.text()).toContain('文字超出页面边界')
-    expect(button(wrapper, '导出 PDF').attributes('disabled')).toBeDefined()
+    // 表单建议不再阻断：可以导出，提示常驻但按钮可用。
+    expect(button(wrapper, '导出 PDF').attributes('disabled')).toBeUndefined()
   })
 
-  it('keeps the PDF visible but disables export when preflight needs review', async () => {
+  it('keeps the PDF visible and still allows export when the preflight needs review', async () => {
     previewMock.mockResolvedValue({
       ...previewResult(),
       preflight: {
@@ -271,14 +272,13 @@ describe('WorkspacePreviewExport', () => {
     const wrapper = mountComponent('saved', 3, true, 2)
     await flushPromises()
 
-    // Preview is a diagnostic tool: the PDF stays visible even when the
-    // structure fidelity gate blocks formal export.
+    // Structure Fidelity 只是建议：PDF 可见，导出仍然可用。
     expect(wrapper.find('.preview-frame').exists()).toBe(true)
     const banner = wrapper.get('.preview-fidelity-banner')
-    expect(banner.text()).toContain('还有 2 项内容需要确认，处理后才能导出。')
-    expect(banner.get('button').text()).toBe('查看并处理')
-    expect(button(wrapper, '导出 PDF').attributes('disabled')).toBeDefined()
-    expect(button(wrapper, '导出 PDF').text()).toBe('导出 PDF（需要先处理 1 项问题）')
+    expect(banner.text()).toContain('发现 2 项建议检查。建议导出前检查，但你仍可以继续导出。')
+    expect(banner.get('button').text()).toBe('查看问题')
+    expect(button(wrapper, '导出 PDF').attributes('disabled')).toBeUndefined()
+    expect(button(wrapper, '导出 PDF').text()).toBe('导出 PDF')
   })
 
   it('regenerates an invalidated preview when preview mode becomes active again', async () => {
@@ -428,7 +428,7 @@ describe('WorkspacePreviewExport', () => {
     expect(button(wrapper, '导出 PDF').attributes('disabled')).toBeDefined()
   })
 
-  it('offers 查看并处理 for a needsReview preflight and only emits a navigation event', async () => {
+  it('offers 查看问题 for a needsReview preflight and only emits a navigation event', async () => {
     previewMock.mockResolvedValue({
       ...previewResult(),
       preflight: { ...previewResult().preflight, needsReview: true },
@@ -440,17 +440,18 @@ describe('WorkspacePreviewExport', () => {
         revision: 3,
         status: 'saved',
         active: true,
+        fidelityIssueCount: 1,
         onStale: staleHandler,
         onResolveFidelity: resolveFidelity,
       },
     })
     await flushPromises()
 
-    // PDF 仍然可见（Preview 是诊断工具），但导出被阻断且提供处理入口。
+    // 建议检查只影响提示：PDF 可见、导出可用，并保留处理入口。
     expect(wrapper.find('.preview-frame').exists()).toBe(true)
-    expect(button(wrapper, '导出 PDF').attributes('disabled')).toBeDefined()
+    expect(button(wrapper, '导出 PDF').attributes('disabled')).toBeUndefined()
     const action = wrapper.get('.preview-fidelity-banner button')
-    expect(action.text()).toBe('查看并处理')
+    expect(action.text()).toBe('查看问题')
 
     const previewRequestsBefore = previewMock.mock.calls.length
     await action.trigger('click')
@@ -459,14 +460,14 @@ describe('WorkspacePreviewExport', () => {
     expect(resolveFidelity).toHaveBeenCalledTimes(1)
     // 只做导航：不重新渲染、不修改导出状态。
     expect(previewMock).toHaveBeenCalledTimes(previewRequestsBefore)
-    expect(button(wrapper, '导出 PDF').attributes('disabled')).toBeDefined()
+    expect(button(wrapper, '导出 PDF').attributes('disabled')).toBeUndefined()
   })
 
-  it('does not offer 查看并处理 when the preflight has no structure review', async () => {
+  it('does not offer 查看问题 when the preflight has no structure review', async () => {
     const wrapper = mountComponent()
     await flushPromises()
 
     expect(wrapper.text()).toContain('可以导出')
-    expect(wrapper.findAll('button').some((item) => item.text().includes('查看并处理'))).toBe(false)
+    expect(wrapper.findAll('button').some((item) => item.text().includes('查看问题'))).toBe(false)
   })
 })

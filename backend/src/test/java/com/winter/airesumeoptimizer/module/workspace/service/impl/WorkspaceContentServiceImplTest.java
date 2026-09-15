@@ -349,7 +349,7 @@ class WorkspaceContentServiceImplTest {
         assertThat(result.targetResumeVersionId()).isEqualTo(TARGET_VERSION_ID);
         assertThat(result.sourceFilename()).isEqualTo("candidate.pdf");
         assertThat(result.sourcePdfAvailable()).isTrue();
-        assertThat(result.exportBlocked()).isTrue();
+        assertThat(result.exportBlocked()).isFalse();
         assertThat(result.fidelityIssues()).extracting(issue -> issue.code())
                 .contains("SOURCE_MANIFEST_UNAVAILABLE");
     }
@@ -581,7 +581,9 @@ class WorkspaceContentServiceImplTest {
         WorkspaceContentSaveResultVO unconfirmed = service.unconfirmSourceOmissions(
                 USER_ID, TASK_ID, new WorkspaceSourceOmissionRequestDTO(2L, List.of("occ-bullet")));
         assertThat(unconfirmed.getDocument().getConfirmedSourceOmissionIds()).isEmpty();
-        assertThat(service.getSourceReference(USER_ID, TASK_ID).exportBlocked()).isTrue();
+        assertThat(service.getSourceReference(USER_ID, TASK_ID).exportBlocked()).isFalse();
+        assertThat(service.getSourceReference(USER_ID, TASK_ID).fidelityIssues())
+                .extracting(issue -> issue.code()).contains("SOURCE_CONTENT_UNMAPPED");
     }
 
     @Test
@@ -632,8 +634,8 @@ class WorkspaceContentServiceImplTest {
                 .containsExactly("occ-entry", "occ-field", "occ-tech",
                         "occ-skill", "occ-description", "occ-bullet");
         WorkspaceSourceReferenceVO confirmedFidelity = service.getSourceReference(USER_ID, TASK_ID);
-        // Whole-Project confirmed omission releases the boundary blocker; the document
-        // becomes exportable when no other blocker remains.
+        // Whole-Project confirmed omission releases the boundary advisory; fidelity never blocks
+        // export by itself, so exportBlocked stays false in every branch.
         assertThat(confirmedFidelity.fidelityIssues()).extracting(issue -> issue.code())
                 .doesNotContain("PROJECT_BOUNDARY_LOST", "SOURCE_CONTENT_UNMAPPED");
         assertThat(confirmedFidelity.exportBlocked()).isFalse();

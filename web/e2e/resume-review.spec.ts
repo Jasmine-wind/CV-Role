@@ -725,7 +725,7 @@ test.describe('Resume Review Workspace', () => {
     await expect(page).toHaveURL(/\/workspace\/42/, { timeout: 15_000 })
     await expect(page.locator('textarea').first()).toBeVisible({ timeout: 15_000 })
 
-    // Preview 正常：仍有内容需要确认只提示，不阻止查看 PDF；导出保持严格。
+    // 建议检查只提醒不阻断：PDF 可见，导出按钮保持可用（真实导出由后端裁决）。
     await page.route('**/api/workspace/42/preview.pdf*', (route) => {
       const expectedRevision =
         new URL(route.request().url()).searchParams.get('expectedRevision') ?? '3'
@@ -753,7 +753,8 @@ test.describe('Resume Review Workspace', () => {
     })
     await page.getByRole('button', { name: '预览 →', exact: true }).click()
     await expect(page.getByTitle('简历 PDF 预览')).toBeVisible({ timeout: 15_000 })
-    await expect(page.locator('.preflight-section')).toContainText('还有内容需要确认')
-    await expect(page.getByRole('button', { name: /需要先处理/ })).toBeDisabled()
+    await expect(page.locator('.preflight-section')).toContainText('有内容建议检查')
+    await expect(page.locator('.preview-fidelity-banner')).toContainText('不影响继续导出')
+    await expect(page.getByRole('button', { name: '导出 PDF', exact: true })).toBeEnabled()
   })
 })

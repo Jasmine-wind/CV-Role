@@ -430,7 +430,7 @@ class WorkspaceSourceRestoreServiceImplTest {
     // ---------------------------------------------------------------------
 
     @Test
-    void deletedBulletRestoreRebuildsExactFrozenNodeAndClearsTheBlocker() {
+    void deletedBulletRestoreRebuildsExactFrozenNodeAndClearsTheAdvisory() {
         ResumeDocumentDTO frozen = canonicalFrozenDocument();
         freeze(frozen);
         ResumeDocumentDTO deleted = withoutBullet(frozen, "s-1-e-1-b-1");
@@ -440,7 +440,8 @@ class WorkspaceSourceRestoreServiceImplTest {
         WorkspaceSourceReferenceVO.SourceBlock bulletBlock = blockOf(before, "occ-bullet");
         assertThat(before.fidelityIssues()).extracting(WorkspaceSourceReferenceVO.FidelityIssue::code)
                 .contains("SOURCE_CONTENT_UNMAPPED");
-        assertThat(before.exportBlocked()).isTrue();
+        // Fidelity 是 advisory：未映射原文只产生 issue，不会置位 exportBlocked。
+        assertThat(before.exportBlocked()).isFalse();
         assertThat(bulletBlock.restoreEligible()).isTrue();
         assertThat(bulletBlock.restoreScope()).isEqualTo(WorkspaceSourceRestoreScope.BULLET);
         assertThat(bulletBlock.restoreBlockedReason()).isNull();
@@ -651,7 +652,7 @@ class WorkspaceSourceRestoreServiceImplTest {
     }
 
     @Test
-    void wrongMergeBoundaryIsRejectedAndTheBoundaryBlockerStays() {
+    void wrongMergeBoundaryIsRejectedAndTheBoundaryIssueStays() {
         ResumeDocumentDTO frozen = twoProjectFrozenDocument();
         freeze(frozen);
         ResumeDocumentDTO wrongMerge = withStrayBulletInEntry(

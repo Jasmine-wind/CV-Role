@@ -18,6 +18,10 @@ public record WorkspaceSourceReferenceVO(
         List<FidelityIssue> fidelityIssues,
         Map<WorkspaceSourceMappingStatus, Integer> statusCounts,
         int confirmedOmissionCount,
+        /**
+         * 兼容字段：fidelity issues 是 advisory，不再自动置位；当前恒为 false。
+         * 真正阻止操作的只有技术上无法完成（render/storage/CAS/权限/内部错误）。
+         */
         boolean exportBlocked) {
 
     public WorkspaceSourceReferenceVO {
@@ -106,6 +110,7 @@ public record WorkspaceSourceReferenceVO(
 
     public record FidelityIssue(
             String code,
+            /** 仅表示问题严重程度（供聚合与排序使用），不再表示禁止导出。 */
             String severity,
             String message,
             List<String> sourceOccurrenceIds,
@@ -113,10 +118,6 @@ public record WorkspaceSourceReferenceVO(
         public FidelityIssue {
             sourceOccurrenceIds = sourceOccurrenceIds == null ? List.of() : List.copyOf(sourceOccurrenceIds);
             targetNodeIds = targetNodeIds == null ? List.of() : List.copyOf(targetNodeIds);
-        }
-
-        public boolean blocker() {
-            return "BLOCKER".equals(severity);
         }
     }
 }

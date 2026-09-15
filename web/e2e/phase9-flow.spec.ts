@@ -418,7 +418,7 @@ test('workspace conflict preserves the local draft; stale Preview and Suggest ca
   await first.close()
 })
 
-test('intentional omission: a deleted source bullet blocks delivery until confirmed and can be unconfirmed', async ({
+test('a deleted source bullet stays advisory: preview and export keep working while omission stays available', async ({
   page,
 }) => {
   await registerAndLogin(page)
@@ -467,7 +467,7 @@ test('intentional omission: a deleted source bullet blocks delivery until confir
   await deletedSave
   await expect(page.getByText('✓ 已保存', { exact: true })).toBeVisible({ timeout: 15_000 })
   await expect(sourceCard.locator('.mapping-state')).toHaveText('需要处理', { timeout: 15_000 })
-  await expect(page.locator('.fidelity-strip')).toContainText(/还有 \d+ 项内容需要确认/)
+  await expect(page.locator('.fidelity-strip')).toContainText(/发现 \d+ 项建议检查/)
 
   let previewRequestCount = 0
   const countPreviewRequest = (request: { url: () => string }) => {
@@ -489,14 +489,19 @@ test('intentional omission: a deleted source bullet blocks delivery until confir
     (block) => block.id === sourceBlockId,
   )?.occurrenceIds
   expect(expectedOrdinaryOccurrenceIds).toBeTruthy()
-  expect(fidelityPayload.data.exportBlocked).toBe(true)
-  // Structure Fidelity blocker no longer prevents Preview; it only prevents Export.
+  // Fidelity issues 是 advisory：仍是 BLOCKER 严重度，但不再置位 exportBlocked。
+  expect(fidelityPayload.data.exportBlocked).toBe(false)
+  // 不处理任何建议也能完成主流程：PDF 可见、提示人话、导出可用且真实成功。
   await expect(page.getByTitle('简历 PDF 预览')).toBeVisible({ timeout: 45_000 })
   expect(previewRequestCount).toBeGreaterThan(0)
-  // Preview 顶部以人话提示还剩多少项需要确认，并提供“查看并处理”入口。
-  await expect(page.locator('.preview-fidelity-banner')).toContainText('项内容需要确认，处理后才能导出。')
-  await expect(page.locator('.preview-fidelity-banner button')).toHaveText('查看并处理')
-  await expect(page.getByRole('button', { name: /导出 PDF/ })).toBeDisabled()
+  await expect(page.locator('.preview-fidelity-banner')).toContainText(
+    /项建议检查。建议导出前检查，但你仍可以继续导出。/,
+  )
+  await expect(page.locator('.preview-fidelity-banner button')).toHaveText('查看问题')
+  const fidelityDownload = page.waitForEvent('download')
+  await page.getByRole('button', { name: '导出 PDF', exact: true }).click()
+  const fidelityDownloaded = await fidelityDownload
+  expect(await fidelityDownloaded.path()).toBeTruthy()
   page.off('request', countPreviewRequest)
   // Return to edit mode so the omission confirmation flow can continue.
   await page.getByRole('button', { name: '返回编辑', exact: true }).click()
@@ -553,9 +558,10 @@ test('intentional omission: a deleted source bullet blocks delivery until confir
   await expect(sourceCard.locator('.mapping-state')).toHaveText('已确认省略', {
     timeout: 15_000,
   })
-  await expect(page.locator('.fidelity-strip')).toContainText('内容检查通过', {
-    timeout: 15_000,
-  })
+  // 确认省略后未映射建议消失；其他 advisory（如 SPLIT / 定位不全）可能仍在。
+  await expect(
+    page.locator('.issue-card[data-issue-code="SOURCE_CONTENT_UNMAPPED"]'),
+  ).toHaveCount(0, { timeout: 15_000 })
 
   // 保存失败时真正阻止：按钮不可用并给出简单说明，且不发任何 omission POST。
   await page.route('**/api/workspace/*/content', async (route) => {
@@ -661,7 +667,7 @@ test('intentional omission: a deleted source bullet blocks delivery until confir
   expect(new Set(confirmBody.sourceOccurrenceIds).size).toBe(confirmBody.sourceOccurrenceIds.length)
 
   await expect(sourceCard.locator('.mapping-state')).toHaveText('需要处理', { timeout: 15_000 })
-  await expect(page.locator('.fidelity-strip')).toContainText(/还有 \d+ 项内容需要确认/, {
+  await expect(page.locator('.fidelity-strip')).toContainText(/发现 \d+ 项建议检查/, {
     timeout: 15_000,
   })
 
@@ -720,7 +726,7 @@ test('intentional omission: a deleted source bullet blocks delivery until confir
   await stalePage.close()
 })
 
-test('intentional omission: a whole Project entry is released after authoritative confirmation', async ({
+test('intentional omission: a whole Project advisory is released after authoritative confirmation', async ({
   page,
 }) => {
   await registerAndLogin(page)
@@ -782,8 +788,8 @@ test('intentional omission: a whole Project entry is released after authoritativ
     .click()
   expect((await deletedSave).ok()).toBe(true)
   await expect(page.getByText('✓ 已保存', { exact: true })).toBeVisible({ timeout: 15_000 })
-  // Deleting a whole Project without confirmation produces boundary + source-gap blockers.
-  await expect(page.locator('.fidelity-strip')).toContainText(/还有 \d+ 项内容需要确认/, {
+  // Deleting a whole Project without confirmation只产生 advisory 建议，不再阻断流程。
+  await expect(page.locator('.fidelity-strip')).toContainText(/发现 \d+ 项建议检查/, {
     timeout: 15_000,
   })
 
@@ -791,7 +797,7 @@ test('intentional omission: a whole Project entry is released after authoritativ
     `.source-block[data-source-block-id="${projectBlocks[0]!.id}"]`,
   )
 
-  // Preview is a diagnostic tool: it is allowed even while blockers exist, but Export stays disabled.
+  // Fidelity 是 advisory：Preview 可见、导出可用，用户可以选择直接导出或先处理。
   let projectPreviewRequests = 0
   let lastProjectPreviewRevision: number | null = null
   const countProjectPreview = (request: { url: () => string }) => {
@@ -802,22 +808,24 @@ test('intentional omission: a whole Project entry is released after authoritativ
     if (revision !== null) lastProjectPreviewRevision = Number(revision)
   }
   page.on('request', countProjectPreview)
-  const blockedFidelityVerdict = page.waitForResponse(
+  const advisoryFidelityVerdict = page.waitForResponse(
     (response) =>
       response.request().method() === 'GET' &&
       /\/api\/workspace\/\d+\/source-reference$/.test(new URL(response.url()).pathname),
   )
   await page.getByRole('button', { name: '预览 →', exact: true }).click()
-  const blockedFidelityResponse = await blockedFidelityVerdict
-  expect(blockedFidelityResponse.ok()).toBe(true)
-  const blockedPayload = (await blockedFidelityResponse.json()) as {
+  const advisoryFidelityResponse = await advisoryFidelityVerdict
+  expect(advisoryFidelityResponse.ok()).toBe(true)
+  const advisoryPayload = (await advisoryFidelityResponse.json()) as {
     data: { exportBlocked: boolean }
   }
-  expect(blockedPayload.data.exportBlocked).toBe(true)
+  expect(advisoryPayload.data.exportBlocked).toBe(false)
   await expect(page.getByTitle('简历 PDF 预览')).toBeVisible({ timeout: 45_000 })
   expect(projectPreviewRequests).toBeGreaterThan(0)
-  await expect(page.locator('.preview-fidelity-banner')).toContainText('项内容需要确认，处理后才能导出。')
-  await expect(page.getByRole('button', { name: /导出 PDF/ })).toBeDisabled()
+  await expect(page.locator('.preview-fidelity-banner')).toContainText(
+    /项建议检查。建议导出前检查，但你仍可以继续导出。/,
+  )
+  await expect(page.getByRole('button', { name: '导出 PDF', exact: true })).toBeEnabled()
   page.off('request', countProjectPreview)
   await page.getByRole('button', { name: '返回编辑', exact: true }).click()
   await expect(page.locator('textarea').first()).toBeVisible({ timeout: 15_000 })
@@ -843,10 +851,13 @@ test('intentional omission: a whole Project entry is released after authoritativ
   const confirmedPayload = (await confirmed.json()) as { data: { revision: number } }
   const confirmedRevision = confirmedPayload.data.revision
   expect(Number.isInteger(confirmedRevision)).toBe(true)
-  // Whole-Project confirmed omission releases PROJECT_BOUNDARY_LOST; fidelity passes.
-  await expect(page.getByText('内容检查通过', { exact: true })).toBeVisible({
-    timeout: 15_000,
-  })
+  // Whole-Project confirmed omission releases PROJECT_BOUNDARY_LOST and its unmapped advisory.
+  await expect(
+    page.locator('.issue-card[data-issue-code="PROJECT_BOUNDARY_LOST"]'),
+  ).toHaveCount(0, { timeout: 15_000 })
+  await expect(
+    page.locator('.issue-card[data-issue-code="SOURCE_CONTENT_UNMAPPED"]'),
+  ).toHaveCount(0, { timeout: 15_000 })
 
   // Preview again with a clean verdict: Export becomes enabled.
   projectPreviewRequests = 0
@@ -866,7 +877,7 @@ test('intentional omission: a whole Project entry is released after authoritativ
   expect(projectFidelityPayload.data.exportBlocked).toBe(false)
   await expect(page.getByTitle('简历 PDF 预览')).toBeVisible({ timeout: 45_000 })
   // The re-entry must render a fresh PDF for the post-confirmation revision, not reuse the
-  // blocked first-preview cache. Prove both the request count and the exact revision.
+  // first-preview cache. Prove both the request count and the exact revision.
   expect(projectPreviewRequests).toBeGreaterThan(0)
   expect(lastProjectPreviewRevision).toBe(confirmedRevision)
   await expect(
@@ -894,7 +905,7 @@ test('intentional omission: a whole Project entry is released after authoritativ
     sourceOccurrenceIds: string[]
   }
   expect(unconfirmBody.sourceOccurrenceIds).toEqual(expectedProjectOccurrenceIds)
-  await expect(page.locator('.fidelity-strip')).toContainText(/还有 \d+ 项内容需要确认/, {
+  await expect(page.locator('.fidelity-strip')).toContainText(/发现 \d+ 项建议检查/, {
     timeout: 15_000,
   })
 })
@@ -998,7 +1009,7 @@ test.describe('structure fidelity resolver', () => {
     await deletedSave
     await expect(page.getByText('✓ 已保存', { exact: true })).toBeVisible({ timeout: 15_000 })
     await expect(sourceCard.locator('.mapping-state')).toHaveText('需要处理', { timeout: 15_000 })
-    await expect(page.locator('.fidelity-strip')).toContainText(/还有 \d+ 项内容需要确认/)
+    await expect(page.locator('.fidelity-strip')).toContainText(/发现 \d+ 项建议检查/)
 
     // The server verdict must authorize a BULLET restore for this block before any button shows.
     const fidelityVerdict = page.waitForResponse(
@@ -1026,22 +1037,21 @@ test.describe('structure fidelity resolver', () => {
     )
     expect(restoreBlock?.restoreEligible).toBe(true)
     expect(restoreBlock?.restoreScope).toBe('BULLET')
-    expect(fidelityPayload.data.exportBlocked).toBe(true)
+    expect(fidelityPayload.data.exportBlocked).toBe(false)
 
-    // Preview stays diagnostic: PDF visible, Export blocked, and 查看并处理 offered.
+    // 建议检查只提醒不阻断：PDF 可见、导出可用，仍提供 查看问题 入口。
     await expect(page.getByTitle('简历 PDF 预览')).toBeVisible({ timeout: 45_000 })
-    await expect(page.locator('.preview-fidelity-banner')).toContainText('项内容需要确认，处理后才能导出。')
-    await expect(page.getByRole('button', { name: /导出 PDF/ })).toBeDisabled()
+    await expect(page.locator('.preview-fidelity-banner')).toContainText(/项建议检查/)
+    await expect(page.getByRole('button', { name: '导出 PDF', exact: true })).toBeEnabled()
     const resolveAction = page.locator('.resolve-fidelity-action')
     await expect(resolveAction).toBeVisible()
     await resolveAction.click()
 
-    // Back in edit mode the first blocker is located in the source pane and rendered as an issue card.
+    // Back in edit mode the suggestion is located in the source pane and its group is expanded.
     await expect(page.locator('textarea').first()).toBeVisible({ timeout: 15_000 })
     await expect(page.locator('.source-block.is-selected')).toHaveCount(1)
     const issueCard = page
-      .locator('.issue-card')
-      .filter({ hasText: '原文内容未进入当前简历' })
+      .locator('.issue-card[data-issue-code="SOURCE_CONTENT_UNMAPPED"]')
       .first()
     await expect(issueCard).toBeVisible()
     const restoreAction = issueCard.getByRole('button', { name: '恢复原文', exact: true })
@@ -1066,11 +1076,11 @@ test.describe('structure fidelity resolver', () => {
     const restoredRevision = restorePayload.data.revision
     expect(Number.isInteger(restoredRevision)).toBe(true)
 
-    // The authoritative refresh decides the outcome: located again without a pending label, exportable.
+    // The authoritative refresh decides the outcome: located again without a pending label; the advisory is gone.
     await expect(sourceCard.locator('.mapping-state')).toHaveCount(0, { timeout: 15_000 })
-    await expect(page.getByText('内容检查通过', { exact: true })).toBeVisible({
-      timeout: 15_000,
-    })
+    await expect(
+      page.locator('.issue-card[data-issue-code="SOURCE_CONTENT_UNMAPPED"]'),
+    ).toHaveCount(0, { timeout: 15_000 })
     if (restoreBlock?.text) {
       const restoredValues = await page
         .locator('.bullet-block textarea')
@@ -1122,9 +1132,14 @@ test.describe('structure fidelity resolver', () => {
     await expect(page.getByText('✓ 已保存', { exact: true })).toBeVisible({ timeout: 15_000 })
 
     // One problem, two legitimate paths: restore or confirm the intentional omission.
+    // 建议检查区域默认折叠：展开后才从问题卡片确认省略。
+    await page.locator('.fidelity-issues summary').click()
+    const unmappedGroup = page
+      .locator('.issue-group')
+      .filter({ has: page.locator('.issue-card[data-issue-code="SOURCE_CONTENT_UNMAPPED"]') })
+    await unmappedGroup.locator('.issue-group-toggle').click()
     const issueCard = page
-      .locator('.issue-card')
-      .filter({ hasText: '原文内容未进入当前简历' })
+      .locator('.issue-card[data-issue-code="SOURCE_CONTENT_UNMAPPED"]')
       .first()
     await expect(issueCard).toBeVisible()
     await expect(issueCard.getByRole('button', { name: '恢复原文', exact: true })).toBeVisible()
@@ -1138,9 +1153,10 @@ test.describe('structure fidelity resolver', () => {
     )
     await confirmAction.click()
     expect((await confirmResponse).ok()).toBe(true)
-    await expect(page.getByText('内容检查通过', { exact: true })).toBeVisible({
-      timeout: 15_000,
-    })
+    // 确认省略后未映射建议消失，其他 advisory 不影响继续导出。
+    await expect(
+      page.locator('.issue-card[data-issue-code="SOURCE_CONTENT_UNMAPPED"]'),
+    ).toHaveCount(0, { timeout: 15_000 })
     await expect(sourceCard.locator('.mapping-state')).toHaveText('已确认省略', { timeout: 15_000 })
 
     await page.getByRole('button', { name: '预览 →', exact: true }).click()
@@ -1209,11 +1225,11 @@ test.describe('structure fidelity resolver', () => {
       .click()
     expect((await deletedSave).ok()).toBe(true)
     await expect(page.getByText('✓ 已保存', { exact: true })).toBeVisible({ timeout: 15_000 })
-    await expect(page.locator('.fidelity-strip')).toContainText(/还有 \d+ 项内容需要确认/, {
+    await expect(page.locator('.fidelity-strip')).toContainText(/发现 \d+ 项建议检查/, {
       timeout: 15_000,
     })
 
-    // Preview diagnostic → 查看并处理 → the Project boundary card offers the whole-project restore.
+    // Preview 可用 → 查看问题 → the Project boundary card offers the whole-project restore.
     const fidelityVerdict = page.waitForResponse(
       (response) =>
         response.request().method() === 'GET' &&
@@ -1222,13 +1238,12 @@ test.describe('structure fidelity resolver', () => {
     await page.getByRole('button', { name: '预览 →', exact: true }).click()
     expect((await fidelityVerdict).ok()).toBe(true)
     await expect(page.getByTitle('简历 PDF 预览')).toBeVisible({ timeout: 45_000 })
-    await expect(page.getByRole('button', { name: /导出 PDF/ })).toBeDisabled()
+    await expect(page.getByRole('button', { name: '导出 PDF', exact: true })).toBeEnabled()
     await page.locator('.resolve-fidelity-action').click()
     await expect(page.locator('textarea').first()).toBeVisible({ timeout: 15_000 })
 
     const projectCard = page
-      .locator('.issue-card')
-      .filter({ hasText: '项目未进入当前简历' })
+      .locator('.issue-card[data-issue-code="PROJECT_BOUNDARY_LOST"]')
       .first()
     await expect(projectCard).toBeVisible()
     const restoreWholeProject = projectCard.getByRole('button', {
@@ -1250,16 +1265,15 @@ test.describe('structure fidelity resolver', () => {
     const restorePayload = (await restored.json()) as { data: { saved: boolean; revision: number } }
     expect(restorePayload.data.saved).toBe(true)
 
-    // The whole frozen Project entry is back with its title and bullets, and the boundary blocker is gone.
+    // The whole frozen Project entry is back with its title and bullets, and the boundary advisory is gone.
     const restoredEntry = page.locator(`.editor-entry[data-entry-id="${sourceEntryId}"]`)
     await expect(restoredEntry).toBeVisible({ timeout: 15_000 })
     await expect(restoredEntry.locator('.bullet-block').first()).toBeVisible()
-    await expect(page.getByText('内容检查通过', { exact: true })).toBeVisible({
-      timeout: 15_000,
-    })
-    expect(await page.locator('.issue-card').filter({ hasText: '项目未进入当前简历' }).count()).toBe(0)
+    await expect(
+      page.locator('.issue-card[data-issue-code="PROJECT_BOUNDARY_LOST"]'),
+    ).toHaveCount(0, { timeout: 15_000 })
 
-    // Fresh Preview for the restored revision enables Export.
+    // Fresh Preview for the restored revision keeps Export enabled.
     const previewResponse = page.waitForResponse((response) =>
       response.url().includes('/preview.pdf'),
     )

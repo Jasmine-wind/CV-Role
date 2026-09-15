@@ -121,7 +121,7 @@ class WorkspaceSourceReferenceAssemblerImplTest {
 
         assertThat(result.fidelityIssues()).extracting(WorkspaceSourceReferenceVO.FidelityIssue::code)
                 .contains("SOURCE_MANIFEST_INVALID");
-        assertThat(result.exportBlocked()).isTrue();
+        assertThat(result.exportBlocked()).isFalse();
         assertThat(result.sourceBlocks()).filteredOn(block -> "occ-body".equals(block.id()))
                 .singleElement().satisfies(block -> assertThat(block.sourceGeometry()).isNull());
     }
@@ -142,7 +142,7 @@ class WorkspaceSourceReferenceAssemblerImplTest {
                 .containsExactly(WorkspaceSourceMappingStatus.AMBIGUOUS);
         assertThat(result.fidelityIssues()).extracting(WorkspaceSourceReferenceVO.FidelityIssue::code)
                 .contains("AMBIGUOUS_MAPPING");
-        assertThat(result.exportBlocked()).isTrue();
+        assertThat(result.exportBlocked()).isFalse();
     }
 
     @Test
@@ -159,7 +159,7 @@ class WorkspaceSourceReferenceAssemblerImplTest {
         assertThat(result.mappings()).filteredOn(mapping -> "b-1".equals(mapping.bulletId()))
                 .extracting(WorkspaceSourceReferenceVO.TargetMapping::status)
                 .containsExactly(WorkspaceSourceMappingStatus.AMBIGUOUS);
-        assertThat(result.exportBlocked()).isTrue();
+        assertThat(result.exportBlocked()).isFalse();
     }
 
     @Test
@@ -183,7 +183,7 @@ class WorkspaceSourceReferenceAssemblerImplTest {
         assertThat(result.mappings()).filteredOn(mapping -> "b-1".equals(mapping.bulletId()))
                 .extracting(WorkspaceSourceReferenceVO.TargetMapping::status)
                 .containsExactly(WorkspaceSourceMappingStatus.AMBIGUOUS);
-        assertThat(result.exportBlocked()).isTrue();
+        assertThat(result.exportBlocked()).isFalse();
     }
 
     @Test
@@ -210,7 +210,7 @@ class WorkspaceSourceReferenceAssemblerImplTest {
         assertThat(result.mappings()).filteredOn(mapping -> "e-1".equals(mapping.entryId()))
                 .extracting(WorkspaceSourceReferenceVO.TargetMapping::status)
                 .containsExactly(WorkspaceSourceMappingStatus.AMBIGUOUS);
-        assertThat(result.exportBlocked()).isTrue();
+        assertThat(result.exportBlocked()).isFalse();
     }
 
     @Test
@@ -265,7 +265,7 @@ class WorkspaceSourceReferenceAssemblerImplTest {
                 });
         assertThat(result.fidelityIssues()).extracting(WorkspaceSourceReferenceVO.FidelityIssue::code)
                 .contains("SOURCE_CONTENT_UNMAPPED");
-        assertThat(result.exportBlocked()).isTrue();
+        assertThat(result.exportBlocked()).isFalse();
     }
 
     @Test
@@ -289,7 +289,7 @@ class WorkspaceSourceReferenceAssemblerImplTest {
                 });
         assertThat(result.fidelityIssues()).extracting(WorkspaceSourceReferenceVO.FidelityIssue::code)
                 .contains("AMBIGUOUS_MAPPING", "SOURCE_CONTENT_UNMAPPED");
-        assertThat(result.exportBlocked()).isTrue();
+        assertThat(result.exportBlocked()).isFalse();
     }
 
     @Test
@@ -314,25 +314,25 @@ class WorkspaceSourceReferenceAssemblerImplTest {
                 1L, 2L, 3L, 1L, "resume.pdf", true, source, target);
         assertThat(unconfirmed.fidelityIssues()).extracting(WorkspaceSourceReferenceVO.FidelityIssue::code)
                 .contains("PROJECT_BOUNDARY_LOST", "SOURCE_CONTENT_UNMAPPED");
-        assertThat(unconfirmed.exportBlocked()).isTrue();
+        assertThat(unconfirmed.exportBlocked()).isFalse();
 
         target.setConfirmedSourceOmissionIds(List.of("occ-p2"));
         WorkspaceSourceReferenceVO partiallyConfirmed = assembler.assemble(
                 1L, 2L, 3L, 1L, "resume.pdf", true, source, target);
         assertThat(partiallyConfirmed.fidelityIssues()).extracting(WorkspaceSourceReferenceVO.FidelityIssue::code)
                 .contains("PROJECT_BOUNDARY_LOST", "SOURCE_CONTENT_UNMAPPED");
-        assertThat(partiallyConfirmed.exportBlocked()).isTrue();
+        assertThat(partiallyConfirmed.exportBlocked()).isFalse();
 
         target.setConfirmedSourceOmissionIds(List.of("occ-p2", "occ-p2-bullet"));
         WorkspaceSourceReferenceVO fieldUnconfirmed = assembler.assemble(
                 1L, 2L, 3L, 1L, "resume.pdf", true, source, target);
         assertThat(fieldUnconfirmed.fidelityIssues()).extracting(WorkspaceSourceReferenceVO.FidelityIssue::code)
                 .contains("PROJECT_BOUNDARY_LOST", "SOURCE_CONTENT_UNMAPPED");
-        assertThat(fieldUnconfirmed.exportBlocked()).isTrue();
+        assertThat(fieldUnconfirmed.exportBlocked()).isFalse();
 
         // Whole-Project intentional omission: every frozen occurrence of the deleted
-        // entry is server-confirmed, so the boundary blocker is released and the
-        // document becomes exportable when no other blocker remains.
+        // entry is server-confirmed, so the boundary advisory is released. Export was never
+        // blocked by fidelity; the flag stays false in every branch.
         target.setConfirmedSourceOmissionIds(List.of("occ-p2", "occ-p2-field", "occ-p2-bullet"));
         WorkspaceSourceReferenceVO confirmed = assembler.assemble(
                 1L, 2L, 3L, 1L, "resume.pdf", true, source, target);
@@ -367,7 +367,7 @@ class WorkspaceSourceReferenceAssemblerImplTest {
                     assertThat(block.omissionEligible()).isFalse();
                     assertThat(block.omissionConfirmed()).isFalse();
                 });
-        assertThat(result.exportBlocked()).isTrue();
+        assertThat(result.exportBlocked()).isFalse();
     }
 
     @Test
@@ -395,7 +395,7 @@ class WorkspaceSourceReferenceAssemblerImplTest {
                     assertThat(block.omissionEligible()).isFalse();
                     assertThat(block.omissionConfirmed()).isFalse();
                 });
-        assertThat(result.exportBlocked()).isTrue();
+        assertThat(result.exportBlocked()).isFalse();
     }
 
     @Test
@@ -420,7 +420,7 @@ class WorkspaceSourceReferenceAssemblerImplTest {
                 1L, 2L, 3L, 1L, "resume.pdf", true, source, target);
         assertThat(invalid.fidelityIssues()).extracting(WorkspaceSourceReferenceVO.FidelityIssue::code)
                 .contains("SOURCE_MANIFEST_INVALID");
-        assertThat(invalid.exportBlocked()).isTrue();
+        assertThat(invalid.exportBlocked()).isFalse();
     }
 
     @Test
@@ -661,7 +661,7 @@ class WorkspaceSourceReferenceAssemblerImplTest {
                 .containsOnly(WorkspaceSourceMappingStatus.AMBIGUOUS);
         assertThat(result.fidelityIssues()).extracting(WorkspaceSourceReferenceVO.FidelityIssue::code)
                 .contains("AMBIGUOUS_MAPPING");
-        assertThat(result.exportBlocked()).isTrue();
+        assertThat(result.exportBlocked()).isFalse();
     }
 
     @Test
@@ -842,7 +842,7 @@ class WorkspaceSourceReferenceAssemblerImplTest {
 
         assertThat(result.fidelityIssues()).extracting(WorkspaceSourceReferenceVO.FidelityIssue::code)
                 .contains("CONFIRMED_OMISSION_INVALID", "PROJECT_BOUNDARY_LOST");
-        assertThat(result.exportBlocked()).isTrue();
+        assertThat(result.exportBlocked()).isFalse();
     }
 
     @Test
@@ -876,7 +876,7 @@ class WorkspaceSourceReferenceAssemblerImplTest {
                 .findFirst().orElseThrow();
         // Only D's occurrences are reported; B is a legitimate confirmed omission.
         assertThat(boundaryIssue.sourceOccurrenceIds()).containsExactly("occ-d");
-        assertThat(result.exportBlocked()).isTrue();
+        assertThat(result.exportBlocked()).isFalse();
     }
 
     @Test
@@ -994,7 +994,7 @@ class WorkspaceSourceReferenceAssemblerImplTest {
                 1L, 2L, 3L, 1L, "resume.pdf", true, source, source);
         assertThat(result.fidelityIssues()).extracting(WorkspaceSourceReferenceVO.FidelityIssue::code)
                 .contains("SOURCE_MANIFEST_INVALID");
-        assertThat(result.exportBlocked()).isTrue();
+        assertThat(result.exportBlocked()).isFalse();
     }
 
     private static ResumeDocumentDTO sourceWithBodySidecar(ResumeSourceRefDTO sidecar) {

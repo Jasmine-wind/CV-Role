@@ -184,12 +184,8 @@ const sourceMutationDisabledReason = computed(() => {
   return null
 })
 
-/** Preview 顶部提示用：服务端权威 verdict 里还需要确认的项数。 */
-const fidelityBlockerCount = computed(
-  () =>
-    sourceReference.value?.fidelityIssues.filter((issue) => issue.severity === 'BLOCKER').length ??
-    0,
-)
+/** Preview 顶部提示用：服务端权威 verdict 里的建议检查项总数（advisory，不阻断导出）。 */
+const fidelityIssueCount = computed(() => sourceReference.value?.fidelityIssues.length ?? 0)
 
 watch(
   () => props.optimizationTaskId,
@@ -390,18 +386,21 @@ const handleOmissionRequested = (blockId: string, confirm: boolean) =>
   void runSourceMutation({ kind: 'omission', blockId, confirm })
 
 /**
- * Preview → “查看并处理”：只做导航，不修改任何数据。
- * 桌面切回编辑态的结构问题区域；窄屏切到冻结原文面板；并选中第一个 BLOCKER 对应的原文。
+ * Preview → “查看问题”：只做导航，不修改任何数据。
+ * 桌面切回编辑态的建议检查区域；窄屏切到冻结原文面板；并选中第一个建议检查项对应的原文。
  */
 const openFidelityResolver = () => {
   workspaceMode.value = 'edit'
-  const firstBlocker = sourceReference.value?.fidelityIssues.find(
-    (issue) => issue.severity === 'BLOCKER',
-  )
-  selectedSourceOccurrenceIds.value = firstBlocker?.sourceOccurrenceIds ?? []
+  // 优先选择能定位到冻结原文的 BLOCKER 建议项；仅在没有此类项时才逐步退回。
+  const issues = sourceReference.value?.fidelityIssues ?? []
+  const firstIssue =
+    issues.find((issue) => issue.severity === 'BLOCKER' && issue.sourceOccurrenceIds.length > 0) ??
+    issues.find((issue) => issue.sourceOccurrenceIds.length > 0) ??
+    issues[0]
+  selectedSourceOccurrenceIds.value = firstIssue?.sourceOccurrenceIds ?? []
   reviewRequestKey.value += 1
   if (isNarrowScreen.value) mobilePanel.value = 'source'
-  // 结构性修复必须基于服务端当前判决；后台刷新不阻塞用户看到的问题列表。
+  // 建议检查必须基于服务端当前判决；后台刷新不阻塞用户看到的问题列表。
   void loadSourceReference()
 }
 
@@ -416,10 +415,6 @@ const locateIssueTarget = (targetNodeId: string) => {
   focusRequestKey.value += 1
   if (isNarrowScreen.value) mobilePanel.value = 'editor'
   if (!mapping) ElMessage.warning('无法在当前简历中定位该内容，请手动核对。')
-}
-
-const handleRestartUpload = () => {
-  void router.push('/app')
 }
 
 const goToAnalysis = () => {
@@ -560,8 +555,8 @@ const openPreviewMode = async () => {
       return
     }
 
-    // Structure Fidelity blocker 只阻止正式 Export，不阻止诊断性 Preview；
-    // Preview 顶部会以人话提示还剩多少项需要确认。
+    // Structure Fidelity issue 只是 advisory：Preview 一律拒绝不了它，
+    // 顶部会以人话提示“发现 N 项建议检查”，用户不处理也能继续导出。
     previewComponentMounted.value = true
     workspaceMode.value = 'preview'
   } finally {
@@ -806,7 +801,6 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
             @restore-requested="handleRestoreRequested"
             @omission-requested="handleOmissionRequested"
             @locate-issue-target="locateIssueTarget"
-            @restart-upload="handleRestartUpload"
           />
 
           <section
@@ -944,7 +938,7 @@ onBeforeRouteUpdate(confirmDiscardUnsavedChanges)
           :revision="editor.revision.value"
           :status="editor.status.value"
           :active="workspaceMode === 'preview'"
-          :fidelity-issue-count="fidelityBlockerCount"
+          :fidelity-issue-count="fidelityIssueCount"
           @stale="handlePreviewStale"
           @resolve-fidelity="openFidelityResolver"
         />

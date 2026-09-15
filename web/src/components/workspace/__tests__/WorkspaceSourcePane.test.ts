@@ -343,9 +343,9 @@ describe('WorkspaceSourcePane', () => {
     }
   })
 
-  it('shows the blocker strip in user language and renders every blocker as an actionable issue card', () => {
+  it('shows the advisory strip in user language and renders every suggestion as an issue card', () => {
     const source = sourceWith([block('occ-2', 'UNMAPPED', { omissionEligible: true })], {
-      exportBlocked: true,
+      exportBlocked: false,
       fidelityIssues: [
         {
           code: 'SOURCE_CONTENT_UNMAPPED',
@@ -358,15 +358,44 @@ describe('WorkspaceSourcePane', () => {
     })
     const wrapper = mountPane(source)
 
-    expect(wrapper.text()).toContain('还有 1 项内容需要确认')
-    expect(wrapper.text()).toContain('不影响继续编辑和预览，处理完成后才能正式导出。')
+    expect(wrapper.text()).toContain('发现 1 项建议检查')
+    expect(wrapper.text()).toContain('不影响继续编辑、预览或导出，你可以根据需要处理。')
+    // 同一类问题只列一条聚合组，展开后才看具体项。
+    const group = wrapper.get('.issue-group-toggle')
+    expect(group.text()).toContain('原文中有内容未进入当前简历')
+    expect(group.text()).toContain('· 1 处')
     const card = wrapper.get('.issue-card')
     expect(card.attributes('data-issue-code')).toBe('SOURCE_CONTENT_UNMAPPED')
-    expect(card.get('.issue-card-title').text()).toBe('原文内容未进入当前简历')
     expect(card.text()).toContain('这段内容存在于原始简历，但当前简历中找不到。')
     expect(card.text()).toContain('原文 occ-2')
-    // 内部 code 不得进入用户可见文案
+    // 不再有“必须处理/无法导出”的门禁语言，内部 code 也不进入用户可见文案
+    expect(wrapper.text()).not.toContain('处理后才能导出')
+    expect(wrapper.text()).not.toContain('无法导出')
     expect(wrapper.text()).not.toContain('SOURCE_CONTENT_UNMAPPED')
+  })
+
+  it('aggregates repeated same-code issues into one group instead of flooding the list', () => {
+    const source = sourceWith(
+      Array.from({ length: 10 }, (_, index) => block(`occ-${index + 1}`, 'UNMAPPED')),
+      {
+        exportBlocked: false,
+        fidelityIssues: Array.from({ length: 10 }, (_, index) => ({
+          code: 'SOURCE_CONTENT_UNMAPPED',
+          severity: 'BLOCKER' as const,
+          message: '冻结原文未映射',
+          sourceOccurrenceIds: [`occ-${index + 1}`],
+          targetNodeIds: [],
+        })),
+      },
+    )
+    const wrapper = mountPane(source)
+
+    expect(wrapper.text()).toContain('发现 10 项建议检查')
+    // 默认折叠：问题区域收起，仅保留可展开入口。
+    expect(wrapper.find('details[open]').exists()).toBe(false)
+    expect(wrapper.findAll('.issue-group')).toHaveLength(1)
+    expect(wrapper.get('.issue-group-toggle').text()).toContain('· 10 处')
+    expect(wrapper.get('.issue-cards').attributes('style')).toContain('display: none')
   })
 
   it('offers restore and omission on a restorable bullet and emits intent-only events', async () => {
@@ -525,7 +554,7 @@ describe('WorkspaceSourcePane', () => {
     const source = sourceWith(
       [block('occ-9', 'AMBIGUOUS', { targetNodeIds: ['section:s/entry:e/bullet:x'] })],
       {
-        exportBlocked: true,
+        exportBlocked: false,
         fidelityIssues: [
           {
             code: 'AMBIGUOUS_MAPPING',
@@ -540,9 +569,9 @@ describe('WorkspaceSourcePane', () => {
     const locate = vi.fn()
     const wrapper = mountPane(source, { onLocateIssueTarget: locate })
 
+    expect(wrapper.get('.issue-group-toggle').text()).toContain('原文对应关系不明确')
     const card = wrapper.get('.issue-card')
-    expect(card.get('.issue-card-title').text()).toBe('对应关系不明确')
-    expect(card.text()).toContain('系统无法确认这段当前内容来自哪一段原文')
+    expect(card.text()).toContain('系统无法确认这段内容来自原始简历的哪个位置')
     expect(card.findAll('button.issue-restore-action')).toHaveLength(0)
     expect(card.findAll('button.issue-omission-action')).toHaveLength(0)
     await card.get('button.issue-locate-action').trigger('click')
@@ -551,7 +580,7 @@ describe('WorkspaceSourcePane', () => {
 
   it('offers one indexed locate action per duplicate target', () => {
     const source = sourceWith([block('occ-8', 'SPLIT', { targetNodeIds: ['a', 'b'] })], {
-      exportBlocked: true,
+      exportBlocked: false,
       fidelityIssues: [
         {
           code: 'DUPLICATE_MAPPING',
@@ -564,15 +593,15 @@ describe('WorkspaceSourcePane', () => {
     })
     const wrapper = mountPane(source)
 
+    expect(wrapper.get('.issue-group-toggle').text()).toContain('可能存在重复内容')
     const card = wrapper.get('.issue-card')
-    expect(card.get('.issue-card-title').text()).toBe('同一段原文出现了多份')
     const buttons = card.findAll('button.issue-locate-action')
     expect(buttons.map((button) => button.text())).toEqual(['定位第 1 处', '定位第 2 处'])
   })
 
-  it('explains manifest problems as not solvable inside the current task', async () => {
+  it('explains manifest problems as a provenance downgrade instead of a dead end', () => {
     const source = sourceWith([], {
-      exportBlocked: true,
+      exportBlocked: false,
       fidelityIssues: [
         {
           code: 'SOURCE_MANIFEST_INVALID',
@@ -583,21 +612,20 @@ describe('WorkspaceSourcePane', () => {
         },
       ],
     })
-    const restart = vi.fn()
-    const wrapper = mountPane(source, { onRestartUpload: restart })
+    const wrapper = mountPane(source)
 
+    expect(wrapper.get('.issue-group-toggle').text()).toContain('原文定位信息不可用')
     const card = wrapper.get('.issue-card')
-    expect(card.get('.issue-card-title').text()).toBe('原文校验数据异常')
-    expect(card.text()).toContain('该问题无法通过编辑简历内容解决')
+    expect(card.text()).toContain('当前简历仍可正常编辑和导出')
+    expect(card.text()).toContain('“查看原文 / 自动恢复”能力可能不可用')
     expect(card.findAll('button.issue-restore-action')).toHaveLength(0)
     expect(card.findAll('button.issue-omission-action')).toHaveLength(0)
-    await card.get('button.issue-restart-action').trigger('click')
-    expect(restart).toHaveBeenCalledTimes(1)
+    expect(wrapper.findAll('button.issue-restart-action')).toHaveLength(0)
   })
 
-  it('opens the issue area when the resolver requests review', async () => {
+  it('opens the issue area and the matching group when the resolver requests review', async () => {
     const source = sourceWith([block('occ-5', 'UNMAPPED')], {
-      exportBlocked: true,
+      exportBlocked: false,
       fidelityIssues: [
         {
           code: 'SOURCE_CONTENT_UNMAPPED',
@@ -619,5 +647,6 @@ describe('WorkspaceSourcePane', () => {
     await flushPromises()
 
     expect(wrapper.get('details').attributes('open')).toBeDefined()
+    expect(wrapper.get('.issue-group-toggle').attributes('aria-expanded')).toBe('true')
   })
 })

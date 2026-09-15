@@ -2,8 +2,6 @@ package com.winter.airesumeoptimizer.module.export.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyBoolean;
-import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -18,17 +16,15 @@ import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentContactDT
 import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentDTO;
 import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentEntryDTO;
 import com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentSectionDTO;
-import com.winter.airesumeoptimizer.module.workspace.service.ResumeDocumentConverter;
-import com.winter.airesumeoptimizer.module.workspace.service.WorkspaceSourceReferenceAssembler;
-import com.winter.airesumeoptimizer.module.workspace.vo.WorkspaceSourceReferenceVO;
 import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 /**
- * Document Quality Gate（Slice A）：内容是否可信的裁决测试。
- * 质量状态路径与文档内容阻断路径分别覆盖；历史数据没有质量记录时保持既有行为。
+ * Technical Export Gate：只阻断技术上无法完成的操作。
+ * 内容质量（未确认候选、重复章节、系统兜底章节、缺失联系方式、质量校验）只作为
+ * needsReview 提醒，不再阻止导出。
  */
 class ExportDocumentGateTest {
 
@@ -95,13 +91,14 @@ class ExportDocumentGateTest {
     }
 
     @Test
-    void unresolvedItemsStillBlockExportAsDocumentNotConfirmed() {
+    void unresolvedItemsAreAdvisoryAndNoLongerBlockExport() {
+        // 未确认候选只提醒：用户可以先继续分析、编辑、预览和导出。
         givenQualityStatus("NEEDS_REVIEW", "[{\"id\":\"u-1\",\"kind\":\"TEXT_FRAGMENT\"}]");
 
         ExportDocumentGate.GateResult result = gate.check(USER_ID, task, validDocument());
 
-        assertThat(result.blocked()).isTrue();
-        assertThat(result.blockCode()).isEqualTo(ExportDocumentGate.CODE_DOCUMENT_NOT_CONFIRMED);
+        assertThat(result.blocked()).isFalse();
+        assertThat(result.status()).isEqualTo(ExportDocumentGate.STATUS_PASS);
         assertThat(result.needsReview()).isTrue();
     }
 
@@ -126,33 +123,13 @@ class ExportDocumentGateTest {
     }
 
     @Test
-    void structureFidelityBlockerStopsExportGate() {
+    void missingRenderableDocumentStillBlocksAsTechnicallyImpossible() {
         givenQualityStatus("READY");
-        ResumeVersion source = new ResumeVersion();
-        source.setId(SOURCE_VERSION_ID);
-        source.setUserId(USER_ID);
-        source.setResumeId(RESUME_ID);
-        source.setStructuredContent("{}");
-        when(resumeVersionMapper.selectOne(any())).thenReturn(source);
-        ResumeDocumentConverter converter = mock(ResumeDocumentConverter.class);
-        WorkspaceSourceReferenceAssembler assembler = mock(WorkspaceSourceReferenceAssembler.class);
-        when(converter.upgradeLegacyDocument("{}")).thenReturn(validDocument());
-        when(assembler.assemble(any(), any(), any(), anyLong(), any(), anyBoolean(), any(), any()))
-                .thenReturn(new WorkspaceSourceReferenceVO(
-                        50L, SOURCE_VERSION_ID, null, 0L, null, false,
-                        List.of(), List.of(), List.of(), java.util.Map.of(), true));
-        gate = new ExportDocumentGate(
-                resumeVersionMapper,
-                resumeParseResultMapper,
-                new com.winter.airesumeoptimizer.module.resume.service.impl.ResumeDocumentQualityValidatorImpl(),
-                converter,
-                assembler);
 
-        ExportDocumentGate.GateResult result = gate.check(USER_ID, task, validDocument());
+        ExportDocumentGate.GateResult result = gate.check(USER_ID, task, null);
 
         assertThat(result.blocked()).isTrue();
-        assertThat(result.blockCode()).isEqualTo(ExportDocumentGate.CODE_STRUCTURE_FIDELITY_FAILED);
-        assertThat(result.needsReview()).isTrue();
+        assertThat(result.blockCode()).isEqualTo(ExportDocumentGate.CODE_DOCUMENT_NOT_CONFIRMED);
     }
 
     @Test
@@ -165,7 +142,7 @@ class ExportDocumentGateTest {
     }
 
     @Test
-    void duplicateSectionTitlesBlock() {
+    void duplicateSectionTitlesAreAdvisory() {
         givenQualityStatus("READY");
         ResumeDocumentDTO document = validDocument();
         document.getSections().add(ResumeDocumentSectionDTO.builder()
@@ -181,12 +158,12 @@ class ExportDocumentGateTest {
 
         ExportDocumentGate.GateResult result = gate.check(USER_ID, task, document);
 
-        assertThat(result.blocked()).isTrue();
-        assertThat(result.blockCode()).isEqualTo(ExportDocumentGate.CODE_DUPLICATE_SECTION);
+        assertThat(result.blocked()).isFalse();
+        assertThat(result.needsReview()).isTrue();
     }
 
     @Test
-    void systemArtifactSectionBlocks() {
+    void systemArtifactSectionIsAdvisory() {
         givenQualityStatus("READY");
         ResumeDocumentDTO document = validDocument();
         document.getSections().add(ResumeDocumentSectionDTO.builder()
@@ -204,32 +181,33 @@ class ExportDocumentGateTest {
 
         ExportDocumentGate.GateResult result = gate.check(USER_ID, task, document);
 
-        assertThat(result.blocked()).isTrue();
-        assertThat(result.blockCode()).isEqualTo(ExportDocumentGate.CODE_SYSTEM_ARTIFACT_PRESENT);
+        assertThat(result.blocked()).isFalse();
+        assertThat(result.needsReview()).isTrue();
     }
 
     @Test
-    void missingReachableContactBlocks() {
+    void missingReachableContactIsAdvisory() {
         givenQualityStatus("READY");
         ResumeDocumentDTO document = validDocument();
         document.getBasics().setContacts(List.of());
 
         ExportDocumentGate.GateResult result = gate.check(USER_ID, task, document);
 
-        assertThat(result.blocked()).isTrue();
-        assertThat(result.blockCode()).isEqualTo(ExportDocumentGate.CODE_MISSING_TYPED_CONTACT);
+        // 用户可以先导出草稿，之后自己补联系方式。
+        assertThat(result.blocked()).isFalse();
+        assertThat(result.needsReview()).isTrue();
     }
 
     @Test
-    void currentTargetSemanticCorruptionBlocksEvenWhenParseQualityWasReady() {
+    void currentTargetSemanticCorruptionIsAdvisoryEvenWhenParseQualityWasReady() {
         givenQualityStatus("READY");
         ResumeDocumentDTO document = validDocument();
         document.getSections().get(0).getEntries().get(0).setOrganization(null);
 
         ExportDocumentGate.GateResult result = gate.check(USER_ID, task, document);
 
-        assertThat(result.blocked()).isTrue();
-        assertThat(result.blockCode()).isEqualTo("ENTRY_MISSING_TITLE_WITH_MANY_BULLETS");
+        assertThat(result.blocked()).isFalse();
+        assertThat(result.needsReview()).isTrue();
     }
 
     @Test
@@ -244,7 +222,7 @@ class ExportDocumentGateTest {
     }
 
     @Test
-    void invalidFormatContactDoesNotCountAsReachable() {
+    void invalidFormatContactIsAdvisoryNotReachable() {
         givenQualityStatus("READY");
         ResumeDocumentDTO document = validDocument();
         document.getBasics().setContacts(List.of(ResumeDocumentContactDTO.builder()
@@ -256,8 +234,8 @@ class ExportDocumentGateTest {
 
         ExportDocumentGate.GateResult result = gate.check(USER_ID, task, document);
 
-        assertThat(result.blocked()).isTrue();
-        assertThat(result.blockCode()).isEqualTo(ExportDocumentGate.CODE_MISSING_TYPED_CONTACT);
+        assertThat(result.blocked()).isFalse();
+        assertThat(result.needsReview()).isTrue();
     }
 
     private ResumeDocumentDTO validDocument() {

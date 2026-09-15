@@ -127,7 +127,7 @@ const sourceReference: WorkspaceSourceReference = {
   ],
   statusCounts: { EXACT: 0, MERGED: 0, SPLIT: 0, UNMAPPED: 1, AMBIGUOUS: 0 },
   confirmedOmissionCount: 0,
-  exportBlocked: true,
+  exportBlocked: false,
 }
 
 const projectBlocks: WorkspaceSourceBlock[] = [
@@ -166,7 +166,7 @@ const mountPanel = () =>
           name: 'WorkspacePreviewExportStub',
           emits: ['resolveFidelity', 'stale'],
           template:
-            '<button class="stub-resolve-fidelity" @click="$emit(\'resolveFidelity\')">查看并处理</button>',
+            '<button class="stub-resolve-fidelity" @click="$emit(\'resolveFidelity\')">查看问题</button>',
         },
       },
     },
@@ -194,7 +194,7 @@ describe('WorkspacePanel structure fidelity resolver navigation', () => {
     })
   })
 
-  it('routes Preview 查看并处理 back to the edit-mode source issue area and selects the first blocker', async () => {
+  it('routes Preview 查看问题 back to the edit-mode source issue area and selects the first suggestion', async () => {
     const wrapper = mountPanel()
     await flushPromises()
 
@@ -206,7 +206,7 @@ describe('WorkspacePanel structure fidelity resolver navigation', () => {
 
     // 回到编辑态（Preview 保持挂载但被 v-show 隐藏）
     expect(wrapper.find('.workspace-preview-mode').attributes('style')).toContain('display: none')
-    // 结构问题区域可见，并定位到第一个 BLOCKER 的 source occurrence
+    // 建议检查区域可见，并定位到第一个建议项的 source occurrence
     expect(wrapper.find('.fidelity-issues').exists()).toBe(true)
     expect(wrapper.get('.issue-card').attributes('data-issue-code')).toBe('SOURCE_CONTENT_UNMAPPED')
     expect(wrapper.find('details[open]').exists()).toBe(true)

@@ -33,7 +33,13 @@ import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import org.springframework.stereotype.Component;
 
-/** Occurrence-ID-only implementation; ambiguous and dangling links fail closed. */
+/**
+ * Occurrence-ID-only implementation; ambiguous and dangling links fail closed.
+ *
+ * <p>Structure Fidelity issues are advisory: they help users find exactly what the system could
+ * not reliably locate, but they never veto editing, analysis, Preview or Export. Whether an
+ * operation is technically impossible is decided by the render/export pipeline, not here.
+ */
 @Component
 public class WorkspaceSourceReferenceAssemblerImpl implements WorkspaceSourceReferenceAssembler {
 
@@ -195,7 +201,10 @@ public class WorkspaceSourceReferenceAssemblerImpl implements WorkspaceSourceRef
         for (WorkspaceSourceMappingStatus status : WorkspaceSourceMappingStatus.values()) counts.put(status, 0);
         for (TargetMapping mapping : mappings) counts.compute(mapping.status(), (key, value) -> value == null ? 1 : value + 1);
         int confirmedOmissionCount = (int) blocks.stream().filter(SourceBlock::omissionConfirmed).count();
-        boolean blocked = issues.stream().anyMatch(FidelityIssue::blocker);
+        // Fidelity issues no longer bind severity to exportBlocked. All issues are still returned so
+        // the UI can suggest checks, restore or omission; the flag stays false and is retained only
+        // for compatibility with existing callers.
+        boolean blocked = false;
         return new WorkspaceSourceReferenceVO(taskId, sourceVersionId, targetVersionId, targetRevision,
                 sourceFilename, sourcePdfAvailable, blocks, mappings, issues, counts,
                 confirmedOmissionCount, blocked);

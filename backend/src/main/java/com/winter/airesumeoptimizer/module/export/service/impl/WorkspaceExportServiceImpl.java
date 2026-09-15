@@ -87,17 +87,15 @@ public class WorkspaceExportServiceImpl implements WorkspaceExportService {
         WorkspaceContentVO content = currentSavedContent(userId, optimizationTaskId, expectedRevision);
         OptimizationTask task = getOwnedTask(userId, content.getOptimizationTaskId());
         long targetVersionId = resolveTargetVersionId(userId, content.getOptimizationTaskId());
-        // Document Quality Gate：预览是审查工具，仅在无法形成文档时阻断；
-        // 待确认/内容阻断项允许预览并以响应头透传，正式导出仍被拒绝。
+        // Document Gate 现在只对技术上不可渲染的 document 阻断（parse PENDING/FAILED、document 缺失）；
+        // 内容质量问题与待确认项只作为 preflight needsReview 提醒透传。
         ExportDocumentGate.GateResult gate = exportDocumentGate.check(userId, task, content.getDocument());
-        if (gate.blocked() && !gate.needsReview() && isUnrenderable(gate.blockCode())) {
+        if (gate.blocked()) {
             throw new BusinessException(409, gate.blockCode() + "：简历内容当前不可预览");
         }
         ResumePdfRenderResult rendered = render(content, template);
-        // Any non-rendering Document Gate blocker is still previewable for diagnosis, but
-        // must be surfaced as a non-exportable preflight result to the client.
         ExportPreflight preflight = preflightChecker.check(
-                content.getDocument(), rendered.layout(), gate.blocked() || gate.needsReview());
+                content.getDocument(), rendered.layout(), gate.needsReview());
         String checksum = sha256Hex(rendered.pdf());
         String receipt = previewReceiptService.issue(new PreviewReceiptClaims(
                 userId,
@@ -119,11 +117,11 @@ public class WorkspaceExportServiceImpl implements WorkspaceExportService {
         }
         ResumeTemplateId template = resolveTemplate(request.getTemplateId());
         WorkspaceContentVO content = currentSavedContent(userId, optimizationTaskId, request.getExpectedRevision());
-        // 在产生编译/存储副作用前先过 Document Quality Gate：不可信内容禁止正式导出。
+        // 在产生编译/存储副作用前先过 Document Gate：只有技术上无法完成的操作才被拒绝。
         OptimizationTask task = getOwnedTask(userId, content.getOptimizationTaskId());
         ExportDocumentGate.GateResult gate = exportDocumentGate.check(userId, task, content.getDocument());
         if (gate.blocked()) {
-            throw new BusinessException(409, gate.blockCode() + "：简历内容未通过质量检查，不能导出");
+            throw new BusinessException(409, gate.blockCode() + "：简历内容当前无法导出");
         }
         // 在产生编译/存储副作用前冻结 TARGET 关系并验证服务端签名 Preview receipt。
         Long targetVersionId = resolveTargetVersionId(userId, content.getOptimizationTaskId());
@@ -132,22 +130,18 @@ public class WorkspaceExportServiceImpl implements WorkspaceExportService {
 
         ResumePdfRenderResult rendered = render(content, template);
         byte[] pdf = rendered.pdf();
+        if (pdf == null || pdf.length == 0) {
+            // Renderer 没有产出可交付字节：文件生成失败，属于技术性失败。
+            throw new BusinessException(500, "简历导出失败，请稍后重试");
+        }
         String checksum = sha256Hex(pdf);
         if (!checksum.equals(receipt.pdfChecksum())) {
             throw new BusinessException(409, "预览结果已失效，请重新预览后导出");
         }
+        // PDF Quality Gate 降级为 advisory：越界、孤立末页、字号偏小只记录进导出物，
+        // 只要 renderer 能产出 PDF 就允许导出，由用户自行取舍。
         ExportPreflight preflight = preflightChecker.check(
-                content.getDocument(), rendered.layout(), gate.blocked() || gate.needsReview());
-        // PDF Quality Gate：越界、孤立末页和不可读字号属于不可交付排版，正式导出阻断；预览阶段仅作告警。
-        if (preflight.overflowDetected()) {
-            throw new BusinessException(409, "CONTENT_OUT_OF_PAGE_BOUNDS：排版存在文字越界，请调整后重新预览");
-        }
-        if (preflight.orphanFinalPage()) {
-            throw new BusinessException(409, "ORPHAN_FINAL_PAGE：末页内容过少，请调整后重新预览");
-        }
-        if (preflight.readabilityTooSmall()) {
-            throw new BusinessException(409, "READABILITY_TOO_SMALL：字号过小，请调整模板或内容后重新预览");
-        }
+                content.getDocument(), rendered.layout(), gate.needsReview());
         String fileName = artifactFileName(content, template);
 
         StoredFile stored;
@@ -257,11 +251,6 @@ public class WorkspaceExportServiceImpl implements WorkspaceExportService {
             throw new BusinessException(409, "简历内容已更新，预览已失效，请刷新后重试");
         }
         return content;
-    }
-
-    private boolean isUnrenderable(String blockCode) {
-        return ExportDocumentGate.CODE_RESUME_PARSE_PENDING.equals(blockCode)
-                || ExportDocumentGate.CODE_RESUME_QUALITY_FAILED.equals(blockCode);
     }
 
     private OptimizationTask getOwnedTask(Long userId, Long optimizationTaskId) {

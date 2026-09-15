@@ -39,7 +39,6 @@ const emit = defineEmits<{
   restoreRequested: [blockId: string]
   omissionRequested: [blockId: string, confirm: boolean]
   locateIssueTarget: [targetNodeId: string]
-  restartUpload: []
 }>()
 
 const mode = ref<'text' | 'pdf'>('text')
@@ -48,17 +47,16 @@ const pdfLoading = ref(false)
 const pdfError = ref<string | null>(null)
 const blockRoot = ref<HTMLElement | null>(null)
 const issueArea = ref<HTMLElement | null>(null)
-const issuesOpen = ref(true)
+// 建议检查默认折叠：主要任务永远是右边改简历，问题面板不抢视觉中心。
+const issuesOpen = ref(false)
+const openIssueGroups = ref<string[]>([])
+const showAllGroups = ref(false)
+const MAX_VISIBLE_GROUPS = 3
 const mutationError = computed(() => props.mutationError ?? null)
 // 纯展示状态：点击后立即显示“正在恢复/确认…”，mutationBusy 结束后清空。
 const pendingMutationKey = ref<string | null>(null)
 
-const blockers = computed(
-  () => props.source?.fidelityIssues.filter((issue) => issue.severity === 'BLOCKER') ?? [],
-)
-const warnings = computed(
-  () => props.source?.fidelityIssues.filter((issue) => issue.severity === 'WARNING') ?? [],
-)
+const issueCount = computed(() => props.source?.fidelityIssues.length ?? 0)
 const selectedSet = computed(() => new Set(props.selectedOccurrenceIds ?? []))
 
 const loadPdf = async () => {
@@ -157,57 +155,57 @@ const restoreActionLabel = (plan: RestoreActionPlan) =>
 
 const ISSUE_COPY: Record<string, { title: string; detail: string }> = {
   SOURCE_CONTENT_UNMAPPED: {
-    title: '原文内容未进入当前简历',
-    detail: '这段内容存在于原始简历，但当前简历中找不到。',
+    title: '原文中有内容未进入当前简历',
+    detail:
+      '这段内容存在于原始简历，但当前简历中找不到。你可以恢复原文或确认省略；什么都不做也不影响继续编辑、预览或导出。',
   },
   PROJECT_BOUNDARY_LOST: {
-    title: '项目未进入当前简历',
-    detail: '原始简历中这是一个独立项目，当前简历中没有找到完整项目结构。',
+    title: '有一个原始项目没有完整对应到当前简历',
+    detail:
+      '建议检查项目内容是否被删除或合并到了其它项目。可以恢复整个项目或确认省略；不处理也不影响继续编辑、预览或导出。',
   },
   AMBIGUOUS_MAPPING: {
-    title: '对应关系不明确',
+    title: '原文对应关系不明确',
     detail:
-      '系统无法确认这段当前内容来自哪一段原文，为避免把错误内容当作合法修改，当前禁止导出。',
+      '系统无法确认这段内容来自原始简历的哪个位置，建议你对照原始 PDF 检查。不影响继续编辑、预览或导出。',
   },
   DUPLICATE_MAPPING: {
-    title: '同一段原文出现了多份',
-    detail: '请保留正确的一份，删除重复内容。',
+    title: '可能存在重复内容',
+    detail: '同一段原文似乎出现在多个位置，建议检查是否需要删除重复内容。不影响继续编辑、预览或导出。',
   },
   SOURCE_MANIFEST_INVALID: {
-    title: '原文校验数据异常',
-    detail: '该问题无法通过编辑简历内容解决。请重新上传原始简历并创建新的优化任务。',
+    title: '原文定位信息不可用',
+    detail: '当前简历仍可正常编辑和导出，但部分“查看原文 / 自动恢复”能力可能不可用。',
   },
   SOURCE_MANIFEST_UNAVAILABLE: {
-    title: '原文校验数据异常',
-    detail: '该问题无法通过编辑简历内容解决。请重新上传原始简历并创建新的优化任务。',
+    title: '原文定位信息不可用',
+    detail: '当前简历仍可正常编辑和导出，但部分“查看原文 / 自动恢复”能力可能不可用。',
   },
   CONFIRMED_OMISSION_INVALID: {
-    title: '原文校验数据异常',
-    detail: '该问题无法通过编辑简历内容解决。',
+    title: '原文定位信息不可用',
+    detail: '当前简历仍可正常编辑和导出，但部分“查看原文 / 自动恢复”能力可能不可用。',
   },
   SECTION_HEADING_LOST: {
     title: '章节标题缺失',
-    detail: '章节标题为空但内容仍在。请补回标题，或删除残留内容。',
+    detail: '章节标题为空但内容仍在。可以补回标题或删除残留内容；不影响继续编辑、预览或导出。',
   },
   DUPLICATE_CONTACT_SUSPECTED: {
     title: '检测到疑似重复联系方式',
-    detail: '请检查联系方式列表，删除重复的一项。',
+    detail: '建议检查联系方式列表，删除重复的一项。不影响继续编辑、预览或导出。',
   },
   SOURCE_CONTENT_SPLIT: {
     title: '一段原文被拆分到多个位置',
-    detail: '不影响导出，但建议核对拆分边界是否合理。',
+    detail: '可以核对拆分边界是否合理；不影响继续编辑、预览或导出。',
   },
   TARGET_CONTENT_UNMAPPED: {
     title: '当前内容没有可靠的原文定位',
-    detail: '不影响导出，但建议核对这段内容是否属于本人的真实经历。',
+    detail: '建议核对这段内容是否属于本人的真实经历；不影响继续编辑、预览或导出。',
   },
   DUPLICATE_DATE_SUSPECTED: {
     title: '多个位置出现相同日期',
-    detail: '请确认不是结构恢复造成的重复。',
+    detail: '建议确认不是结构恢复造成的重复；不影响继续编辑、预览或导出。',
   },
 }
-
-const RESTART_UPLOAD_CODES = new Set(['SOURCE_MANIFEST_INVALID', 'SOURCE_MANIFEST_UNAVAILABLE'])
 
 type IssueCard = {
   key: string
@@ -221,8 +219,14 @@ type IssueCard = {
   omissionPlan: OmissionActionPlan | null
   locateTargets: string[]
   reasonCopy: string | null
-  canRestartUpload: boolean
   reviewTarget: boolean
+}
+
+type IssueGroup = {
+  code: string
+  title: string
+  count: number
+  cards: IssueCard[]
 }
 
 const truncate = (value: string, limit = 120) =>
@@ -308,13 +312,36 @@ const issueCards = computed<IssueCard[]>(() => {
       omissionPlan: omission && !omission.confirmed ? omission : null,
       locateTargets,
       reasonCopy: isBoundaryCode && !actionable ? blockedReasonCopy(blockedReason, isProject) : null,
-      canRestartUpload: RESTART_UPLOAD_CODES.has(issue.code),
       reviewTarget: boundaryBlocks.some((block) =>
         block.occurrenceIds.some((id) => selectedSet.value.has(id)),
       ),
     }
   })
 })
+
+/** 按 issue.code 聚合，避免给用户刷屏：同一类问题只列一条，展开后才看具体项。 */
+const issueGroups = computed<IssueGroup[]>(() => {
+  const groups = new Map<string, IssueGroup>()
+  for (const card of issueCards.value) {
+    const existing = groups.get(card.code)
+    if (existing) {
+      existing.count += 1
+      existing.cards.push(card)
+    } else {
+      groups.set(card.code, { code: card.code, title: card.title, count: 1, cards: [card] })
+    }
+  }
+  return [...groups.values()]
+})
+const visibleIssueGroups = computed(() =>
+  showAllGroups.value ? issueGroups.value : issueGroups.value.slice(0, MAX_VISIBLE_GROUPS),
+)
+const issueGroupOpen = (code: string) => openIssueGroups.value.includes(code)
+const toggleIssueGroup = (code: string) => {
+  openIssueGroups.value = issueGroupOpen(code)
+    ? openIssueGroups.value.filter((item) => item !== code)
+    : [...openIssueGroups.value, code]
+}
 
 const locateActionLabel = (card: IssueCard, index: number) =>
   card.code === 'DUPLICATE_MAPPING' && card.locateTargets.length > 1
@@ -346,11 +373,36 @@ watch(
   },
 )
 
+/**
+ * 展开包含首个待检查项的聚合组；没有命中时展开第一组。
+ * Pane 会随 edit/preview 切换重建，因此挂载时带 reviewRequestKey 的场景也要生效。
+ */
+const applyReviewRequest = () => {
+  issuesOpen.value = true
+  const groups = issueGroups.value
+  if (!groups.length) return
+  // 同一段原文可能同时命中多个 issue code（如项目边界 + 未映射），全部展开。
+  const matched = groups.filter((group) => group.cards.some((card) => card.reviewTarget))
+  const next = new Set(openIssueGroups.value)
+  for (const group of matched.length ? matched : [groups[0]!]) {
+    next.add(group.code)
+  }
+  openIssueGroups.value = [...next]
+}
+const appliedReviewRequestKey = ref(0)
+const maybeApplyReviewRequest = () => {
+  const requested = props.reviewRequestKey ?? 0
+  if (requested <= appliedReviewRequestKey.value || !props.source) return false
+  appliedReviewRequestKey.value = requested
+  applyReviewRequest()
+  return true
+}
+
 watch(
-  () => props.reviewRequestKey,
+  () => [props.reviewRequestKey, props.source] as const,
   async () => {
     await nextTick()
-    issuesOpen.value = true
+    if (!maybeApplyReviewRequest()) return
     await nextTick()
     // 选中 block 的滚动仍由现有 semantic anchor 负责；没有可定位 block 时回到结构问题顶部。
     const hasSelectedBlock = props.selectedOccurrenceIds?.length
@@ -360,6 +412,7 @@ watch(
       issueArea.value?.scrollIntoView?.({ block: 'start', behavior: 'auto' })
     }
   },
+  { immediate: true },
 )
 
 const handleIssuesToggle = (event: Event) => {
@@ -373,19 +426,16 @@ watch(
   },
 )
 
-watch(
-  () => props.optimizationTaskId,
-  () => {
-    pendingMutationKey.value = null
-  },
-)
+const optimizationTaskIdWatcher = () => {
+  pendingMutationKey.value = null
+  openIssueGroups.value = []
+  showAllGroups.value = false
+  appliedReviewRequestKey.value = 0
+}
 
 watch(
-  () => props.source?.exportBlocked,
-  (blocked) => {
-    if (blocked) issuesOpen.value = true
-  },
-  { immediate: true },
+  () => props.optimizationTaskId,
+  optimizationTaskIdWatcher,
 )
 
 onBeforeUnmount(() => {
@@ -426,19 +476,15 @@ onBeforeUnmount(() => {
     <div
       v-if="source"
       class="fidelity-strip"
-      :class="source.exportBlocked ? 'is-blocked' : 'is-ready'"
+      :class="issueCount ? 'is-advisory' : 'is-ready'"
     >
       <span class="fidelity-dot" aria-hidden="true" />
       <div>
-        <strong>{{
-          source.exportBlocked ? `还有 ${blockers.length} 项内容需要确认` : '内容检查通过'
-        }}</strong>
-        <small v-if="source.exportBlocked">不影响继续编辑和预览，处理完成后才能正式导出。</small>
+        <strong>{{ issueCount ? `发现 ${issueCount} 项建议检查` : '内容检查通过' }}</strong>
+        <small v-if="issueCount">不影响继续编辑、预览或导出，你可以根据需要处理。</small>
         <small v-if="source.confirmedOmissionCount"
           >已确认省略 {{ source.confirmedOmissionCount }} 段原文</small
         >
-        <small v-if="warnings.length">另有 {{ warnings.length }} 项待核对</small>
-        <small v-else-if="!source.exportBlocked">导出前仍会执行文档检查</small>
       </div>
     </div>
 
@@ -457,96 +503,102 @@ onBeforeUnmount(() => {
           v-if="source.fidelityIssues.length"
           ref="issueArea"
           class="fidelity-issues"
-          aria-label="结构问题"
+          aria-label="建议检查"
         >
           <details :open="issuesOpen" @toggle="handleIssuesToggle">
-            <summary>结构问题 · {{ source.fidelityIssues.length }}</summary>
-            <ul>
-              <li
-                v-for="card in issueCards"
-                :key="card.key"
-                class="issue-card"
-                :class="[
-                  `is-${card.severity.toLowerCase()}`,
-                  { 'is-review-target': card.reviewTarget },
-                ]"
-                :data-issue-code="card.code"
-              >
-                <div class="issue-card-heading">
-                  <span class="issue-severity">{{
-                    card.severity === 'BLOCKER' ? '需要处理' : '提醒'
-                  }}</span>
-                  <strong class="issue-card-title">{{ card.title }}</strong>
-                </div>
-                <p v-if="card.excerpt" class="issue-card-excerpt">“{{ card.excerpt }}”</p>
-                <p class="issue-card-detail">{{ card.detail }}</p>
-                <p v-if="card.reasonCopy" class="issue-card-reason">{{ card.reasonCopy }}</p>
-                <div
-                  v-if="
-                    card.restorePlan ||
-                    card.omissionPlan ||
-                    card.locateTargets.length ||
-                    card.canRestartUpload
-                  "
-                  class="issue-actions"
+            <summary>
+              发现 {{ source.fidelityIssues.length }} 项建议检查
+              <span v-if="!issuesOpen" class="issues-summary-hint">展开</span>
+            </summary>
+            <p class="issues-note">不影响继续编辑、预览或导出，你可以根据需要处理。</p>
+            <ul class="issue-groups">
+              <li v-for="group in visibleIssueGroups" :key="group.code" class="issue-group">
+                <button
+                  type="button"
+                  class="issue-group-toggle"
+                  :aria-expanded="issueGroupOpen(group.code)"
+                  @click="toggleIssueGroup(group.code)"
                 >
-                  <button
-                    v-if="card.restorePlan"
-                    type="button"
-                    class="issue-action issue-restore-action"
-                    :disabled="Boolean(sourceMutationDisabledReason)"
-                    @click="requestRestore(card.restorePlan)"
+                  <strong>{{ group.title }}</strong>
+                  <span class="issue-group-count">· {{ group.count }} 处</span>
+                </button>
+                <ul v-show="issueGroupOpen(group.code)" class="issue-cards">
+                  <li
+                    v-for="card in group.cards"
+                    :key="card.key"
+                    class="issue-card"
+                    :class="[
+                      `is-${card.severity.toLowerCase()}`,
+                      { 'is-review-target': card.reviewTarget },
+                    ]"
+                    :data-issue-code="card.code"
                   >
-                    {{
-                      mutationInFlight(card.restorePlan.key)
-                        ? '正在恢复…'
-                        : restoreActionLabel(card.restorePlan)
-                    }}
-                  </button>
-                  <button
-                    v-if="card.omissionPlan"
-                    type="button"
-                    class="issue-action issue-omission-action"
-                    :disabled="Boolean(sourceMutationDisabledReason)"
-                    @click="requestOmission(card.omissionPlan)"
-                  >
-                    {{
-                      mutationInFlight(card.omissionPlan.key)
-                        ? '正在确认…'
-                        : omissionPlanLabel(card.omissionPlan)
-                    }}
-                  </button>
-                  <button
-                    v-for="(targetId, index) in card.locateTargets"
-                    :key="`${card.key}:locate:${index}`"
-                    type="button"
-                    class="issue-action issue-locate-action"
-                    @click="emit('locateIssueTarget', targetId)"
-                  >
-                    {{ locateActionLabel(card, index) }}
-                  </button>
-                  <button
-                    v-if="card.canRestartUpload"
-                    type="button"
-                    class="issue-action issue-restart-action"
-                    @click="emit('restartUpload')"
-                  >
-                    返回首页重新上传
-                  </button>
-                </div>
-                <small
-                  v-if="(card.restorePlan || card.omissionPlan) && sourceMutationDisabledReason"
-                  class="issue-disabled-reason"
-                  >{{ sourceMutationDisabledReason }}</small
-                >
-                <small
-                  v-if="mutationError && card.blockIds.includes(mutationError.blockId)"
-                  class="mutation-error"
-                  role="alert"
-                  >{{ mutationError.message }}</small
-                >
+                    <p v-if="card.excerpt" class="issue-card-excerpt">“{{ card.excerpt }}”</p>
+                    <p class="issue-card-detail">{{ card.detail }}</p>
+                    <p v-if="card.reasonCopy" class="issue-card-reason">{{ card.reasonCopy }}</p>
+                    <div
+                      v-if="card.restorePlan || card.omissionPlan || card.locateTargets.length"
+                      class="issue-actions"
+                    >
+                      <button
+                        v-if="card.restorePlan"
+                        type="button"
+                        class="issue-action issue-restore-action"
+                        :disabled="Boolean(sourceMutationDisabledReason)"
+                        @click="requestRestore(card.restorePlan)"
+                      >
+                        {{
+                          mutationInFlight(card.restorePlan.key)
+                            ? '正在恢复…'
+                            : restoreActionLabel(card.restorePlan)
+                        }}
+                      </button>
+                      <button
+                        v-if="card.omissionPlan"
+                        type="button"
+                        class="issue-action issue-omission-action"
+                        :disabled="Boolean(sourceMutationDisabledReason)"
+                        @click="requestOmission(card.omissionPlan)"
+                      >
+                        {{
+                          mutationInFlight(card.omissionPlan.key)
+                            ? '正在确认…'
+                            : omissionPlanLabel(card.omissionPlan)
+                        }}
+                      </button>
+                      <button
+                        v-for="(targetId, index) in card.locateTargets"
+                        :key="`${card.key}:locate:${index}`"
+                        type="button"
+                        class="issue-action issue-locate-action"
+                        @click="emit('locateIssueTarget', targetId)"
+                      >
+                        {{ locateActionLabel(card, index) }}
+                      </button>
+                    </div>
+                    <small
+                      v-if="(card.restorePlan || card.omissionPlan) && sourceMutationDisabledReason"
+                      class="issue-disabled-reason"
+                      >{{ sourceMutationDisabledReason }}</small
+                    >
+                    <small
+                      v-if="mutationError && card.blockIds.includes(mutationError.blockId)"
+                      class="mutation-error"
+                      role="alert"
+                      >{{ mutationError.message }}</small
+                    >
+                  </li>
+                </ul>
               </li>
             </ul>
+            <button
+              v-if="issueGroups.length > MAX_VISIBLE_GROUPS && !showAllGroups"
+              type="button"
+              class="issues-show-all"
+              @click="showAllGroups = true"
+            >
+              查看全部（共 {{ source.fidelityIssues.length }} 项）
+            </button>
           </details>
         </div>
         <ol v-if="source.sourceBlocks.length" class="source-blocks">
@@ -744,8 +796,8 @@ onBeforeUnmount(() => {
   padding: 8px 14px;
   border-bottom: 1px solid var(--app-border);
 }
-.fidelity-strip.is-blocked {
-  background: var(--app-danger-soft);
+.fidelity-strip.is-advisory {
+  background: var(--app-warning-soft);
 }
 .fidelity-strip.is-ready {
   background: var(--app-success-soft);
@@ -768,8 +820,8 @@ onBeforeUnmount(() => {
   border-radius: 50%;
   background: var(--app-success);
 }
-.is-blocked .fidelity-dot {
-  background: var(--app-danger);
+.is-advisory .fidelity-dot {
+  background: var(--app-warning);
 }
 .source-scroll {
   min-height: 0;
@@ -791,31 +843,89 @@ onBeforeUnmount(() => {
   font-weight: 750;
   cursor: pointer;
 }
-.fidelity-issues ul {
+.issues-summary-hint {
+  margin-left: 6px;
+  color: var(--app-primary);
+  font-weight: 700;
+}
+.issues-note {
+  margin: 0;
+  padding: 0 10px 8px;
+  color: var(--app-text-muted);
+  font-size: 10px;
+  line-height: 1.55;
+}
+.issue-groups {
   display: grid;
-  gap: 6px;
+  gap: 4px;
   margin: 0;
   padding: 0 10px 10px;
   list-style: none;
 }
-.fidelity-issues li {
+.issue-groups li {
   color: var(--app-text-secondary);
   font-size: 11px;
   line-height: 1.5;
 }
-.fidelity-issues li span {
-  display: inline-block;
-  margin-right: 6px;
-  padding: 1px 4px;
-  border-radius: 2px;
-  color: var(--app-danger);
-  background: var(--app-danger-soft);
-  font-size: 9px;
-  font-weight: 800;
+.issue-group {
+  display: grid;
+  gap: 6px;
+  border: 1px solid var(--app-border);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.5);
 }
-.fidelity-issues li.is-warning span {
-  color: var(--app-warning);
-  background: var(--app-warning-soft);
+.issue-group-toggle {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  width: 100%;
+  border: 0;
+  border-radius: 4px;
+  padding: 8px 9px;
+  color: var(--app-text);
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  background: transparent;
+  cursor: pointer;
+}
+.issue-group-toggle:hover,
+.issue-group-toggle:focus-visible {
+  background: var(--app-surface);
+}
+.issue-group-toggle strong {
+  font-size: 11px;
+}
+.issue-group-count {
+  color: var(--app-text-muted);
+  font-size: 10px;
+  font-weight: 750;
+  white-space: nowrap;
+}
+.issue-cards {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0 9px 9px;
+  list-style: none;
+}
+.issues-show-all {
+  justify-self: start;
+  margin: 0 10px 10px;
+  border: 1px solid var(--app-border-strong);
+  border-radius: 4px;
+  padding: 5px 9px;
+  color: var(--app-text-secondary);
+  font: inherit;
+  font-size: 10px;
+  font-weight: 750;
+  background: var(--app-surface);
+  cursor: pointer;
+}
+.issues-show-all:hover,
+.issues-show-all:focus-visible {
+  border-color: var(--app-primary);
+  color: var(--app-primary-active);
 }
 .issue-card {
   display: grid;
@@ -828,15 +938,6 @@ onBeforeUnmount(() => {
 .issue-card.is-review-target {
   border-color: var(--app-focus);
   background: var(--app-focus-soft);
-}
-.issue-card-heading {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-}
-.issue-card-title {
-  color: var(--app-text);
-  font-size: 11px;
 }
 .issue-card-excerpt,
 .issue-card-detail,
@@ -876,10 +977,6 @@ onBeforeUnmount(() => {
 .issue-action:disabled {
   cursor: not-allowed;
   opacity: 0.5;
-}
-.issue-restart-action {
-  border-color: var(--app-border-strong);
-  color: var(--app-text-secondary);
 }
 .issue-disabled-reason {
   color: var(--app-text-muted);
