@@ -96,7 +96,9 @@ test.describe('Job Target Composer', () => {
 
     await page.locator('label.home-resume-option').nth(1).click()
     await expect(page.getByRole('radio', { name: /resume-product-analytics/ })).toBeChecked()
-    await expect(page.locator('.home-resume-state')).toContainText('需要确认')
+    // 有内容待确认只提示，不再阻塞开始岗位分析。
+    await expect(page.locator('.home-resume-state')).toContainText('有内容待确认')
+    await expect(page.locator('.home-resume-state')).toContainText('可以继续优化')
     await expect(page.locator('.home-inline-link')).toContainText('前往确认')
 
     await page.locator('#home-jd').fill('负责数据分析与跨团队协作。')
@@ -109,8 +111,8 @@ test.describe('Job Target Composer', () => {
     )
     await expect(page.locator('.home-jd-field textarea')).toHaveAttribute('maxlength', '10000')
     await expect(page.locator('.home-jd-field textarea')).toHaveCSS('resize', 'vertical')
-    await expect(page.getByTestId('home-start-analysis')).toBeDisabled()
-    await expect(page.locator('.home-action-summary strong')).toHaveText('这份简历有内容需要确认。')
+    await expect(page.getByTestId('home-start-analysis')).toBeEnabled()
+    await expect(page.locator('.home-action-summary strong')).toContainText('将使用「产品分析 · 待确认版」')
 
     await page.locator('label.home-resume-option').first().click()
     await expect(page.getByTestId('home-start-analysis')).toBeEnabled()

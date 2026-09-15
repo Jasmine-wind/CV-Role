@@ -1205,7 +1205,7 @@ public class ResumeServiceImpl implements ResumeService {
                 || (!ResumeQualityStatus.QUALITY_READY.equals(snapshot.qualityStatus())
                 && !ResumeQualityStatus.QUALITY_NEEDS_REVIEW.equals(snapshot.qualityStatus()))
                 || (ResumeQualityStatus.QUALITY_READY.equals(snapshot.qualityStatus())
-                && (!snapshot.hardInvariantPass() || !hasNoUnresolvedItems(snapshot.unresolvedItemsJson())))) {
+                && !hasNoUnresolvedItems(snapshot.unresolvedItemsJson()))) {
             return null;
         }
         ResumeVersion source = new ResumeVersion();
@@ -1213,10 +1213,9 @@ public class ResumeServiceImpl implements ResumeService {
         source.setResumeId(resumeId);
         source.setVersionType("SOURCE");
         source.setSourceType("PARSED_UPLOAD");
-        // A NEEDS_REVIEW document is canonical and source-backed, but it is not yet a
-        // deliverable snapshot. Keep it PENDING so task/export gates cannot consume it.
-        source.setContentStatus(ResumeQualityStatus.QUALITY_READY.equals(snapshot.qualityStatus())
-                ? "READY" : "PENDING");
+        // Canonical 文档一旦物化即可消费：NEEDS_REVIEW 只表示还有候选项等待确认，
+        // 不再把内容状态降为 PENDING 阻止任务/工作台继续使用这份文档。
+        source.setContentStatus("READY");
         source.setStructuredContent(snapshot.canonicalDocumentJson());
         source.setContentRevision(0L);
         source.setCreatedAt(now);
@@ -2195,24 +2194,10 @@ public class ResumeServiceImpl implements ResumeService {
             String qualityStatus,
             String qualityIssuesJson,
             String unresolvedItemsJson,
-            String canonicalDocumentJson,
-            boolean hardInvariantPass) {
+            String canonicalDocumentJson) {
 
         static CanonicalQualitySnapshot failed() {
-            return new CanonicalQualitySnapshot(ResumeQualityStatus.QUALITY_FAILED, null, null, null, false);
-        }
-
-        static CanonicalQualitySnapshot needsReview(List<String> issues) {
-            try {
-                return new CanonicalQualitySnapshot(
-                        ResumeQualityStatus.QUALITY_NEEDS_REVIEW,
-                        new ObjectMapper().writeValueAsString(issues == null ? List.of() : issues),
-                        null,
-                        null,
-                        false);
-            } catch (JsonProcessingException exception) {
-                return failed();
-            }
+            return new CanonicalQualitySnapshot(ResumeQualityStatus.QUALITY_FAILED, null, null, null);
         }
     }
 
@@ -2229,33 +2214,35 @@ public class ResumeServiceImpl implements ResumeService {
         ResumeCanonicalDocumentService.BuildResult buildResult =
                 resumeCanonicalDocumentService.build(structuredContent);
         if (buildResult == null) {
+            // 无法生成任何可编辑 canonical 文档：属于硬失败，不能停留在 NEEDS_REVIEW 造成无操作入口的死状态。
             List<String> issues = structureHealth == null
                     ? List.of("STRUCTURE_HEALTH_UNAVAILABLE", "CANONICAL_BUILD_UNAVAILABLE")
                     : structureHealth.hardInvariantViolations().stream()
                             .map(value -> "STRUCTURE_HEALTH:" + value)
                             .toList();
-            return CanonicalQualitySnapshot.needsReview(issues);
+            try {
+                return new CanonicalQualitySnapshot(
+                        ResumeQualityStatus.QUALITY_FAILED,
+                        objectMapper.writeValueAsString(issues),
+                        null,
+                        null);
+            } catch (JsonProcessingException exception) {
+                return CanonicalQualitySnapshot.failed();
+            }
         }
         List<ResumeUnresolvedItemDTO> unresolvedItems =
                 buildResult.unresolvedItems() == null ? List.of() : buildResult.unresolvedItems();
         ResumeDocumentQualityValidator.ValidationResult validation =
                 resumeDocumentQualityValidator.validate(buildResult.document(), unresolvedItems);
         try {
-            boolean structureHealthPass = structureHealth != null && structureHealth.hardInvariantPass();
             String qualityStatus = validation.qualityStatus();
             boolean documentPresent = buildResult.document() != null;
             boolean noUnresolvedItems = unresolvedItems.isEmpty();
-            boolean ready = structureHealthPass
-                    && ResumeQualityStatus.QUALITY_READY.equals(qualityStatus)
-                    && documentPresent
-                    && noUnresolvedItems;
-            // The validator contract already derives READY from unresolvedItems. Keep this
-            // normalization here so a custom/legacy validator cannot create a READY row without
-            // an exhaustive review sidecar and a materializable document. Health failures remain
-            // reviewable drafts, but can never become a confirmed SOURCE.
-            if (!structureHealthPass
-                    || (ResumeQualityStatus.QUALITY_READY.equals(qualityStatus)
-                    && (!documentPresent || !noUnresolvedItems))) {
+            // 结构健康与普通质量问题一样进入 qualityIssues 供 Workspace/Export 消费，不再单独把解析结果
+            // 钉在 NEEDS_REVIEW：否则用户在 Review 里没有候选项可处理，主流程被永久阻塞。
+            // 只保留一个防御性归一化：validator 说 READY 但文档不可物化或仍有未决项时回到 NEEDS_REVIEW。
+            if (ResumeQualityStatus.QUALITY_READY.equals(qualityStatus)
+                    && (!documentPresent || !noUnresolvedItems)) {
                 qualityStatus = ResumeQualityStatus.QUALITY_NEEDS_REVIEW;
             }
             List<Object> issues = new ArrayList<>();
@@ -2269,9 +2256,6 @@ public class ResumeServiceImpl implements ResumeService {
             if (validation.issues() != null) {
                 issues.addAll(validation.issues());
             }
-            // PENDING is deliberate here: the bytes are canonical and source-backed, but the
-            // delivery gate still requires explicit review before any task/export can consume
-            // them. A FAILED quality result remains non-materializable.
             boolean materializableDraft = documentPresent
                     && (ResumeQualityStatus.QUALITY_READY.equals(qualityStatus)
                     || ResumeQualityStatus.QUALITY_NEEDS_REVIEW.equals(qualityStatus));
@@ -2279,10 +2263,9 @@ public class ResumeServiceImpl implements ResumeService {
                     qualityStatus,
                     objectMapper.writeValueAsString(issues),
                     objectMapper.writeValueAsString(unresolvedItems),
-                    materializableDraft ? objectMapper.writeValueAsString(buildResult.document()) : null,
-                    structureHealthPass);
+                    materializableDraft ? objectMapper.writeValueAsString(buildResult.document()) : null);
         } catch (JsonProcessingException exception) {
-            log.warn("Canonical document snapshot serialize failed, fail closed to NEEDS_REVIEW");
+            log.warn("Canonical document snapshot serialize failed, fail closed to FAILED");
             return CanonicalQualitySnapshot.failed();
         }
     }

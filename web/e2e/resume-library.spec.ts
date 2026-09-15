@@ -135,7 +135,8 @@ test.describe('Resume Library', () => {
     await page.goto('/resumes')
 
     await expect(page.locator('.resume-library-summary')).toHaveText('共 6 份')
-    await expect(page.locator('.resume-library-row').nth(1)).toContainText('需要确认')
+    await expect(page.locator('.resume-library-row').nth(1)).toContainText('有内容待确认')
+    await expect(page.locator('.resume-library-row').nth(1)).toContainText('不影响继续优化')
     await expect(page.locator('.resume-library-row').nth(1).getByRole('button', { name: /确认 product-analytics-review/ })).toBeVisible()
     await expect(page.locator('.resume-library-row').nth(2)).toContainText('需要重新准备')
     await expect(page.locator('.resume-library-row').nth(2).getByRole('button', { name: /重新准备 stale/ })).toBeVisible()
@@ -148,7 +149,7 @@ test.describe('Resume Library', () => {
     await expect(page.locator('.resume-library-row').nth(5).getByRole('button', { name: /重新准备 legacy-review/ })).toBeVisible()
   })
 
-  test('a reprepared legacy resume becomes 需要确认 instead of looping back to 需要重新准备', async ({ page }) => {
+  test('a reprepared legacy resume becomes 有内容待确认 instead of looping back to 需要重新准备', async ({ page }) => {
     const legacyResume = {
       ...reviewResume,
       id: 7,
@@ -185,8 +186,9 @@ test.describe('Resume Library', () => {
     // 旧数据没有 canonical SOURCE：先重新准备，不能直接进入确认。
     await expect(row).toContainText('需要重新准备')
     await row.getByRole('button', { name: /重新准备 legacy-flow/ }).click()
-    // 准备完成后列表刷新：canonical SOURCE 已生成，只剩人工确认，不再要求重新准备。
-    await expect(row).toContainText('需要确认', { timeout: 15_000 })
+    // 准备完成后列表刷新：canonical SOURCE 已生成，只剩人工确认，不再要求重新准备；
+    // 待确认内容不阻止继续使用。
+    await expect(row).toContainText('有内容待确认', { timeout: 15_000 })
     await expect(row).not.toContainText('需要重新准备')
     await expect(row.getByRole('button', { name: /确认 legacy-flow/ })).toBeVisible()
   })

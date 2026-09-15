@@ -183,7 +183,8 @@ class ResumeReviewPostgresIntegrationTest {
         assertThat(initial.getStructuredContent())
                 .contains("最初的来源内容")
                 .doesNotContain("review@example.com", "第二次确认保留的内容");
-        assertThat(firstReplacement.getContentStatus()).isEqualTo("PENDING");
+        // 仍有待确认候选时 replacement SOURCE 也不再降为 PENDING：canonical 文档可编辑即保持 READY。
+        assertThat(firstReplacement.getContentStatus()).isEqualTo("READY");
         assertThat(firstReplacement.getStructuredContent())
                 .contains("review@example.com")
                 .doesNotContain("第二次确认保留的内容");

@@ -18,8 +18,8 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 
 /**
- * 确定性验证的三档裁决测试：可确定 → READY；不确定（未决项）→ NEEDS_REVIEW；
- * 明显错误或无法形成文档 → 阻止 READY / FAILED。
+ * 确定性验证的裁决测试：结构质量问题只保留为 issues（供 Workspace / Export 消费）；
+ * 未决项 → NEEDS_REVIEW；文档缺失 / 版本不可读 / 无可编辑结构 → FAILED。
  */
 class ResumeDocumentQualityValidatorImplTest {
 
@@ -55,16 +55,48 @@ class ResumeDocumentQualityValidatorImplTest {
     }
 
     @Test
-    void missingNameOrReachableContactShouldBlock() {
+    void missingNameOrReachableContactKeepsIssuesButNoLongerBlocksIntake() {
         ResumeDocumentDTO noName = readyDocument();
         noName.getBasics().setName(null);
-        assertThat(statusOf(noName)).isEqualTo(ResumeQualityStatus.QUALITY_NEEDS_REVIEW);
+        assertThat(statusOf(noName)).isEqualTo(ResumeQualityStatus.QUALITY_READY);
         assertThat(codesOf(noName)).contains("MISSING_NAME");
 
         ResumeDocumentDTO noContact = readyDocument();
         noContact.getBasics().setContacts(List.of());
-        assertThat(statusOf(noContact)).isEqualTo(ResumeQualityStatus.QUALITY_NEEDS_REVIEW);
+        assertThat(statusOf(noContact)).isEqualTo(ResumeQualityStatus.QUALITY_READY);
         assertThat(codesOf(noContact)).contains("MISSING_REACHABLE_CONTACT");
+    }
+
+    @Test
+    void structuralQualityIssuesAloneShouldNotBlockCanonicalDocuments() {
+        // 项目名缺失 + 章节重复：都是可继续优化的结构问题，不应阻止进入岗位分析。
+        ResumeDocumentDTO document = readyDocument();
+        document.getSections().get(0).getEntries().get(0).setOrganization(null);
+        document.getSections().add(ResumeDocumentSectionDTO.builder()
+                .kind("PROJECT")
+                .title("工作经历")
+                .entries(new ArrayList<>(List.of(ResumeDocumentEntryDTO.builder()
+                        .organization("另一个项目")
+                        .bullets(new ArrayList<>())
+                        .build())))
+                .build());
+
+        ResumeDocumentQualityValidator.ValidationResult result = validator.validate(document, List.of());
+
+        assertThat(result.qualityStatus()).isEqualTo(ResumeQualityStatus.QUALITY_READY);
+        assertThat(result.issues())
+                .extracting(ResumeQualityIssueDTO::getCode)
+                .contains("ENTRY_MISSING_TITLE_WITH_MANY_BULLETS", "CROSS_SECTION_DUPLICATE");
+    }
+
+    @Test
+    void unusableDocumentShapeShouldFailInsteadOfNeedsReview() {
+        assertThat(validator.validate(null, List.of()).qualityStatus())
+                .isEqualTo(ResumeQualityStatus.QUALITY_FAILED);
+
+        ResumeDocumentDTO legacy = readyDocument();
+        legacy.setSchemaVersion(null);
+        assertThat(statusOf(legacy)).isEqualTo(ResumeQualityStatus.QUALITY_FAILED);
     }
 
     @Test

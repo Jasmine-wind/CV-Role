@@ -64,8 +64,11 @@ describe('homeComposer', () => {
     expect(getResumeStatus(resume({ qualityStatus: 'PENDING' })).kind).toBe('preparing')
   })
 
-  it('describes a resume that needs user confirmation', () => {
-    expect(getResumeStatus(resume({ qualityStatus: 'NEEDS_REVIEW' })).kind).toBe('needs-review')
+  it('describes a resume whose candidates are still unconfirmed without blocking usage', () => {
+    expect(getResumeStatus(resume({ qualityStatus: 'NEEDS_REVIEW' }))).toMatchObject({
+      kind: 'needs-review',
+      label: '有内容待确认',
+    })
   })
 
   it('keeps NEEDS_REVIEW with a canonical source as confirmation instead of reprepare', () => {
@@ -103,11 +106,15 @@ describe('homeComposer', () => {
     })).toBe('当前简历仍在准备')
   })
 
-  it('blocks a resume that needs confirmation', () => {
+  it('allows starting analysis while candidates are still unconfirmed', () => {
+    // 有 canonical 文档即可进入岗位分析；待确认候选只作为非阻塞提示。
     expect(getStartBlockReason({
       resume: resume({ qualityStatus: 'NEEDS_REVIEW' }),
       jobDescription: '岗位要求',
-    })).toBe('当前简历需要确认')
+    })).toBe('')
+    expect(getResumeStatus(resume({ qualityStatus: 'NEEDS_REVIEW' })).description).toBe(
+      '还有部分内容未确认，可以继续优化，建议稍后确认。',
+    )
   })
 
   it('blocks a ready resume until BYOK is active', () => {

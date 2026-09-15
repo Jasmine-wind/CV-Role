@@ -25,8 +25,9 @@ const DEFAULT_PREPARING_DESCRIPTION = '系统正在读取并整理内容。'
 /**
  * Resume 列表状态只回答两个相互独立的问题：
  * - canonicalReady：当前是否已有结构化 canonical 文档（无 → 需要重新准备）
- * - qualityStatus：这份 canonical 文档是否还需要人工确认（NEEDS_REVIEW → 需要确认）
- * 不得再把 NEEDS_REVIEW 当作“需要重新准备”。
+ * - qualityStatus：这份 canonical 文档是否还有待确认内容（NEEDS_REVIEW → 有内容待确认）
+ * 不得再把 NEEDS_REVIEW 当作“需要重新准备”，也不得当成“不能使用”：
+ * 有 canonical 文档就可以继续优化，待确认内容不阻塞岗位分析与编辑。
  */
 export const getResumeLibraryStatus = (
   resume: ResumeListItem,
@@ -69,8 +70,8 @@ export const getResumeLibraryStatus = (
     if (resume.qualityStatus === 'NEEDS_REVIEW' && resume.canonicalReady !== false) {
       return {
         kind: 'needs-review',
-        label: '需要确认',
-        description: '部分内容无法自动确定，确认后才能用于岗位分析与导出。',
+        label: '有内容待确认',
+        description: '有内容待确认，不影响继续优化；建议在编辑过程中一并确认。',
         tone: 'warning',
         primaryAction: 'review',
         canDelete: true,

@@ -594,8 +594,9 @@ public class OptimizationTaskServiceImpl implements OptimizationTaskService {
     }
 
     /**
-     * Slice A 质量门：未确认的解析结果不得携带进入分析链。
-     * NEEDS_REVIEW / FAILED / 尚未完成解析都直接拒绝创建，不做静默降级。
+     * 简历交付门：只拦截真正无法继续的情况——尚未解析完成、解析失败、或根本没有可编辑 canonical 文档。
+     * NEEDS_REVIEW（仍有待确认候选项）不再是阻断理由：候选项可在确认流程或 Workspace 中继续处理，
+     * 正式导出时才会严格检查。
      */
     private ResumeVersion requireConfirmedParseResult(Long userId, Long resumeId) {
         ResumeParseResult parseResult = resumeParseResultMapper.selectOne(
@@ -608,17 +609,12 @@ public class OptimizationTaskServiceImpl implements OptimizationTaskService {
                 || ResumeQualityStatus.QUALITY_PENDING.equals(qualityStatus)) {
             throw new BusinessException(409, "简历尚未解析完成，请先完成解析");
         }
-        if (ResumeQualityStatus.QUALITY_NEEDS_REVIEW.equals(qualityStatus)) {
-            throw new BusinessException(409, "RESUME_NEEDS_REVIEW：简历内容存在待确认项，确认后才能开始分析");
-        }
         if (ResumeQualityStatus.QUALITY_FAILED.equals(qualityStatus)) {
             throw new BusinessException(409, "简历解析失败，请重新解析后再开始分析");
         }
-        if (!ResumeQualityStatus.QUALITY_READY.equals(qualityStatus)
-                || !hasNoUnresolvedItems(parseResult.getUnresolvedItems())
-                || parseResult.getCanonicalSourceVersionId() == null) {
-            // 存量解析行没有 canonical SOURCE 时必须重解析，不能把候选 structured_json 当正式事实。
-            throw new BusinessException(409, "简历交付内容尚未确认，请重新解析后再开始分析");
+        if (parseResult.getCanonicalSourceVersionId() == null) {
+            // 无法形成任何可编辑 canonical 文档时必须重解析，不能把候选 structured_json 当正式事实。
+            throw new BusinessException(409, "简历交付内容尚未生成，请重新解析后再开始分析");
         }
         ResumeVersion source = getOwnedVersion(userId, parseResult.getCanonicalSourceVersionId());
         if (!VERSION_SOURCE.equals(source.getVersionType())
@@ -626,7 +622,7 @@ public class OptimizationTaskServiceImpl implements OptimizationTaskService {
                 || source.getJobTargetId() != null
                 || !CONTENT_READY.equals(source.getContentStatus())
                 || !isCanonicalDocument(source.getStructuredContent())) {
-            throw new BusinessException(409, "简历交付内容尚未确认，请重新解析后再开始分析");
+            throw new BusinessException(409, "简历交付内容状态不一致，请重新准备后再开始分析");
         }
         return source;
     }
@@ -640,18 +636,6 @@ public class OptimizationTaskServiceImpl implements OptimizationTaskService {
             return root != null
                     && root.isObject()
                     && ResumeDocumentDTO.SCHEMA_VERSION.equals(root.path("schemaVersion").asText());
-        } catch (JsonProcessingException exception) {
-            return false;
-        }
-    }
-
-    private boolean hasNoUnresolvedItems(String value) {
-        if (value == null || value.isBlank()) {
-            return false;
-        }
-        try {
-            JsonNode root = objectMapper.readTree(value);
-            return root != null && root.isArray() && root.isEmpty();
         } catch (JsonProcessingException exception) {
             return false;
         }

@@ -67,26 +67,26 @@ describe('resumeLibraryPresentation', () => {
     expect(getResumeLibraryStatus(resume({ qualityStatus: 'PENDING' })).canDelete).toBe(false)
   })
 
-  it('presents NEEDS_REVIEW with a confirmation action', () => {
+  it('presents NEEDS_REVIEW as unconfirmed content that stays usable', () => {
     expect(getResumeLibraryStatus(resume({ qualityStatus: 'NEEDS_REVIEW' }))).toMatchObject({
       kind: 'needs-review',
-      label: '需要确认',
+      label: '有内容待确认',
       primaryAction: 'review',
     })
   })
 
-  it('explains why confirmation is required', () => {
+  it('explains that unconfirmed content does not block continued optimization', () => {
     expect(getResumeLibraryStatus(resume({ qualityStatus: 'NEEDS_REVIEW' })).description).toContain(
-      '确认后才能用于岗位分析与导出',
+      '不影响继续优化',
     )
   })
 
   it('keeps a NEEDS_REVIEW resume with a canonical source as needing confirmation, not reprepare', () => {
     // P0 回归：重新准备完成后 quality 为 NEEDS_REVIEW 且 canonical SOURCE 已生成；
-    // 列表必须显示“需要确认”，不能再次要求“重新准备”形成死循环。
+    // 列表必须显示“有内容待确认”，不能再次要求“重新准备”形成死循环。
     expect(
       getResumeLibraryStatus(resume({ qualityStatus: 'NEEDS_REVIEW', canonicalReady: true })),
-    ).toMatchObject({ kind: 'needs-review', label: '需要确认', primaryAction: 'review' })
+    ).toMatchObject({ kind: 'needs-review', label: '有内容待确认', primaryAction: 'review' })
   })
 
   it('requires reprepare when NEEDS_REVIEW has no canonical source yet', () => {

@@ -199,6 +199,34 @@ class ResumeReviewServiceImplTest {
     }
 
     @Test
+    void resolvingTheLastCandidateReturnsReadyWhileStructuralIssuesAreRetained() throws Exception {
+        // 文档有重复章节标题等结构问题，但没有对应候选项；确认最后一个候选项后必须退出 Review，
+        // 结构问题继续保留在 qualityIssues 中供 Workspace / Export 消费。
+        document.getSections().add(com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentSectionDTO.builder()
+                .id("s-dup")
+                .kind("PROJECT")
+                .title("工作经历")
+                .entries(new java.util.ArrayList<>(List.of(
+                        com.winter.airesumeoptimizer.module.workspace.dto.ResumeDocumentEntryDTO.builder()
+                                .id("s-dup-e-1")
+                                .organization("另一个项目")
+                                .bullets(new java.util.ArrayList<>())
+                                .build())))
+                .build());
+        source.setStructuredContent(objectMapper.writeValueAsString(document));
+
+        ResumeReviewVO review = service.resolve(USER_ID, RESUME_ID, ResumeReviewResolveRequestDTO.builder()
+                .itemId("u-1")
+                .action("ACCEPT")
+                .contactValue("lihua@example.com")
+                .build());
+
+        assertThat(review.getQualityStatus()).isEqualTo("READY");
+        assertThat(review.getUnresolvedItems()).isEqualTo(objectMapper.writeValueAsString(List.of()));
+        assertThat(review.getQualityIssues()).contains("CROSS_SECTION_DUPLICATE");
+    }
+
+    @Test
     void acceptCandidateWithEditedValueShouldUseTheEditedValue() throws Exception {
         ResumeReviewVO review = service.resolve(USER_ID, RESUME_ID, ResumeReviewResolveRequestDTO.builder()
                 .itemId("u-1")

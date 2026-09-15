@@ -25,7 +25,9 @@ import org.springframework.stereotype.Component;
 
 /**
  * 确定性验证实现：只检测可代码判定的结构问题，不追求完美解析。
- * 可确定 → 接受；不确定 → 未决项（由调用方计数）；明显错误 → 阻止 READY。
+ * 质量问题（BLOCKER/WARNING）只作为提示保留在 issues 中，供 Workspace 提示与 Export Gate 消费；
+ * 质量状态只裁决两件事：是否存在待确认候选项（NEEDS_REVIEW），以及文档是否根本无法使用（FAILED）。
+ * canonical 文档可加载、可编辑即视为可用，不能因为普通结构问题把用户挡在岗位分析之外。
  */
 @Component
 public class ResumeDocumentQualityValidatorImpl implements ResumeDocumentQualityValidator {
@@ -70,8 +72,9 @@ public class ResumeDocumentQualityValidatorImpl implements ResumeDocumentQuality
         List<ResumeDocumentSectionDTO> sections = document == null ? null : document.getSections();
         boolean hasUnresolved = unresolvedItems != null && !unresolvedItems.isEmpty();
         if (document == null || !ResumeDocumentDTO.SCHEMA_VERSION.equals(document.getSchemaVersion())) {
-            issues.add(blocker(CODE_INVALID_SCHEMA_VERSION, "文档结构版本不受支持"));
-            return new ValidationResult(ResumeQualityStatus.QUALITY_NEEDS_REVIEW, List.copyOf(issues));
+            // 文档缺失或版本无法读取：没有任何可编辑结构，属于硬失败，不能继续使用。
+            issues.add(blocker(CODE_INVALID_SCHEMA_VERSION, "文档结构版本不受支持，无法继续使用"));
+            return new ValidationResult(ResumeQualityStatus.QUALITY_FAILED, List.copyOf(issues));
         }
         if (sections == null || sections.isEmpty()) {
             if (!hasUnresolved) {
@@ -88,9 +91,10 @@ public class ResumeDocumentQualityValidatorImpl implements ResumeDocumentQuality
         checkSections(sections, issues);
         checkProvenance(document, issues);
 
-        boolean hasBlocker = issues.stream()
-                .anyMatch(issue -> ResumeQualityIssueDTO.SEVERITY_BLOCKER.equals(issue.getSeverity()));
-        String status = hasBlocker || hasUnresolved
+        // 结构质量问题只保留为 qualityIssues（Workspace 提示 / Export Gate 严格裁决），
+        // 不再单独把状态钉在 NEEDS_REVIEW：只要 canonical 文档可编辑且没有待确认候选项，
+        // 就视为可用于后续业务（岗位分析 / 编辑 / Preview）。
+        String status = hasUnresolved
                 ? ResumeQualityStatus.QUALITY_NEEDS_REVIEW
                 : ResumeQualityStatus.QUALITY_READY;
         return new ValidationResult(status, List.copyOf(issues));

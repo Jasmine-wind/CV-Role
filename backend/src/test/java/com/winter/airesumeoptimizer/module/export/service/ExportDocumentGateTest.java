@@ -61,9 +61,14 @@ class ExportDocumentGateTest {
     }
 
     private void givenQualityStatus(String qualityStatus) {
+        givenQualityStatus(qualityStatus, null);
+    }
+
+    private void givenQualityStatus(String qualityStatus, String unresolvedItems) {
         ResumeParseResult parseResult = new ResumeParseResult();
         parseResult.setResumeId(RESUME_ID);
         parseResult.setQualityStatus(qualityStatus);
+        parseResult.setUnresolvedItems(unresolvedItems);
         when(resumeParseResultMapper.selectOne(any())).thenReturn(parseResult);
     }
 
@@ -78,8 +83,20 @@ class ExportDocumentGateTest {
     }
 
     @Test
-    void needsReviewBlocksAsDocumentNotConfirmed() {
-        givenQualityStatus("NEEDS_REVIEW");
+    void historicalNeedsReviewLabelDoesNotBlockWhenNothingRemainsUnconfirmed() {
+        // 历史 parseResult 的 NEEDS_REVIEW 只是准备阶段标签；当前已无待确认项且 TARGET 文档合格时，
+        // 不能用旧标签永久阻止用户导出已经修好的简历。
+        givenQualityStatus("NEEDS_REVIEW", "[]");
+
+        ExportDocumentGate.GateResult result = gate.check(USER_ID, task, validDocument());
+
+        assertThat(result.blocked()).isFalse();
+        assertThat(result.status()).isEqualTo(ExportDocumentGate.STATUS_PASS);
+    }
+
+    @Test
+    void unresolvedItemsStillBlockExportAsDocumentNotConfirmed() {
+        givenQualityStatus("NEEDS_REVIEW", "[{\"id\":\"u-1\",\"kind\":\"TEXT_FRAGMENT\"}]");
 
         ExportDocumentGate.GateResult result = gate.check(USER_ID, task, validDocument());
 

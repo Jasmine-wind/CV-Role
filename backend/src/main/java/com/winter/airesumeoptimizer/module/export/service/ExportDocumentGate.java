@@ -92,14 +92,14 @@ public class ExportDocumentGate {
         if (ResumeQualityStatus.QUALITY_FAILED.equals(qualityStatus)) {
             return new GateResult(STATUS_BLOCK, CODE_RESUME_QUALITY_FAILED, qualityStatus, false);
         }
-        if (ResumeQualityStatus.QUALITY_NEEDS_REVIEW.equals(qualityStatus)) {
-            return new GateResult(STATUS_BLOCK, CODE_DOCUMENT_NOT_CONFIRMED, qualityStatus, true);
-        }
-        if (!ResumeQualityStatus.QUALITY_READY.equals(qualityStatus)) {
-            return new GateResult(STATUS_BLOCK, CODE_DOCUMENT_NOT_CONFIRMED, qualityStatus, false);
-        }
+        // qualityStatus 是解析阶段的准备标签，可能与用户在 Workspace 中的修复进展脱节：
+        // NEEDS_REVIEW 不再直接阻断，导出裁决以“当前 unresolved + 当前 TARGET document + fidelity”为准。
         if (hasUnresolvedItems(userId, task)) {
             return new GateResult(STATUS_BLOCK, CODE_DOCUMENT_NOT_CONFIRMED, qualityStatus, true);
+        }
+        if (!ResumeQualityStatus.QUALITY_READY.equals(qualityStatus)
+                && !ResumeQualityStatus.QUALITY_NEEDS_REVIEW.equals(qualityStatus)) {
+            return new GateResult(STATUS_BLOCK, CODE_DOCUMENT_NOT_CONFIRMED, qualityStatus, false);
         }
 
         String contentBlocker = checkDocumentContent(document);

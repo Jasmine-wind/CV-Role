@@ -40,7 +40,11 @@ export const pickInitialResumeId = (
       resume.qualityStatus === 'READY' &&
       resume.canonicalReady !== false,
   )
-  return readyResume?.id ?? resumes[0]?.id ?? null
+  // 有 canonical 文档但仍有待确认内容的简历同样可用于岗位分析，只在默认选择时排在 READY 之后。
+  const canonicalResume = resumes.find(
+    (resume) => resume.parseStatus === 'SUCCESS' && resume.canonicalReady !== false,
+  )
+  return readyResume?.id ?? canonicalResume?.id ?? resumes[0]?.id ?? null
 }
 
 export const getResumeStatus = (
@@ -68,8 +72,8 @@ export const getResumeStatus = (
   if (resume.qualityStatus === 'NEEDS_REVIEW' && resume.canonicalReady !== false) {
     return {
       kind: 'needs-review',
-      label: '需要确认',
-      description: '这份简历有内容需要确认，确认后才能用于岗位分析。',
+      label: '有内容待确认',
+      description: '还有部分内容未确认，可以继续优化，建议稍后确认。',
     }
   }
   if (resume.canonicalReady === false) {
@@ -99,8 +103,6 @@ export const getStartBlockMessage = (reason: string) => {
       return '请选择一份可以用于分析的简历。'
     case '当前简历仍在准备':
       return '这份简历仍在准备，请等待准备完成。'
-    case '当前简历需要确认':
-      return '这份简历有内容需要确认。'
     case '当前简历准备失败':
       return '这份简历准备失败，请先前往我的简历处理。'
     case '当前简历需要重新准备':
@@ -142,7 +144,8 @@ export const getStartBlockReason = ({
 
   const status = getResumeStatus(resume, preparationTaskId)
   if (status.kind === 'preparing' || status.kind === 'pending') return '当前简历仍在准备'
-  if (status.kind === 'needs-review') return '当前简历需要确认'
+  // NEEDS_REVIEW（有内容待确认）不再阻止开始岗位分析：候选项可以稍后确认，
+  // 正式导出时仍会严格检查。
   if (status.kind === 'failed') return '当前简历准备失败'
   if (status.kind === 'reparse') return '当前简历需要重新准备'
   if (!jobDescription.trim()) return '请粘贴目标岗位 JD'

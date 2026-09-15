@@ -96,7 +96,7 @@ const handleKeydown = (event: KeyboardEvent) => {
         <h2 id="resume-review-workspace-title" ref="heading" tabindex="-1">内容确认</h2>
         <p :title="props.filename">{{ props.filename }}</p>
         <span class="resume-review-header-description">
-          系统只把无法安全判断的内容交给你确认。确认后的内容，才能用于岗位分析与导出。
+          系统只把无法安全判断的内容交给你确认。未确认的内容不会自动写入简历，也不影响先继续优化；正式导出前需要处理完这些候选项。
         </span>
       </div>
       <button type="button" class="resume-review-close" @click="emit('close')">收起</button>
@@ -119,22 +119,33 @@ const handleKeydown = (event: KeyboardEvent) => {
       </div>
     </div>
 
-    <div v-else-if="!props.items.length && props.qualityStatus !== 'READY'" class="resume-review-recovery" role="status">
+    <div v-else-if="!props.items.length && props.qualityStatus === 'FAILED'" class="resume-review-recovery" role="status">
       <span class="resume-review-recovery-mark" aria-hidden="true">!</span>
       <div>
-        <strong>当前没有可安全确认的候选内容</strong>
-        <p>系统识别到这份简历仍需处理，但没有足够明确的片段让你安全裁决。继续猜测可能会把错误内容写入简历，因此本次没有自动补全。</p>
-        <small>建议上传一个排版更清晰的版本后重新准备。</small>
+        <strong>这份简历未能形成可用内容</strong>
+        <p>文件内容无法整理成可编辑的简历（可能无法读取或提取不到文本），请重新上传可读取的版本，或换一份简历重试。</p>
       </div>
       <div class="resume-review-recovery-actions">
-        <button type="button" class="resume-review-accept" @click="emit('uploadReplacement')">上传更清晰的版本</button>
+        <button type="button" class="resume-review-accept" @click="emit('uploadReplacement')">重新上传简历</button>
+        <button type="button" class="resume-review-text-action" @click="emit('backToLibrary')">返回简历库</button>
+      </div>
+    </div>
+
+    <div v-else-if="!props.items.length && props.qualityStatus === 'NEEDS_REVIEW'" class="resume-review-recovery" role="status">
+      <span class="resume-review-recovery-mark" aria-hidden="true">!</span>
+      <div>
+        <strong>状态同步异常</strong>
+        <p>简历内容已经生成，但状态同步异常，请刷新后重试。</p>
+      </div>
+      <div class="resume-review-recovery-actions">
+        <button type="button" class="resume-review-retry" @click="emit('retryLoad')">重新读取</button>
         <button type="button" class="resume-review-text-action" @click="emit('backToLibrary')">返回简历库</button>
       </div>
     </div>
 
     <div v-else-if="!props.items.length" class="resume-review-complete" role="status" aria-live="polite">
       <strong>确认完成</strong>
-      <p>这份简历已可用于岗位分析。</p>
+      <p>确认完成，这份简历已可用于岗位分析。</p>
     </div>
 
     <template v-else-if="activeState && activePresentation">

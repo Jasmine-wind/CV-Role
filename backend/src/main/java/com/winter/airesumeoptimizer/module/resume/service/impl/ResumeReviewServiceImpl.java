@@ -35,7 +35,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 /**
  * 确认服务实现：候选项处理全部走 canonical 文档的普通编辑语义。
- * 每次处理都重新归一化并重新裁决质量状态；未决项清零且无阻断项时回到 READY。
+ * 每次处理都重新归一化并重新裁决质量状态；未决项清零时回到 READY，
+ * 剩余结构质量问题只保留在 quality_issues 中（由 Workspace / Export Gate 消费），不再阻止退出确认流程。
  */
 @Service
 public class ResumeReviewServiceImpl implements ResumeReviewService {
@@ -148,7 +149,10 @@ public class ResumeReviewServiceImpl implements ResumeReviewService {
             update.eq("unresolved_items", expectedUnresolvedItems);
         }
 
+        // Canonical 文档可编辑即可消费：NEEDS_REVIEW 只表示还有候选项等待确认，
+        // 不再把内容状态降为 PENDING；否则“先继续优化、稍微确认”的用户会被工作台拒之门外。
         String nextContentStatus = ResumeQualityStatus.QUALITY_READY.equals(validation.qualityStatus())
+                || ResumeQualityStatus.QUALITY_NEEDS_REVIEW.equals(validation.qualityStatus())
                 ? "READY" : "PENDING";
         boolean documentChanged = !serializedDocument.equals(canonicalDocument);
         boolean contentStatusChanged = !nextContentStatus.equals(canonicalSource.getContentStatus());

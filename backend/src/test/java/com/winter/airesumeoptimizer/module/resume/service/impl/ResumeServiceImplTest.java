@@ -1430,7 +1430,7 @@ class ResumeServiceImplTest {
     }
 
     @Test
-    void parseShouldExposeCanonicalDraftWhenStructureHardInvariantFails() {
+    void parseShouldKeepStructureHealthViolationsAsIssuesWithoutBlockingDelivery() {
         ResumeCanonicalDocumentService canonicalService = mock(ResumeCanonicalDocumentService.class);
         ResumeDocumentQualityValidator qualityValidator = mock(ResumeDocumentQualityValidator.class);
         ResumeStructureHealthEvaluator healthEvaluator = mock(ResumeStructureHealthEvaluator.class);
@@ -1459,14 +1459,15 @@ class ResumeServiceImplTest {
 
         var result = gatedService.parse(1L, 100L);
 
-        assertThat(result.getQualityStatus()).isEqualTo(ResumeQualityStatus.QUALITY_NEEDS_REVIEW);
+        // 结构健康失败只进入 qualityIssues；canonical 文档可编辑即继续交付。
+        assertThat(result.getQualityStatus()).isEqualTo(ResumeQualityStatus.QUALITY_READY);
         assertThat(result.getCanonicalDocument()).isNotBlank();
         verify(canonicalService).build(any());
         verify(qualityValidator).validate(any(), anyList());
         ArgumentCaptor<ResumeVersion> sourceCaptor = ArgumentCaptor.forClass(ResumeVersion.class);
         verify(resumeVersionMapper).insertIfCurrentParseClaim(
                 sourceCaptor.capture(), eq(100L), anyLong(), anyString());
-        assertThat(sourceCaptor.getValue().getContentStatus()).isEqualTo("PENDING");
+        assertThat(sourceCaptor.getValue().getContentStatus()).isEqualTo("READY");
         ResumeParseResult persisted = capturePersistedParseResult();
         assertThat(persisted.getCanonicalSourceVersionId()).isEqualTo(900L);
         assertThat(persisted.getQualityIssues()).contains("STRUCTURE_HEALTH:NO_LOSS");
@@ -1509,7 +1510,8 @@ class ResumeServiceImplTest {
         ArgumentCaptor<ResumeVersion> sourceCaptor = ArgumentCaptor.forClass(ResumeVersion.class);
         verify(resumeVersionMapper).insertIfCurrentParseClaim(
                 sourceCaptor.capture(), eq(100L), anyLong(), anyString());
-        assertThat(sourceCaptor.getValue().getContentStatus()).isEqualTo("PENDING");
+        // 仍有待确认候选不会把 canonical SOURCE 降为 PENDING：用户可以边继续优化边确认。
+        assertThat(sourceCaptor.getValue().getContentStatus()).isEqualTo("READY");
         ResumeParseResult persisted = capturePersistedParseResult();
         assertThat(persisted.getCanonicalSourceVersionId()).isEqualTo(902L);
     }

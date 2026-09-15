@@ -199,7 +199,7 @@ const composerActionDetail = computed(() => {
       : '当前任务已保留，可以直接重试。'
   }
   if (selectedResumeStatus.value.kind === 'needs-review')
-    return '前往确认后，这份简历才能用于岗位分析。'
+    return '还有部分内容未确认，可以继续优化，建议稍后确认。'
   if (
     selectedResumeStatus.value.kind === 'failed' ||
     selectedResumeStatus.value.kind === 'reparse'

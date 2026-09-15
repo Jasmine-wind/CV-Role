@@ -317,13 +317,15 @@ class OptimizationTaskServiceImplTest {
     }
 
     @Test
-    void createShouldRejectResumeWithoutConfirmedDeliveryQuality() {
-        // Slice A 质量门：解析中 / 待确认 / 失败的简历不得携带进入新分析任务。
-        for (String qualityStatus : java.util.List.of("PENDING", "NEEDS_REVIEW", "FAILED")) {
-            ResumeParseResult unconfirmed = new ResumeParseResult();
-            unconfirmed.setResumeId(10L);
-            unconfirmed.setQualityStatus(qualityStatus);
-            when(resumeParseResultMapper.selectOne(any())).thenReturn(unconfirmed);
+    void createShouldRejectResumesThatCannotFormAnyCanonicalDocument() {
+        // PENDING / FAILED 仍然拦截；这两类无法形成可编辑 canonical 文档。
+        for (String qualityStatus : java.util.List.of("PENDING", "FAILED")) {
+            ResumeParseResult unusable = new ResumeParseResult();
+            unusable.setResumeId(10L);
+            unusable.setParseStatus("SUCCESS");
+            unusable.setQualityStatus(qualityStatus);
+            unusable.setUnresolvedItems("[]");
+            when(resumeParseResultMapper.selectOne(any())).thenReturn(unusable);
 
             assertThatThrownBy(() -> service.create(
                     1L,
@@ -337,6 +339,31 @@ class OptimizationTaskServiceImplTest {
         }
         verify(resumeVersionMapper, never()).insert(any(ResumeVersion.class));
         verify(optimizationTaskMapper, never()).insert(any(OptimizationTask.class));
+    }
+
+    @Test
+    void createShouldAllowNeedsReviewResumeWithCanonicalSource() {
+        // 仍有待确认候选不再是阻断理由：canonical 文档已生成即可开始岗位分析，
+        // 候选项可稍后确认，导出时才会严格检查。
+        ResumeParseResult needsReview = new ResumeParseResult();
+        needsReview.setResumeId(10L);
+        needsReview.setParseStatus("SUCCESS");
+        needsReview.setQualityStatus("NEEDS_REVIEW");
+        needsReview.setCanonicalSourceVersionId(40L);
+        needsReview.setUnresolvedItems("[{\"id\":\"u-1\",\"kind\":\"TEXT_FRAGMENT\"}]");
+        when(resumeParseResultMapper.selectOne(any())).thenReturn(needsReview);
+
+        OptimizationTaskVO result = service.create(
+                1L,
+                10L,
+                "Java 后端",
+                "Java 后端\n负责 Spring Boot 服务开发",
+                "SYSTEM_DEFAULT_OPENAI_COMPATIBLE",
+                "test-model");
+
+        assertThat(result.getOptimizationTaskId()).isEqualTo(50L);
+        assertThat(result.getSourceResumeVersionId()).isEqualTo(40L);
+        verify(optimizationTaskMapper).insert(any(OptimizationTask.class));
     }
 
     @Test
