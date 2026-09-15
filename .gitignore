@@ -71,9 +71,7 @@ coverage/
 # Environment variables
 # =========================
 .env
-.env.local
-.env.production
-.env.*.local
+.env.*
 
 # Keep examples
 !.env.example
@@ -118,4 +116,4 @@ backups/
 
 # Local visual review artifacts
 .impeccable/
-/final-visual-gate/landing-*/
+/final-visual-gate/

@@ -969,4 +969,4 @@ AI Usage 原始 attempt metadata 由应用每日按默认 90 天 retention 清�
 https://resume.dawn04.xyz
 ```
 
-仓库入口和运行状态说明统一维护在 `README.md`、`docs/CONTEXT.md` 与本文。V2 产品目标不用于推断当前线上已经具备的功能。
+仓库入口和运行状态说明统一维护在 `README.md` 与本文，当前实现事实以代码与测试为准。V2 产品目标不用于推断当前线上已经具备的功能。

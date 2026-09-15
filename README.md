@@ -60,7 +60,7 @@ flowchart LR
 ```text
 backend/    Spring Boot 后端、Flyway、测试
 web/        Vue 3 前端
-docs/       V2 基线、架构、计划、上下文与运维文档
+docs/      产品原则、架构与运维文档
 deploy/     Nginx 配置
 scripts/    运维脚本
 ```
@@ -168,12 +168,10 @@ docker compose -f docker-compose.prod.yml --env-file .env up -d --build
 
 ## 文档
 
-| 文档 | 唯一职责 |
+| 文档 | 用途 |
 |---|---|
-| [docs/PRD.md](docs/PRD.md) | V2 最高层产品与架构决策基线 |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 当前实现架构、边界和 V2 演进约束 |
-| [docs/PLAN.md](docs/PLAN.md) | V2 阶段顺序、门禁和非目标 |
-| [docs/CONTEXT.md](docs/CONTEXT.md) | 当前状态、实现约束、已知差距和遗留风险 |
-| [docs/OPERATIONS.md](docs/OPERATIONS.md) | 当前生产部署与运维 |
+| [docs/PRD.md](docs/PRD.md) | 产品目标与核心原则 |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 当前系统架构与关键设计 |
+| [docs/OPERATIONS.md](docs/OPERATIONS.md) | 部署、HTTPS、备份与运维 |
 
-执行规则见 [AGENTS.md](AGENTS.md)。文档冲突时，V2 产品决策以 `docs/PRD.md` 为准，当前实现事实以代码和 `docs/CONTEXT.md` 为准。
+执行规则见 [AGENTS.md](AGENTS.md)。文档冲突时，产品决策以 `docs/PRD.md` 为准，当前实现事实以代码与测试为准。
